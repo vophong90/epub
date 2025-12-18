@@ -1,0 +1,8 @@
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@media print {
+  body { font-family: "Times New Roman", serif; }
+}
