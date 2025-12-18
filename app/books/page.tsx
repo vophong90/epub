@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 type Book = {
@@ -19,20 +18,15 @@ const BTN_PRIMARY =
   "inline-flex items-center justify-center px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50";
 
 function toISOStartOfDay(dateStr: string) {
-  // dateStr: YYYY-MM-DD (input type="date")
-  // convert to ISO for Supabase filter; treat as local day start
   const d = new Date(`${dateStr}T00:00:00`);
   return d.toISOString();
 }
-
 function toISOEndOfDay(dateStr: string) {
   const d = new Date(`${dateStr}T23:59:59`);
   return d.toISOString();
 }
 
 export default function BooksPage() {
-  const router = useRouter();
-
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -40,7 +34,7 @@ export default function BooksPage() {
   const [q, setQ] = useState("");
   const [dateFrom, setDateFrom] = useState(""); // YYYY-MM-DD
   const [dateTo, setDateTo] = useState(""); // YYYY-MM-DD
-  const [sortDir, setSortDir] = useState<"desc" | "asc">("desc"); // created_at
+  const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
 
   async function loadBooks() {
     setLoading(true);
@@ -60,17 +54,9 @@ export default function BooksPage() {
       .order("created_at", { ascending: sortDir === "asc" });
 
     const qTrim = q.trim();
-    if (qTrim) {
-      // case-insensitive contains
-      query = query.ilike("title", `%${qTrim}%`);
-    }
-
-    if (dateFrom) {
-      query = query.gte("created_at", toISOStartOfDay(dateFrom));
-    }
-    if (dateTo) {
-      query = query.lte("created_at", toISOEndOfDay(dateTo));
-    }
+    if (qTrim) query = query.ilike("title", `%${qTrim}%`);
+    if (dateFrom) query = query.gte("created_at", toISOStartOfDay(dateFrom));
+    if (dateTo) query = query.lte("created_at", toISOEndOfDay(dateTo));
 
     const { data, error } = await query;
 
@@ -88,8 +74,6 @@ export default function BooksPage() {
     loadBooks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortDir]);
-
-  const filteredCount = books.length;
 
   const qHint = useMemo(() => {
     const parts: string[] = [];
@@ -169,11 +153,14 @@ export default function BooksPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <button className={BTN} onClick={() => {
-              setQ("");
-              setDateFrom("");
-              setDateTo("");
-            }}>
+            <button
+              className={BTN}
+              onClick={() => {
+                setQ("");
+                setDateFrom("");
+                setDateTo("");
+              }}
+            >
               Xoá lọc
             </button>
 
@@ -184,7 +171,7 @@ export default function BooksPage() {
         </div>
 
         <div className="text-xs text-gray-500 mt-3">
-          Bộ lọc: {qHint}. Đang hiển thị {filteredCount} sách.
+          Bộ lọc: {qHint}. Đang hiển thị {books.length} sách.
         </div>
       </div>
 
@@ -197,6 +184,7 @@ export default function BooksPage() {
             const created = b.created_at
               ? new Date(b.created_at).toLocaleString("vi-VN")
               : "—";
+
             return (
               <div
                 key={b.id}
@@ -213,19 +201,16 @@ export default function BooksPage() {
                         <b>Ngày tạo:</b> {created}
                       </span>
                     </div>
-                    <div className="text-xs text-gray-400 mt-1">
-                      ID: {b.id}
-                    </div>
+                    <div className="text-xs text-gray-400 mt-1">ID: {b.id}</div>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <button
-                      className={BTN_PRIMARY}
-                      onClick={() => router.push(`/books/${b.id}`)}
-                    >
-                      Mở
-                    </button>
-                  </div>
+                  {/* ✅ Hard navigation: chắc chắn đổi URL */}
+                  <a
+                    href={`/books/${b.id}`}
+                    className="inline-flex items-center justify-center px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+                  >
+                    Mở
+                  </a>
                 </div>
               </div>
             );
