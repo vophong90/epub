@@ -155,7 +155,7 @@ export default function HomePage() {
               <div className="flex items-center gap-4">
                 <div className="w-20 h-20 rounded-full bg-white border border-black/10 shadow-md grid place-items-center overflow-hidden">
                   <Image
-                    src="/assets/brand/logo-ump.png"
+                    src="/logo-ump.png""
                     alt="ĐẠI HỌC Y DƯỢC TPHCM"
                     width={72}
                     height={72}
@@ -164,7 +164,7 @@ export default function HomePage() {
                 </div>
                 <div className="w-20 h-20 rounded-full bg-white border border-black/10 shadow-md grid place-items-center overflow-hidden">
                   <Image
-                    src="/assets/brand/logo-yhct.png"
+                    src="/logo-square.png"
                     alt="KHOA Y HỌC CỔ TRUYỀN"
                     width={72}
                     height={72}
@@ -173,10 +173,10 @@ export default function HomePage() {
                 </div>
               </div>
 
-              <h1 className="text-3xl md:text-4xl font-bold leading-tight">
+              <h1 className="text-2xl md:text-3xl font-bold leading-snug">
                 KHOA Y HỌC CỔ TRUYỀN
                 <br />
-                <span className="text-[#0E7BD0] text-[0.9em] font-semibold tracking-tight whitespace-nowrap">
+                <span className="text-[#0E7BD0] text-base md:text-lg font-semibold tracking-tight">
                   ĐẠI HỌC Y DƯỢC THÀNH PHỐ HỒ CHÍ MINH
                 </span>
               </h1>
