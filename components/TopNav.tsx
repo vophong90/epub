@@ -4,6 +4,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useAuth } from "@/components/AuthProvider";
+import { supabase } from "@/lib/supabaseClient";
 
 export default function TopNav() {
   const { user, profile, loading } = useAuth();
@@ -14,11 +15,22 @@ export default function TopNav() {
     user?.email?.split("@")[0] ||
     "Tài khoản";
 
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    // không cần router; AuthProvider sẽ update state, UI tự đổi sang "Đăng nhập"
+  }
+
   return (
     <header className="border-b bg-white/80 backdrop-blur">
       <div className="mx-auto max-w-6xl px-6 py-3 flex items-center justify-between gap-4">
         <Link href="/" className="flex items-center gap-3">
-          <Image src="/logo-square.png" alt="Logo" width={32} height={32} className="h-8 w-8" />
+          <Image
+            src="/logo-square.png"
+            alt="Logo"
+            width={32}
+            height={32}
+            className="h-8 w-8"
+          />
           <span className="font-semibold text-lg">EPUB</span>
         </Link>
 
@@ -27,12 +39,10 @@ export default function TopNav() {
             Trang chủ
           </Link>
 
-          {/* Biên tập = trang My Books / quản lý sách */}
           <Link className="px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-100" href="/books">
             Biên tập
           </Link>
 
-          {/* Chưa có trang => để disabled */}
           <span className="px-3 py-2 rounded-lg text-sm font-medium text-gray-400 cursor-not-allowed">
             Biên soạn
           </span>
@@ -40,19 +50,29 @@ export default function TopNav() {
             Xuất bản
           </span>
 
-          {/* Auth */}
+          {/* Auth area */}
           {!loading && !user ? (
             <Link className="px-3 py-2 rounded-lg text-sm font-semibold hover:bg-gray-100" href="/login">
               Đăng nhập
             </Link>
           ) : (
-            <Link
-              className="px-3 py-2 rounded-lg text-sm font-semibold hover:bg-gray-100"
-              href="/account"
-              title={profile?.email ?? user?.email ?? ""}
-            >
-              {displayName}
-            </Link>
+            <div className="flex items-center gap-1">
+              <span
+                className="px-3 py-2 rounded-lg text-sm font-semibold"
+                title={profile?.email ?? user?.email ?? ""}
+              >
+                {displayName}
+              </span>
+
+              {/* ✅ nút Đăng xuất */}
+              <button
+                onClick={handleLogout}
+                className="px-3 py-2 rounded-lg text-sm font-semibold hover:bg-gray-100"
+                type="button"
+              >
+                Đăng xuất
+              </button>
+            </div>
           )}
         </nav>
       </div>
