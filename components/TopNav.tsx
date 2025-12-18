@@ -5,54 +5,53 @@ import Link from "next/link";
 import Image from "next/image";
 import { useAuth } from "@/components/AuthProvider";
 
-const NAV = [
-  { href: "/", label: "Trang chủ" },
-  { href: "/edit", label: "Biên tập" },
-  { href: "/compose", label: "Biên soạn" },
-  { href: "/publish", label: "Xuất bản" },
-];
-
 export default function TopNav() {
-  const { user, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
 
   const displayName =
-    (user?.user_metadata?.name as string | undefined) ||
-    (user?.email ? user.email.split("@")[0] : null) ||
-    null;
+    profile?.name?.trim() ||
+    profile?.email?.split("@")[0] ||
+    user?.email?.split("@")[0] ||
+    "Tài khoản";
 
   return (
     <header className="border-b bg-white/80 backdrop-blur">
-      <div className="mx-auto max-w-7xl px-6 py-3 flex items-center justify-between gap-4">
+      <div className="mx-auto max-w-6xl px-6 py-3 flex items-center justify-between gap-4">
         <Link href="/" className="flex items-center gap-3">
           <Image src="/logo-square.png" alt="Logo" width={32} height={32} className="h-8 w-8" />
           <span className="font-semibold text-lg">EPUB</span>
         </Link>
 
         <nav className="flex items-center gap-2">
-          {NAV.map((it) => (
-            <Link
-              key={it.href}
-              href={it.href}
-              className="px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-100"
-            >
-              {it.label}
-            </Link>
-          ))}
+          <Link className="px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-100" href="/">
+            Trang chủ
+          </Link>
 
+          {/* Biên tập = trang My Books / quản lý sách */}
+          <Link className="px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-100" href="/books">
+            Biên tập
+          </Link>
+
+          {/* Chưa có trang => để disabled */}
+          <span className="px-3 py-2 rounded-lg text-sm font-medium text-gray-400 cursor-not-allowed">
+            Biên soạn
+          </span>
+          <span className="px-3 py-2 rounded-lg text-sm font-medium text-gray-400 cursor-not-allowed">
+            Xuất bản
+          </span>
+
+          {/* Auth */}
           {!loading && !user ? (
-            <Link
-              href="/login"
-              className="px-3 py-2 rounded-lg text-sm font-semibold hover:bg-gray-100"
-            >
+            <Link className="px-3 py-2 rounded-lg text-sm font-semibold hover:bg-gray-100" href="/login">
               Đăng nhập
             </Link>
           ) : (
             <Link
-              href="/account"
               className="px-3 py-2 rounded-lg text-sm font-semibold hover:bg-gray-100"
-              title={user?.email ?? ""}
+              href="/account"
+              title={profile?.email ?? user?.email ?? ""}
             >
-              {displayName ?? "Tài khoản"}
+              {displayName}
             </Link>
           )}
         </nav>
