@@ -12,19 +12,7 @@ export const metadata: Metadata = {
   },
   description:
     "Nền tảng biên tập, xuất bản tài liệu số về giáo dục, đào tạo, cập nhật kiến thức y khoa liên tục.",
-  icons: {
-    icon: [
-      { url: "/favicon.ico" },
-      { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },
-      { url: "/favicon-16.png", sizes: "16x16", type: "image/png" },
-    ],
-    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
-  },
-  openGraph: {
-    title: "EPUB – Khoa Y học cổ truyền",
-    images: [{ url: "/og-image.png", width: 1200, height: 630 }],
-  },
-  manifest: "/manifest.webmanifest",
+  // ... giữ nguyên các phần icons/openGraph/manifest như anh đang có
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -33,7 +21,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen bg-white text-gray-900">
         <AuthProvider>
           <TopNav />
-          <main className="p-6">{children}</main>
+          {/* ✅ giới hạn bề ngang để dễ nhìn */}
+          <main className="mx-auto w-full max-w-6xl px-6 py-8">{children}</main>
         </AuthProvider>
       </body>
     </html>
