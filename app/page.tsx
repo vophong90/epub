@@ -155,7 +155,7 @@ export default function HomePage() {
               <div className="flex items-center gap-4">
                 <div className="w-20 h-20 rounded-full bg-white border border-black/10 shadow-md grid place-items-center overflow-hidden">
                   <Image
-                    src="/logo-ump.png""
+                    src="/logo-ump.png"
                     alt="ĐẠI HỌC Y DƯỢC TPHCM"
                     width={72}
                     height={72}
