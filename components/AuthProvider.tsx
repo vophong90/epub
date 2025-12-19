@@ -45,12 +45,11 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   const refreshProfile = async () => {
-    const u = user;
-    if (!u?.id) {
+    if (!user?.id) {
       setProfile(null);
       return;
     }
-    const p = await fetchProfile(u.id);
+    const p = await fetchProfile(user.id);
     setProfile(p);
   };
 
@@ -66,12 +65,13 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
       const seq = ++requestSeq.current;
       setLoading(true);
 
-      const { data, error } = await supabase.auth.getUser();
+      // ✅ an toàn: đọc session từ localStorage
+      const { data, error } = await supabase.auth.getSession();
       if (!mounted) return;
 
-      if (error) console.warn("auth.getUser error:", error);
+      if (error) console.warn("auth.getSession error:", error);
 
-      const u = data?.user ?? null;
+      const u = data?.session?.user ?? null;
       setUser(u);
 
       if (u?.id) {
