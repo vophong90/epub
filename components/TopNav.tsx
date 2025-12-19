@@ -30,6 +30,7 @@ export default function TopNav() {
     router.replace("/login");
   }
 
+  // user dropdown
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -52,8 +53,9 @@ export default function TopNav() {
   return (
     <header className="sticky top-0 z-40 border-b bg-white/80 backdrop-blur">
       <nav className="max-w-6xl mx-auto px-4 py-3">
-        {/* Hàng 1: logo + user */}
-        <div className="flex items-center justify-between gap-3">
+        {/* 1 hàng: logo trái, menu + user phải */}
+        <div className="flex items-center justify-between gap-4">
+          {/* LEFT: logo */}
           <Link href="/" className="flex items-center gap-2 shrink-0">
             <Image
               src="/logo-square.png"
@@ -65,65 +67,70 @@ export default function TopNav() {
             <span className="font-semibold whitespace-nowrap">EPUB</span>
           </Link>
 
-          <div className="shrink-0">
-            {loading ? (
-              <div className="h-9 w-40 rounded-full bg-gray-100 animate-pulse" />
-            ) : user ? (
-              <div className="relative" ref={menuRef}>
-                <button
-                  type="button"
-                  onClick={() => setOpen((v) => !v)}
-                  className="px-3 py-2 rounded-full border text-sm max-w-[260px] truncate hover:bg-gray-50"
-                  title={displayName}
+          {/* RIGHT: menu + user */}
+          <div className="flex items-center gap-4 min-w-0">
+            {/* Menu: nằm cùng hàng với user (tự wrap nếu hẹp) */}
+            <div className="flex flex-wrap items-center justify-end gap-x-5 gap-y-2 text-sm min-w-0">
+              {NAV_LINKS.map((link) => {
+                const isActive =
+                  pathname === link.href ||
+                  pathname.startsWith(link.href + "/");
+                const cls = isActive
+                  ? "text-blue-700 font-semibold"
+                  : "text-gray-700 hover:text-blue-700";
+                return (
+                  <button
+                    key={link.href}
+                    type="button"
+                    className={`${cls} whitespace-nowrap`}
+                    onClick={() => router.push(link.href)}
+                  >
+                    {link.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* User */}
+            <div className="shrink-0">
+              {loading ? (
+                <div className="h-9 w-40 rounded-full bg-gray-100 animate-pulse" />
+              ) : user ? (
+                <div className="relative" ref={menuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setOpen((v) => !v)}
+                    className="px-3 py-2 rounded-full border text-sm max-w-[260px] truncate hover:bg-gray-50"
+                    title={displayName}
+                  >
+                    {displayName}
+                  </button>
+
+                  {open && (
+                    <div className="absolute right-0 mt-2 w-44 rounded-xl border bg-white shadow-lg overflow-hidden">
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50"
+                        onClick={async () => {
+                          setOpen(false);
+                          await handleLogout();
+                        }}
+                      >
+                        Đăng xuất
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <Link
+                  href="/login"
+                  className="px-3 py-2 rounded-full bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 whitespace-nowrap"
                 >
-                  {displayName}
-                </button>
-
-                {open && (
-                  <div className="absolute right-0 mt-2 w-44 rounded-xl border bg-white shadow-lg overflow-hidden">
-                    <button
-                      type="button"
-                      className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50"
-                      onClick={async () => {
-                        setOpen(false);
-                        await handleLogout();
-                      }}
-                    >
-                      Đăng xuất
-                    </button>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <Link
-                href="/login"
-                className="px-3 py-2 rounded-full bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 whitespace-nowrap"
-              >
-                Đăng nhập
-              </Link>
-            )}
+                  Đăng nhập
+                </Link>
+              )}
+            </div>
           </div>
-        </div>
-
-        {/* Hàng 2: menu (1 bản duy nhất, tự wrap) */}
-        <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
-          {NAV_LINKS.map((link) => {
-            const isActive =
-              pathname === link.href || pathname.startsWith(link.href + "/");
-            const cls = isActive
-              ? "text-blue-700 font-semibold"
-              : "text-gray-700 hover:text-blue-700";
-            return (
-              <button
-                key={link.href}
-                type="button"
-                className={`${cls} whitespace-nowrap`}
-                onClick={() => router.push(link.href)}
-              >
-                {link.label}
-              </button>
-            );
-          })}
         </div>
       </nav>
     </header>
