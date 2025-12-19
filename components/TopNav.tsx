@@ -2,149 +2,97 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useAuth } from "@/components/AuthProvider";
+import { usePathname, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { useAuth } from "./AuthProvider";
 
-function TopNav() {
+const NAV_LINKS = [
+  { href: "/", label: "Trang chủ" },
+  { href: "/books", label: "Biên tập" },
+  { href: "/drafts", label: "Biên soạn", disabled: true },
+  { href: "/publish", label: "Xuất bản", disabled: true },
+];
+
+export default function TopNav() {
+  const pathname = usePathname();
+  const router = useRouter();
   const { user, profile, loading } = useAuth();
 
-  const displayName = useMemo(() => {
-    return (
-      profile?.name?.trim() ||
-      profile?.email?.split("@")[0] ||
-      user?.email?.split("@")[0] ||
-      "Tài khoản"
-    );
-  }, [profile?.name, profile?.email, user?.email]);
-
-  const [open, setOpen] = useState(false);
-  const [loggingOut, setLoggingOut] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-
-  // close dropdown when click outside
-  useEffect(() => {
-    function onDocClick(e: MouseEvent) {
-      if (!open) return;
-      const target = e.target as Node;
-      if (menuRef.current && !menuRef.current.contains(target)) setOpen(false);
-    }
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", onDocClick);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onDocClick);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
+  const displayName =
+    profile?.name ||
+    (user?.user_metadata as any)?.full_name ||
+    user?.email ||
+    "";
 
   async function handleLogout() {
-    if (loggingOut) return;
-    try {
-      setLoggingOut(true);
-      setOpen(false);
-
-      const { error } = await supabase.auth.signOut();
-      if (error) console.error("signOut error:", error);
-
-      window.location.href = "/login";
-    } finally {
-      setLoggingOut(false);
-    }
+    await supabase.auth.signOut();
+    router.replace("/login");
   }
 
   return (
-    <header className="sticky top-0 z-50 border-b bg-white/80 backdrop-blur">
-      <div className="mx-auto max-w-6xl px-6 py-3 flex items-center justify-between gap-4">
-        <Link href="/" className="flex items-center gap-3">
-          <Image
-            src="/logo-square.png"
-            alt="Logo"
-            width={32}
-            height={32}
-            className="h-8 w-8"
-            priority
-          />
-          <span className="font-semibold text-lg">EPUB</span>
-        </Link>
-
-        <nav className="flex items-center gap-2">
-          <Link
-            className="px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-100"
-            href="/"
-          >
-            Trang chủ
+    <header className="border-b bg-white/80 backdrop-blur">
+      <nav className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-2">
+          <Link href="/" className="flex items-center gap-2">
+            <img
+              src="/logo-square.png"
+              alt="EPUB"
+              className="h-8 w-8 rounded-full"
+            />
+            <span className="font-semibold">EPUB</span>
           </Link>
 
-          <Link
-            className="px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-100"
-            href="/books"
-          >
-            Biên tập
-          </Link>
+          <div className="hidden md:flex items-center gap-4 ml-6 text-sm">
+            {NAV_LINKS.map((link) => (
+              <button
+                key={link.href}
+                disabled={link.disabled}
+                onClick={() => !link.disabled && router.push(link.href)}
+                className={`${
+                  pathname === link.href
+                    ? "text-blue-700 font-semibold"
+                    : "text-gray-700 hover:text-blue-700"
+                } ${link.disabled ? "opacity-40 cursor-not-allowed" : ""}`}
+              >
+                {link.label}
+              </button>
+            ))}
+          </div>
+        </div>
 
-          <span className="px-3 py-2 rounded-lg text-sm font-medium text-gray-400 cursor-not-allowed">
-            Biên soạn
-          </span>
-          <span className="px-3 py-2 rounded-lg text-sm font-medium text-gray-400 cursor-not-allowed">
-            Xuất bản
-          </span>
-
-          {/* Auth area */}
+        {/* Góc phải */}
+        <div className="flex items-center gap-2">
+          {/* khi còn loading: tránh nhảy chữ liên tục */}
           {loading ? (
-            <span className="px-3 py-2 rounded-lg text-sm font-semibold text-gray-400">
-              ...
-            </span>
-          ) : !user ? (
+            <div className="h-9 w-32 rounded-full bg-gray-100 animate-pulse" />
+          ) : user ? (
+            <>
+              <Link
+                href="/books"
+                className="hidden sm:inline-flex items-center px-3 py-2 rounded-full bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700"
+              >
+                Vào My Books
+              </Link>
+              <button className="px-3 py-2 rounded-full border text-sm">
+                Xin chào, {displayName || "user"}
+              </button>
+              <button
+                onClick={handleLogout}
+                className="hidden sm:inline-flex px-3 py-2 rounded-full text-sm text-gray-600 hover:bg-gray-100"
+              >
+                Đăng xuất
+              </button>
+            </>
+          ) : (
             <Link
-              className="px-3 py-2 rounded-lg text-sm font-semibold hover:bg-gray-100"
               href="/login"
+              className="px-3 py-2 rounded-full bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700"
             >
               Đăng nhập
             </Link>
-          ) : (
-            <div className="relative" ref={menuRef}>
-              <button
-                type="button"
-                className="px-3 py-2 rounded-lg text-sm font-semibold hover:bg-gray-100"
-                onClick={() => setOpen((v) => !v)}
-                aria-haspopup="menu"
-                aria-expanded={open}
-                title={profile?.email ?? user?.email ?? ""}
-              >
-                {displayName}
-              </button>
-
-              {open && (
-                <div
-                  className="absolute right-0 mt-2 w-48 rounded-xl border bg-white shadow-lg overflow-hidden z-[9999]"
-                  role="menu"
-                >
-                  <div className="px-3 py-2 text-xs text-gray-500 border-b">
-                    {profile?.email ?? user?.email ?? ""}
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleLogout}
-                    disabled={loggingOut}
-                    className="w-full text-left px-3 py-2 text-sm font-semibold hover:bg-gray-50 disabled:opacity-50"
-                    role="menuitem"
-                  >
-                    {loggingOut ? "Đang đăng xuất..." : "Đăng xuất"}
-                  </button>
-                </div>
-              )}
-            </div>
           )}
-        </nav>
-      </div>
+        </div>
+      </nav>
     </header>
   );
 }
-
-export default TopNav;
-export { TopNav };
