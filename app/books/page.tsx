@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import { useAuth } from "@/components/AuthProvider";
+import AuthProvider from "@/components/AuthProvider";
 
 type Book = {
   id: string;
