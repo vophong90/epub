@@ -92,7 +92,8 @@ export default function BooksPage() {
       if (dateTo) queryBuilder = queryBuilder.lte("created_at", toISOEndOfDay(dateTo));
 
       // Nếu request DB bị treo -> timeout
-      const { data, error } = await withTimeout(queryBuilder, 12000, "query timeout");
+      const queryPromise = queryBuilder.then((res: any) => res);
+      const { data, error } = await withTimeout(queryPromise, 12000, "query timeout");
 
       if (error) throw error;
 
