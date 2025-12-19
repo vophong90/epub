@@ -2,6 +2,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/components/AuthProvider";
 
@@ -194,7 +195,6 @@ export default function PublishPage() {
     }
   }
 
-  // Chặn khi chưa login hoặc chưa có profile (cho chắc)
   if (authLoading) {
     return (
       <div className="max-w-4xl mx-auto px-4 py-10">
@@ -207,7 +207,7 @@ export default function PublishPage() {
     return (
       <div className="max-w-4xl mx-auto px-4 py-10">
         <p className="text-red-600">
-          Chỉ admin mới được truy cập chức năng dàn trang & xuất bản.
+          Chỉ admin mới được truy cập chức năng dàn trang &amp; xuất bản.
         </p>
       </div>
     );
@@ -215,14 +215,26 @@ export default function PublishPage() {
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8 space-y-6">
-      <h1 className="text-2xl font-semibold mb-2">Dàn trang & Xuất bản</h1>
-      <p className="text-gray-600 text-sm mb-4">
-        Bước 1: chọn sách, phiên bản, template và bấm <b>Render PDF</b> để xem
-        thử.
-        <br />
-        Bước 2: chọn file PDF hoàn chỉnh (nếu cần chỉnh sửa thêm) và bấm{" "}
-        <b>Publish</b> để phát hành cho người xem.
-      </p>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold mb-1">Dàn trang &amp; Xuất bản</h1>
+          <p className="text-gray-600 text-sm">
+            Bước 1: chọn sách, phiên bản, template và bấm{" "}
+            <b>Render PDF</b> để xem thử.
+            <br />
+            Bước 2: chọn file PDF hoàn chỉnh (nếu cần chỉnh sửa thêm) và bấm{" "}
+            <b>Publish</b> để phát hành cho người xem.
+          </p>
+        </div>
+
+        {/* Nút sang trang tạo template mới */}
+        <Link
+          href="/publish/templates/new"
+          className="inline-flex items-center px-4 py-2 rounded-lg border border-blue-600 text-blue-600 text-sm font-semibold hover:bg-blue-50 whitespace-nowrap"
+        >
+          + Tạo template mới
+        </Link>
+      </div>
 
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
@@ -293,7 +305,8 @@ export default function PublishPage() {
             ))}
           </select>
           <p className="text-xs text-gray-500">
-            Template đang active trong bảng <code>book_templates</code>.
+            Template đang active trong bảng{" "}
+            <code className="font-mono">book_templates</code>.
           </p>
         </div>
       </div>
@@ -315,7 +328,7 @@ export default function PublishPage() {
         <h2 className="text-lg font-semibold">Publish bản chính thức</h2>
         <p className="text-sm text-gray-600">
           Chọn file PDF hoàn chỉnh (có thể là file vừa render, sau khi anh chỉnh
-          lại bìa / metadata nếu cần) rồi bấm Publish.
+          lại bìa / metadata nếu cần) rồi bấm <b>Publish</b>.
         </p>
 
         <div className="flex flex-col gap-3 md:flex-row md:items-center">
@@ -341,7 +354,8 @@ export default function PublishPage() {
         <div className="mt-6 border-t pt-4">
           <h2 className="text-lg font-semibold mb-2">Bản xem thử</h2>
           <p className="text-xs text-gray-500 mb-2">
-            Đây là signed URL tạm thời từ bucket <code>pdf_previews</code>.
+            Đây là signed URL tạm thời từ bucket{" "}
+            <code className="font-mono">pdf_previews</code>.
           </p>
           <div className="w-full aspect-[3/4] border rounded-lg overflow-hidden bg-gray-50">
             <iframe
