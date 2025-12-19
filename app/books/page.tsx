@@ -1,7 +1,11 @@
+// app/books/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { useAuth } from "@/components/AuthProvider";
 
 type Book = {
   id: string;
@@ -26,16 +30,9 @@ function toISOEndOfDay(dateStr: string) {
   return d.toISOString();
 }
 
-// Promise timeout helper
-function withTimeout<T>(
-  p: PromiseLike<T>,
-  ms: number,
-  label = "timeout"
-): Promise<T> {
+function withTimeout<T>(p: PromiseLike<T>, ms: number, label = "timeout"): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const t = window.setTimeout(() => reject(new Error(label)), ms);
-
-    // PromiseLike chỉ có then, không có catch/finally
     p.then(
       (v) => {
         window.clearTimeout(t);
@@ -50,6 +47,9 @@ function withTimeout<T>(
 }
 
 export default function BooksPage() {
+  const router = useRouter();
+  const { user, loading: authLoading } = useAuth();
+
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
   const [errMsg, setErrMsg] = useState<string>("");
@@ -71,6 +71,11 @@ export default function BooksPage() {
     };
   }, []);
 
+  // ✅ Guard auth: chưa login thì về /login (chỉ chạy khi authLoading đã xong)
+  useEffect(() => {
+    if (!authLoading && !user) router.replace("/login");
+  }, [authLoading, user, router]);
+
   async function loadBooks() {
     const myReqId = ++reqIdRef.current;
 
@@ -78,12 +83,10 @@ export default function BooksPage() {
     setLoading(true);
 
     try {
-      // Nếu request auth bị treo -> timeout để không "đơ" UI
-      const authRes = await withTimeout(supabase.auth.getUser(), 12000, "auth timeout");
-      const user = authRes.data?.user;
-
+      // ✅ Không gọi getUser() nữa. Dùng user từ AuthProvider.
+      if (authLoading) return;
       if (!user) {
-        window.location.href = "/login";
+        router.replace("/login");
         return;
       }
 
@@ -97,19 +100,15 @@ export default function BooksPage() {
       if (dateFrom) queryBuilder = queryBuilder.gte("created_at", toISOStartOfDay(dateFrom));
       if (dateTo) queryBuilder = queryBuilder.lte("created_at", toISOEndOfDay(dateTo));
 
-      // Nếu request DB bị treo -> timeout
       const queryPromise = queryBuilder.then((res: any) => res);
       const { data, error } = await withTimeout(queryPromise, 12000, "query timeout");
 
       if (error) throw error;
-
-      // nếu có request mới hơn thì bỏ qua response này
       if (!mountedRef.current || myReqId !== reqIdRef.current) return;
 
       setBooks((data || []) as any);
     } catch (e: any) {
       console.error("loadBooks FAILED:", e);
-
       if (!mountedRef.current || myReqId !== reqIdRef.current) return;
 
       setBooks([]);
@@ -120,11 +119,13 @@ export default function BooksPage() {
     }
   }
 
-  // Load lần đầu + khi đổi sort
+  // ✅ Load lần đầu khi auth đã sẵn sàng + khi đổi sort
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) return;
     loadBooks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortDir]);
+  }, [authLoading, user, sortDir]);
 
   const qHint = useMemo(() => {
     const parts: string[] = [];
@@ -134,9 +135,11 @@ export default function BooksPage() {
     return parts.length ? parts.join(", ") : "không lọc";
   }, [q, dateFrom, dateTo]);
 
+  if (authLoading) return <div className="max-w-4xl mx-auto px-4 py-6">Đang xác thực...</div>;
+  if (!user) return null;
+
   return (
     <div className="max-w-4xl mx-auto px-4 py-6">
-      {/* Header (bỏ nút Đăng xuất ở đây, chỉ để trên TopNav) */}
       <div className="flex items-center justify-between gap-3 mb-4">
         <h1 className="text-2xl font-bold">Sách của tôi</h1>
       </div>
@@ -156,40 +159,22 @@ export default function BooksPage() {
 
           <div>
             <label className="text-sm text-gray-600">Từ ngày tạo</label>
-            <input
-              className={INPUT}
-              type="date"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-            />
+            <input className={INPUT} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
           </div>
 
           <div>
             <label className="text-sm text-gray-600">Đến ngày tạo</label>
-            <input
-              className={INPUT}
-              type="date"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-            />
+            <input className={INPUT} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </div>
         </div>
 
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mt-4">
           <div className="flex items-center gap-2">
             <span className="text-sm text-gray-600">Sắp xếp:</span>
-            <button
-              className={BTN}
-              onClick={() => setSortDir("desc")}
-              disabled={sortDir === "desc"}
-            >
+            <button className={BTN} onClick={() => setSortDir("desc")} disabled={sortDir === "desc"}>
               Mới → Cũ
             </button>
-            <button
-              className={BTN}
-              onClick={() => setSortDir("asc")}
-              disabled={sortDir === "asc"}
-            >
+            <button className={BTN} onClick={() => setSortDir("asc")} disabled={sortDir === "asc"}>
               Cũ → Mới
             </button>
           </div>
@@ -216,11 +201,7 @@ export default function BooksPage() {
           Bộ lọc: {qHint}. Đang hiển thị {books.length} sách.
         </div>
 
-        {!!errMsg && (
-          <div className="mt-3 text-sm text-red-600">
-            Lỗi tải dữ liệu: {errMsg}
-          </div>
-        )}
+        {!!errMsg && <div className="mt-3 text-sm text-red-600">Lỗi tải dữ liệu: {errMsg}</div>}
       </div>
 
       {/* List */}
@@ -229,15 +210,10 @@ export default function BooksPage() {
       ) : (
         <div className="space-y-3">
           {books.map((b) => {
-            const created = b.created_at
-              ? new Date(b.created_at).toLocaleString("vi-VN")
-              : "—";
+            const created = b.created_at ? new Date(b.created_at).toLocaleString("vi-VN") : "—";
 
             return (
-              <div
-                key={b.id}
-                className="border rounded-xl p-4 bg-white hover:bg-gray-50"
-              >
+              <div key={b.id} className="border rounded-xl p-4 bg-white hover:bg-gray-50">
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                   <div>
                     <div className="text-lg font-semibold">{b.title}</div>
@@ -252,21 +228,20 @@ export default function BooksPage() {
                     <div className="text-xs text-gray-400 mt-1">ID: {b.id}</div>
                   </div>
 
-                  <a
+                  {/* ✅ MUST: dùng Link để không full reload (tránh mất/treo session) */}
+                  <Link
                     href={`/books/${b.id}`}
                     className="inline-flex items-center justify-center px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
                   >
                     Mở
-                  </a>
+                  </Link>
                 </div>
               </div>
             );
           })}
 
           {!books.length && (
-            <div className="text-gray-600">
-              Chưa có sách nào được phân quyền (hoặc bộ lọc không khớp).
-            </div>
+            <div className="text-gray-600">Chưa có sách nào được phân quyền (hoặc bộ lọc không khớp).</div>
           )}
         </div>
       )}
