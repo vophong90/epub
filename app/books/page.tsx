@@ -36,12 +36,13 @@ export default function BooksPage() {
   const [dateTo, setDateTo] = useState(""); // YYYY-MM-DD
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
 
-  async function loadBooks() {
-    setLoading(true);
+ async function loadBooks() {
+  setLoading(true);
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+  try {
+    const { data: { user }, error: authErr } = await supabase.auth.getUser();
+
+    if (authErr) throw authErr;
 
     if (!user) {
       window.location.href = "/login";
@@ -60,21 +61,23 @@ export default function BooksPage() {
 
     const { data, error } = await query;
 
-    if (error) {
-      console.error("books select error:", error);
-      setBooks([]);
-    } else {
-      setBooks((data || []) as any);
-    }
+    if (error) throw error;
 
+    setBooks((data || []) as any);
+  } catch (e) {
+    console.error("loadBooks FAILED:", e);
+    setBooks([]);
+  } finally {
     setLoading(false);
   }
+}
 
-  useEffect(() => {
-    loadBooks();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortDir]);
+useEffect(() => {
+  loadBooks(); // ok vì loadBooks đã tự catch/finally
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [sortDir]);
 
+ 
   const qHint = useMemo(() => {
     const parts: string[] = [];
     if (q.trim()) parts.push(`tên chứa "${q.trim()}"`);
