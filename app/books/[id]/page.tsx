@@ -13,11 +13,7 @@ type Book = {
   created_at: string | null;
 };
 
-type BookVersionStatus =
-  | "draft"
-  | "in_review"
-  | "published"
-  | string;
+type BookVersionStatus = "draft" | "in_review" | "published" | string;
 
 type BookVersion = {
   id: string;
@@ -120,10 +116,10 @@ export default function BookDetailPage() {
 
   const [loading, setLoading] = useState(true);
   const [treeLoading, setTreeLoading] = useState(false);
+  const [creatingVersion, setCreatingVersion] = useState(false);
+
   const [book, setBook] = useState<Book | null>(null);
-  const [version, setVersion] = useState<BookVersion | null>(
-    null
-  );
+  const [version, setVersion] = useState<BookVersion | null>(null);
   const [toc, setToc] = useState<TocTreeResponse | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -145,6 +141,7 @@ export default function BookDetailPage() {
       setLoading(true);
       setErrorMsg(null);
       try {
+        // 1) Lấy thông tin book
         const { data: bk, error: bErr } = await supabase
           .from("books")
           .select("id,title,unit_name,created_at")
@@ -164,6 +161,7 @@ export default function BookDetailPage() {
 
         setBook(bk as Book);
 
+        // 2) Lấy phiên bản mới nhất
         const { data: ver, error: vErr } = await supabase
           .from("book_versions")
           .select("id,book_id,version_no,status,created_at")
@@ -172,10 +170,21 @@ export default function BookDetailPage() {
           .limit(1)
           .maybeSingle();
 
-        if (vErr || !ver) {
+        if (vErr) {
           setErrorMsg(
-            vErr?.message ||
-              "Sách này chưa có phiên bản nào (book_versions trống)"
+            vErr.message ||
+              "Lỗi khi tải thông tin phiên bản sách"
+          );
+          setVersion(null);
+          setToc(null);
+          setMembers([]);
+          return;
+        }
+
+        if (!ver) {
+          // Sách chưa có phiên bản nào
+          setErrorMsg(
+            "Sách này chưa có phiên bản nào (book_versions trống)"
           );
           setVersion(null);
           setToc(null);
@@ -184,12 +193,10 @@ export default function BookDetailPage() {
         }
 
         setVersion(ver as BookVersion);
-
         await loadTreeAndMembers(ver.id);
       } catch (e: any) {
         setErrorMsg(
-          e?.message ||
-            "Lỗi không xác định khi tải thông tin sách"
+          e?.message || "Lỗi không xác định khi tải thông tin sách"
         );
         setBook(null);
         setVersion(null);
@@ -205,7 +212,6 @@ export default function BookDetailPage() {
 
   async function loadTreeAndMembers(versionId: string) {
     setTreeLoading(true);
-    setErrorMsg((prev) => prev); // giữ lỗi cũ nếu có
     try {
       const [treeRes, memRes] = await Promise.all([
         fetch(`/api/toc/tree?version_id=${versionId}`),
@@ -308,6 +314,44 @@ export default function BookDetailPage() {
     );
   }
 
+  // Tạo phiên bản đầu tiên cho sách chưa có version
+  async function handleCreateFirstVersion() {
+    if (!book || !user) return;
+    setCreatingVersion(true);
+    setErrorMsg(null);
+
+    try {
+      const { data, error } = await supabase
+        .from("book_versions")
+        .insert({
+          book_id: book.id,
+          version_no: 1,
+          status: "draft",
+          created_by: user.id,
+        })
+        .select("id,book_id,version_no,status,created_at")
+        .maybeSingle();
+
+      if (error || !data) {
+        setErrorMsg(
+          error?.message || "Không tạo được phiên bản đầu tiên"
+        );
+        return;
+      }
+
+      const ver = data as BookVersion;
+      setVersion(ver);
+      await loadTreeAndMembers(ver.id);
+      setErrorMsg(null);
+    } catch (e: any) {
+      setErrorMsg(
+        e?.message || "Lỗi khi tạo phiên bản đầu tiên"
+      );
+    } finally {
+      setCreatingVersion(false);
+    }
+  }
+
   if (authLoading || loading) {
     return (
       <main className="max-w-6xl mx-auto px-4 py-8">
@@ -316,7 +360,8 @@ export default function BookDetailPage() {
     );
   }
 
-  if (!book || !version) {
+  // Không tìm thấy sách
+  if (!book) {
     return (
       <main className="max-w-6xl mx-auto px-4 py-8 space-y-4">
         {errorMsg && (
@@ -334,6 +379,78 @@ export default function BookDetailPage() {
     );
   }
 
+  // Sách tồn tại nhưng chưa có version nào
+  if (!version) {
+    return (
+      <main className="max-w-6xl mx-auto px-4 py-8 space-y-6">
+        <div className="space-y-2">
+          <div className="text-sm text-gray-500">
+            <Link href="/books" className="hover:underline">
+              Sách của tôi
+            </Link>
+            <span className="mx-1">/</span>
+            <span className="text-gray-700">{book.title}</span>
+          </div>
+          <h1 className="text-2xl font-bold">{book.title}</h1>
+        </div>
+
+        {errorMsg && (
+          <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+            {errorMsg}
+          </div>
+        )}
+
+        <section className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 md:p-6 space-y-4">
+          <p className="text-sm text-gray-700">
+            Sách này hiện chưa có phiên bản nào trong bảng{" "}
+            <code className="font-mono text-xs bg-gray-100 px-1 py-0.5 rounded">
+              book_versions
+            </code>
+            .
+          </p>
+          <p className="text-sm text-gray-600">
+            Nếu bạn là <strong>editor</strong> hoặc có quyền phù
+            hợp, hãy tạo{" "}
+            <strong>phiên bản đầu tiên (version 1)</strong> để bắt
+            đầu xây dựng mục lục và nội dung.
+          </p>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              className={BTN_PRIMARY}
+              onClick={handleCreateFirstVersion}
+              disabled={creatingVersion}
+            >
+              {creatingVersion
+                ? "Đang tạo phiên bản..."
+                : "Tạo phiên bản đầu tiên (v1)"}
+            </button>
+            <button
+              className={BTN}
+              onClick={() => router.push("/books")}
+            >
+              ← Quay lại danh sách sách
+            </button>
+          </div>
+
+          <p className="text-xs text-gray-400 mt-2">
+            (Phân quyền thực tế sẽ do RLS trên bảng{" "}
+            <code className="font-mono">book_versions</code> quyết
+            định. Nếu bạn không đủ quyền, thao tác này sẽ bị Supabase
+            chặn.)
+          </p>
+        </section>
+      </main>
+    );
+  }
+
+  // Có book + version → hiển thị TOC và members
+  const childrenMap = useMemo(
+    () => buildChildrenMap(toc?.items || []),
+    [toc]
+  );
+  const isEditor = toc?.role === "editor";
+
   return (
     <main className="max-w-6xl mx-auto px-4 py-8 space-y-6">
       {/* Header sách */}
@@ -344,21 +461,14 @@ export default function BookDetailPage() {
               Sách của tôi
             </Link>
             <span className="mx-1">/</span>
-            <span className="text-gray-700">
-              {book.title}
-            </span>
+            <span className="text-gray-700">{book.title}</span>
           </div>
-          <h1 className="text-2xl font-bold">
-            {book.title}
-          </h1>
+          <h1 className="text-2xl font-bold">{book.title}</h1>
           <p className="text-sm text-gray-600">
-            Đơn vị:{" "}
-            {book.unit_name || "Khoa Y học cổ truyền"}
+            Đơn vị: {book.unit_name || "Khoa Y học cổ truyền"}
           </p>
           <div className="flex items-center gap-2 text-sm">
-            <span className={getVersionStatusClass(
-              version.status
-            )}>
+            <span className={getVersionStatusClass(version.status)}>
               Phiên bản {version.version_no} –{" "}
               {getVersionStatusLabel(version.status)}
             </span>
@@ -371,9 +481,7 @@ export default function BookDetailPage() {
           {version.created_at && (
             <p className="text-xs text-gray-500">
               Tạo phiên bản lúc:{" "}
-              {new Date(
-                version.created_at
-              ).toLocaleString()}
+              {new Date(version.created_at).toLocaleString()}
             </p>
           )}
         </div>
@@ -427,9 +535,7 @@ export default function BookDetailPage() {
                   className={INPUT}
                   placeholder="Tiêu đề chương mới (cấp 1)"
                   value={newRootTitle}
-                  onChange={(e) =>
-                    setNewRootTitle(e.target.value)
-                  }
+                  onChange={(e) => setNewRootTitle(e.target.value)}
                 />
                 <button
                   className={BTN_PRIMARY}
@@ -440,14 +546,12 @@ export default function BookDetailPage() {
                     treeLoading
                   }
                 >
-                  {addingRoot
-                    ? "Đang thêm..."
-                    : "Thêm chương"}
+                  {addingRoot ? "Đang thêm..." : "Thêm chương"}
                 </button>
               </div>
               <p className="text-xs text-gray-500">
-                Các mục con chi tiết hơn sẽ được tạo ở màn hình
-                chi tiết từng mục (sub-section của author).
+                Các mục con chi tiết hơn sẽ được tạo ở màn hình chi
+                tiết từng mục (sub-section của author).
               </p>
             </div>
           )}
@@ -463,8 +567,8 @@ export default function BookDetailPage() {
 
           {members.length === 0 ? (
             <p className="text-sm text-gray-500">
-              Chưa có thông tin thành viên hoặc bạn không có
-              quyền xem danh sách này.
+              Chưa có thông tin thành viên hoặc bạn không có quyền
+              xem danh sách này.
             </p>
           ) : (
             <ul className="space-y-2 text-sm">
