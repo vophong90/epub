@@ -1,4 +1,3 @@
-// components/TopNav.tsx
 "use client";
 
 import Link from "next/link";
@@ -8,13 +7,11 @@ import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "./AuthProvider";
 
-type NavLink = { href: string; label: string; disabled?: boolean };
-
-const NAV_LINKS: NavLink[] = [
+const NAV_LINKS = [
   { href: "/", label: "Trang chủ" },
   { href: "/books", label: "Biên tập" },
-  { href: "/publish", label: "Xuất bản" }, // admin dàn trang in
-  { href: "/viewer", label: "Xem tài liệu" }, // trang riêng cho viewer
+  { href: "/publish", label: "Xuất bản" },
+  { href: "/viewer", label: "Xem tài liệu" },
 ];
 
 export default function TopNav() {
@@ -33,7 +30,6 @@ export default function TopNav() {
     router.replace("/login");
   }
 
-  // Dropdown
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -56,9 +52,8 @@ export default function TopNav() {
   return (
     <header className="sticky top-0 z-40 border-b bg-white/80 backdrop-blur">
       <nav className="max-w-6xl mx-auto px-4 py-3">
-        {/* 3 cột: left (logo) / center (menu) / right (user) */}
-        <div className="grid grid-cols-[auto_1fr_auto] items-center gap-4">
-          {/* LEFT: logo */}
+        {/* Hàng 1: logo + user */}
+        <div className="flex items-center justify-between gap-3">
           <Link href="/" className="flex items-center gap-2 shrink-0">
             <Image
               src="/logo-square.png"
@@ -70,34 +65,7 @@ export default function TopNav() {
             <span className="font-semibold whitespace-nowrap">EPUB</span>
           </Link>
 
-          {/* CENTER: menu */}
-          <div className="hidden md:flex items-center justify-center gap-6 text-sm min-w-0">
-            {NAV_LINKS.map((link) => {
-              const isActive =
-                pathname === link.href || pathname.startsWith(link.href + "/");
-              const base = link.disabled
-                ? "opacity-40 cursor-not-allowed"
-                : "cursor-pointer";
-              const color = isActive
-                ? "text-blue-700 font-semibold"
-                : "text-gray-700 hover:text-blue-700";
-
-              return (
-                <button
-                  key={link.href}
-                  disabled={link.disabled}
-                  onClick={() => !link.disabled && router.push(link.href)}
-                  className={`${base} ${color} whitespace-nowrap`}
-                  type="button"
-                >
-                  {link.label}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* RIGHT: user dropdown */}
-          <div className="flex items-center justify-end gap-2 shrink-0">
+          <div className="shrink-0">
             {loading ? (
               <div className="h-9 w-40 rounded-full bg-gray-100 animate-pulse" />
             ) : user ? (
@@ -113,19 +81,6 @@ export default function TopNav() {
 
                 {open && (
                   <div className="absolute right-0 mt-2 w-44 rounded-xl border bg-white shadow-lg overflow-hidden">
-                    <button
-                      type="button"
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                      onClick={() => {
-                        setOpen(false);
-                        router.push("/profile");
-                      }}
-                    >
-                      Hồ sơ
-                    </button>
-
-                    <div className="h-px bg-gray-100" />
-
                     <button
                       type="button"
                       className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50"
@@ -150,25 +105,20 @@ export default function TopNav() {
           </div>
         </div>
 
-        {/* MOBILE: menu dưới (md trở xuống) */}
-        <div className="md:hidden mt-3 flex flex-wrap items-center gap-3 text-sm">
+        {/* Hàng 2: menu (1 bản duy nhất, tự wrap) */}
+        <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
           {NAV_LINKS.map((link) => {
             const isActive =
               pathname === link.href || pathname.startsWith(link.href + "/");
-            const base = link.disabled
-              ? "opacity-40 cursor-not-allowed"
-              : "cursor-pointer";
-            const color = isActive
+            const cls = isActive
               ? "text-blue-700 font-semibold"
               : "text-gray-700 hover:text-blue-700";
-
             return (
               <button
                 key={link.href}
-                disabled={link.disabled}
-                onClick={() => !link.disabled && router.push(link.href)}
-                className={`${base} ${color} whitespace-nowrap`}
                 type="button"
+                className={`${cls} whitespace-nowrap`}
+                onClick={() => router.push(link.href)}
               >
                 {link.label}
               </button>
