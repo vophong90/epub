@@ -444,13 +444,6 @@ export default function BookDetailPage() {
     );
   }
 
-  // Có book + version → hiển thị TOC và members
-  const childrenMap = useMemo(
-    () => buildChildrenMap(toc?.items || []),
-    [toc]
-  );
-  const isEditor = toc?.role === "editor";
-
   return (
     <main className="max-w-6xl mx-auto px-4 py-8 space-y-6">
       {/* Header sách */}
