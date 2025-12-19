@@ -6,19 +6,25 @@ import { getAdminClient } from "@/lib/supabase-admin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function ensureAdmin() {
-  const supabase = getRouteClient();
+type Body = {
+  profile_id?: string;
+};
+
+export async function POST(req: NextRequest) {
+  const supabase = getRouteClient(); // client dùng cookie (session user)
+  const admin = getAdminClient();    // service-role client
+
+  // 1) Check đang đăng nhập
   const {
     data: { user },
     error: uErr,
   } = await supabase.auth.getUser();
 
   if (uErr || !user) {
-    return {
-      errorRes: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
-    };
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // 2) Chỉ admin mới được reset mật khẩu người khác
   const { data: profile, error: pErr } = await supabase
     .from("profiles")
     .select("id,system_role")
@@ -26,34 +32,17 @@ async function ensureAdmin() {
     .maybeSingle();
 
   if (pErr) {
-    return {
-      errorRes: NextResponse.json(
-        { error: pErr.message },
-        { status: 500 }
-      ),
-    };
+    return NextResponse.json({ error: pErr.message }, { status: 500 });
   }
 
   if (!profile || profile.system_role !== "admin") {
-    return {
-      errorRes: NextResponse.json(
-        { error: "Chỉ admin mới dùng API này" },
-        { status: 403 }
-      ),
-    };
+    return NextResponse.json(
+      { error: "Chỉ admin mới được reset mật khẩu" },
+      { status: 403 }
+    );
   }
 
-  const admin = getAdminClient();
-  return { supabase, admin, user };
-}
-
-type Body = { user_id?: string };
-
-export async function POST(req: NextRequest) {
-  const check = await ensureAdmin();
-  if ("errorRes" in check) return check.errorRes;
-  const { admin } = check;
-
+  // 3) Lấy profile_id của user cần reset
   let body: Body = {};
   try {
     body = await req.json();
@@ -61,40 +50,45 @@ export async function POST(req: NextRequest) {
     body = {};
   }
 
-  const user_id = (body.user_id || "").trim();
-  if (!user_id) {
+  const targetId = (body.profile_id || "").toString();
+  if (!targetId) {
     return NextResponse.json(
-      { error: "user_id là bắt buộc" },
+      { error: "profile_id là bắt buộc" },
       { status: 400 }
     );
   }
 
-  const { data: profile, error: pErr } = await admin
+  // 4) Lấy email của user đó
+  const { data: targetProfile, error: tpErr } = await admin
     .from("profiles")
     .select("id,email")
-    .eq("id", user_id)
+    .eq("id", targetId)
     .maybeSingle();
 
-  if (pErr) {
-    return NextResponse.json(
-      { error: pErr.message },
-      { status: 500 }
-    );
+  if (tpErr) {
+    return NextResponse.json({ error: tpErr.message }, { status: 500 });
   }
-  if (!profile || !profile.email) {
+  if (!targetProfile || !targetProfile.email) {
     return NextResponse.json(
-      { error: "Không tìm thấy email user" },
-      { status: 400 }
+      { error: "Không tìm thấy user hoặc user chưa có email" },
+      { status: 404 }
     );
   }
 
-  const { error: rErr } = await admin.auth.admin.resetPasswordForEmail(
-    profile.email
+  // 5) Gửi email reset password
+  // redirectTo: trang mà anh sẽ làm để người dùng đặt mật khẩu mới
+  const base =
+    process.env.NEXT_PUBLIC_SITE_URL || new URL("/", req.url).origin;
+  const redirectTo = new URL("/reset-password", base).toString();
+
+  const { error: rErr } = await admin.auth.resetPasswordForEmail(
+    targetProfile.email,
+    { redirectTo }
   );
 
   if (rErr) {
     return NextResponse.json(
-      { error: "Gửi email reset thất bại: " + rErr.message },
+      { error: "Gửi email reset mật khẩu thất bại", detail: rErr.message },
       { status: 500 }
     );
   }
