@@ -217,9 +217,12 @@ export default function BookDetailPage() {
       setVersionsLoading(true);
       try {
         const res = await fetch(`/api/books/versions?book_id=${bookId}`);
-        const j = (await res.json().catch(() => ({}))) as Partial<VersionsApiResponse>;
-        if (!res.ok || j.error) {
-          console.error("load versions error:", (j as any).error || res.status);
+        const j = (await res.json().catch(() => ({}))) as VersionsApiResponse;
+        if (!res.ok || !j.ok) {
+          console.error(
+            "load versions error:",
+            (j as any).error || res.status
+          );
           return;
         }
         if (cancelled) return;
@@ -319,8 +322,8 @@ export default function BookDetailPage() {
       // reload danh sách versions (panel admin)
       try {
         const res = await fetch(`/api/books/versions?book_id=${bookId}`);
-        const j = (await res.json().catch(() => ({}))) as Partial<VersionsApiResponse>;
-        if (res.ok && !j.error) {
+        const j = (await res.json().catch(() => ({}))) as VersionsApiResponse;
+        if (res.ok && j.ok) {
           setVersions(j.versions || []);
           setIsAdmin(!!j.is_admin);
         }
@@ -355,8 +358,10 @@ export default function BookDetailPage() {
         // reload danh sách phiên bản
         try {
           const again = await fetch(`/api/books/versions?book_id=${bookId}`);
-          const jj = (await again.json().catch(() => ({}))) as Partial<VersionsApiResponse>;
-          if (again.ok && !jj.error) {
+          const jj = (await again
+            .json()
+            .catch(() => ({}))) as VersionsApiResponse;
+          if (again.ok && jj.ok) {
             setVersions(jj.versions || []);
             setIsAdmin(!!jj.is_admin);
           }
@@ -541,7 +546,10 @@ export default function BookDetailPage() {
     const targetIndex = direction === "up" ? index - 1 : index + 1;
     if (targetIndex < 0 || targetIndex >= siblings.length) return;
 
-    [siblings[index], siblings[targetIndex]] = [siblings[targetIndex], siblings[index]];
+    [siblings[index], siblings[targetIndex]] = [
+      siblings[targetIndex],
+      siblings[index],
+    ];
 
     const orderedIds = siblings.map((s) => s.id);
 
