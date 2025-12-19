@@ -18,7 +18,10 @@
     "clsx": "^2.1.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "@types/node": "^20.17.10"
+    "@types/node": "^20.17.10",
+    "@sparticuz/chromium": "^131.0.0",
+    "pagedjs": "^0.4.3",
+    "playwright-core": "^1.49.1"
   },
   "devDependencies": {
     "typescript": "^5.5.4",
