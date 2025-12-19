@@ -23,9 +23,15 @@ type Book = {
 
 type BookVersion = {
   id: string;
+  book_id?: string;
   version_no: number;
   status: string;
   created_at: string | null;
+  created_by?: string | null;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  locked_by?: string | null;
+  locked_at?: string | null;
 };
 
 type TocItem = {
@@ -73,6 +79,12 @@ type TocItemDetailResponse = {
   assignments: { user_id: string; role_in_item: "author" | "editor" }[];
 };
 
+type VersionsApiResponse = {
+  ok: boolean;
+  is_admin: boolean;
+  versions: BookVersion[];
+};
+
 function formatDateTime(dt: string | null | undefined) {
   if (!dt) return "";
   const d = new Date(dt);
@@ -111,6 +123,12 @@ export default function BookDetailPage() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [creatingVersion, setCreatingVersion] = useState(false);
+
+  /** Quản lý nhiều phiên bản + publish (admin) */
+  const [versions, setVersions] = useState<BookVersion[]>([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [publishingId, setPublishingId] = useState<string | null>(null);
 
   /** Modal state cho tạo / sửa TOC */
   const [modalOpen, setModalOpen] = useState(false);
@@ -189,6 +207,38 @@ export default function BookDetailPage() {
     };
   }, [bookId]);
 
+  /** Load danh sách version + flag admin qua API */
+  useEffect(() => {
+    if (!bookId) return;
+
+    let cancelled = false;
+
+    const loadVersions = async () => {
+      setVersionsLoading(true);
+      try {
+        const res = await fetch(`/api/books/versions?book_id=${bookId}`);
+        const j = (await res.json().catch(() => ({}))) as Partial<VersionsApiResponse>;
+        if (!res.ok || j.error) {
+          console.error("load versions error:", (j as any).error || res.status);
+          return;
+        }
+        if (cancelled) return;
+        setVersions(j.versions || []);
+        setIsAdmin(!!j.is_admin);
+      } catch (e) {
+        console.error("load versions error:", e);
+      } finally {
+        if (!cancelled) setVersionsLoading(false);
+      }
+    };
+
+    loadVersions();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId]);
+
   async function loadTocTree(versionId: string, cancelledFlag?: boolean) {
     try {
       const res = await fetch(`/api/toc/tree?version_id=${versionId}`);
@@ -227,10 +277,7 @@ export default function BookDetailPage() {
     [tocData]
   );
 
-  const rootItems = useMemo(
-    () => childrenMap.get(null) || [],
-    [childrenMap]
-  );
+  const rootItems = useMemo(() => childrenMap.get(null) || [], [childrenMap]);
 
   /** Tạo phiên bản đầu tiên */
   async function handleCreateFirstVersion() {
@@ -238,19 +285,20 @@ export default function BookDetailPage() {
     setCreatingVersion(true);
     setErrorMsg(null);
     try {
-      const { data: userData, error: userErr } =
-        await supabase.auth.getUser();
-      if (userErr || !userData?.user) {
+      const {
+        data: { user },
+        error: userErr,
+      } = await supabase.auth.getUser();
+      if (userErr || !user) {
         setErrorMsg("Không xác định được người dùng.");
         return;
       }
-      const userId = userData.user.id;
 
       const { data: newVersion, error: insErr } = await supabase
         .from("book_versions")
         .insert({
           book_id: bookId,
-          created_by: userId,
+          created_by: user.id,
           status: "draft",
         })
         .select("id,version_no,status,created_at")
@@ -264,10 +312,67 @@ export default function BookDetailPage() {
       const v = newVersion as BookVersion;
       setVersion(v);
 
+      // reload TOC & members cho version mới
       await loadTocTree(v.id);
       await loadMembers(v.id);
+
+      // reload danh sách versions (panel admin)
+      try {
+        const res = await fetch(`/api/books/versions?book_id=${bookId}`);
+        const j = (await res.json().catch(() => ({}))) as Partial<VersionsApiResponse>;
+        if (res.ok && !j.error) {
+          setVersions(j.versions || []);
+          setIsAdmin(!!j.is_admin);
+        }
+      } catch (e) {
+        console.error("reload versions after create error:", e);
+      }
     } finally {
       setCreatingVersion(false);
+    }
+  }
+
+  /** Publish version (admin) */
+  async function handlePublish(versionId: string) {
+    if (
+      !window.confirm(
+        "Bạn chắc chắn muốn publish phiên bản này? Sau khi publish sẽ khoá sửa nội dung."
+      )
+    ) {
+      return;
+    }
+    setPublishingId(versionId);
+    try {
+      const res = await fetch("/api/books/version/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ version_id: versionId }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || (j as any).error) {
+        alert((j as any).error || "Publish phiên bản thất bại");
+      } else {
+        // reload danh sách phiên bản
+        try {
+          const again = await fetch(`/api/books/versions?book_id=${bookId}`);
+          const jj = (await again.json().catch(() => ({}))) as Partial<VersionsApiResponse>;
+          if (again.ok && !jj.error) {
+            setVersions(jj.versions || []);
+            setIsAdmin(!!jj.is_admin);
+          }
+        } catch (e) {
+          console.error("reload versions after publish error:", e);
+        }
+
+        // cập nhật status version hiện tại (nếu trùng id)
+        setVersion((prev) =>
+          prev && prev.id === versionId ? { ...prev, status: "published" } : prev
+        );
+      }
+    } catch (e: any) {
+      alert(e?.message || "Lỗi khi publish phiên bản");
+    } finally {
+      setPublishingId(null);
     }
   }
 
@@ -299,8 +404,7 @@ export default function BookDetailPage() {
         return;
       }
       const json = (await res.json()) as TocItemDetailResponse;
-      const authorIds =
-        json.assignments?.map((a) => a.user_id) ?? [];
+      const authorIds = json.assignments?.map((a) => a.user_id) ?? [];
       setModalSelectedAuthors(authorIds);
       setModalOriginalAuthors(authorIds);
     } catch (e) {
@@ -365,9 +469,7 @@ export default function BookDetailPage() {
         const newSet = new Set(modalSelectedAuthors);
 
         const toAdd = [...newSet].filter((id) => !origSet.has(id));
-        const toRemove = [...origSet].filter(
-          (id) => !newSet.has(id)
-        );
+        const toRemove = [...origSet].filter((id) => !newSet.has(id));
 
         for (const uid of toAdd) {
           await fetch("/api/toc/assignments", {
@@ -409,10 +511,9 @@ export default function BookDetailPage() {
     }
     setModalDeleting(true);
     try {
-      const res = await fetch(
-        `/api/toc/items?id=${modalItem.id}`,
-        { method: "DELETE" }
-      );
+      const res = await fetch(`/api/toc/items?id=${modalItem.id}`, {
+        method: "DELETE",
+      });
       if (!res.ok) {
         console.error("delete toc item error", await res.text());
         alert("Không xóa được mục lục.");
@@ -426,10 +527,7 @@ export default function BookDetailPage() {
   }
 
   /** Reorder ↑ / ↓ */
-  async function handleMoveItem(
-    itemId: string,
-    direction: "up" | "down"
-  ) {
+  async function handleMoveItem(itemId: string, direction: "up" | "down") {
     if (!version || !tocData) return;
     const items = tocData.items;
     const item = items.find((i) => i.id === itemId);
@@ -443,10 +541,7 @@ export default function BookDetailPage() {
     const targetIndex = direction === "up" ? index - 1 : index + 1;
     if (targetIndex < 0 || targetIndex >= siblings.length) return;
 
-    [siblings[index], siblings[targetIndex]] = [
-      siblings[targetIndex],
-      siblings[index],
-    ];
+    [siblings[index], siblings[targetIndex]] = [siblings[targetIndex], siblings[index]];
 
     const orderedIds = siblings.map((s) => s.id);
 
@@ -542,18 +637,80 @@ export default function BookDetailPage() {
 
       {/* Nếu chưa có version */}
       {!version && (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4 space-y-3">
-          <p className="text-sm text-red-800">
-            Sách này chưa có phiên bản nào. Bạn cần tạo phiên bản đầu
-            tiên trước khi xây dựng mục lục.
-          </p>
-          <button
-            className={BTN_PRIMARY}
-            onClick={handleCreateFirstVersion}
-            disabled={creatingVersion}
-          >
-            {creatingVersion ? "Đang tạo phiên bản…" : "Tạo phiên bản đầu tiên"}
-          </button>
+        <div className="space-y-4">
+          <div className="rounded-lg border border-red-200 bg-red-50 p-4 space-y-3">
+            <p className="text-sm text-red-800">
+              Sách này chưa có phiên bản nào. Bạn cần tạo phiên bản đầu tiên
+              trước khi xây dựng mục lục.
+            </p>
+            <button
+              className={BTN_PRIMARY}
+              onClick={handleCreateFirstVersion}
+              disabled={creatingVersion}
+            >
+              {creatingVersion ? "Đang tạo phiên bản…" : "Tạo phiên bản đầu tiên"}
+            </button>
+          </div>
+
+          {/* Panel phiên bản cho admin, trong trường hợp sau này có sẵn version qua API */}
+          {isAdmin && (
+            <section className="rounded-lg border bg-white p-4 shadow-sm">
+              <h2 className="text-lg font-semibold">Phiên bản của sách này</h2>
+              {versionsLoading ? (
+                <p className="mt-2 text-sm text-gray-500">Đang tải danh sách phiên bản...</p>
+              ) : versions.length === 0 ? (
+                <p className="mt-2 text-sm text-gray-500">
+                  Chưa có phiên bản nào được ghi nhận.
+                </p>
+              ) : (
+                <ul className="mt-3 space-y-2 text-sm">
+                  {versions.map((v) => (
+                    <li
+                      key={v.id}
+                      className="flex items-center justify-between gap-3 rounded border px-3 py-2"
+                    >
+                      <div className="space-y-0.5">
+                        <div className="font-medium">Phiên bản {v.version_no}</div>
+                        <div className="text-xs text-gray-500">
+                          Trạng thái:{" "}
+                          <span
+                            className={
+                              v.status === "published"
+                                ? "text-green-700 font-semibold"
+                                : "text-gray-700"
+                            }
+                          >
+                            {v.status}
+                          </span>
+                          {v.created_at && (
+                            <>
+                              {" · Tạo lúc "}
+                              {formatDateTime(v.created_at)}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        className={BTN}
+                        onClick={() => handlePublish(v.id)}
+                        disabled={v.status === "published" || publishingId === v.id}
+                      >
+                        {v.status === "published"
+                          ? "Đã publish"
+                          : publishingId === v.id
+                          ? "Đang publish..."
+                          : "Publish phiên bản"}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="mt-2 text-xs text-gray-400">
+                Chỉ admin thấy panel này. Publish sẽ đặt trạng thái phiên bản thành{" "}
+                <strong>published</strong> và khoá sửa nội dung.
+              </p>
+            </section>
+          )}
         </div>
       )}
 
@@ -653,7 +810,7 @@ export default function BookDetailPage() {
             </div>
           </div>
 
-          {/* RIGHT: Members (read-only) */}
+          {/* RIGHT: Members + Version panel cho admin */}
           <div className="space-y-4">
             <div className="rounded-lg border bg-white p-4 shadow-sm">
               <h2 className="text-lg font-semibold">
@@ -690,6 +847,73 @@ export default function BookDetailPage() {
                 </ul>
               )}
             </div>
+
+            {isAdmin && (
+              <section className="rounded-lg border bg-white p-4 shadow-sm">
+                <h2 className="text-lg font-semibold">
+                  Phiên bản của sách này
+                </h2>
+                {versionsLoading ? (
+                  <p className="mt-2 text-sm text-gray-500">
+                    Đang tải danh sách phiên bản...
+                  </p>
+                ) : versions.length === 0 ? (
+                  <p className="mt-2 text-sm text-gray-500">
+                    Chưa có phiên bản nào được ghi nhận.
+                  </p>
+                ) : (
+                  <ul className="mt-3 space-y-2 text-sm">
+                    {versions.map((v) => (
+                      <li
+                        key={v.id}
+                        className="flex items-center justify-between gap-3 rounded border px-3 py-2"
+                      >
+                        <div className="space-y-0.5">
+                          <div className="font-medium">
+                            Phiên bản {v.version_no}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            Trạng thái:{" "}
+                            <span
+                              className={
+                                v.status === "published"
+                                  ? "text-green-700 font-semibold"
+                                  : "text-gray-700"
+                              }
+                            >
+                              {v.status}
+                            </span>
+                            {v.created_at && (
+                              <>
+                                {" · Tạo lúc "}
+                                {formatDateTime(v.created_at)}
+                              </>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          className={BTN}
+                          onClick={() => handlePublish(v.id)}
+                          disabled={
+                            v.status === "published" || publishingId === v.id
+                          }
+                        >
+                          {v.status === "published"
+                            ? "Đã publish"
+                            : publishingId === v.id
+                            ? "Đang publish..."
+                            : "Publish phiên bản"}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="mt-2 text-xs text-gray-400">
+                  Chỉ admin thấy panel này. Publish sẽ đặt trạng thái phiên bản
+                  thành <strong>published</strong> và khoá sửa nội dung.
+                </p>
+              </section>
+            )}
           </div>
         </div>
       )}
@@ -720,11 +944,8 @@ export default function BookDetailPage() {
                 <p className="text-xs text-gray-500">
                   Mục cha:{" "}
                   <span className="font-medium">
-                    {
-                      (tocData?.items || []).find(
-                        (i) => i.id === modalParentId
-                      )?.title
-                    }
+                    {(tocData?.items || []).find((i) => i.id === modalParentId)
+                      ?.title || "(không tìm thấy)"}
                   </span>
                 </p>
               )}
@@ -770,9 +991,7 @@ export default function BookDetailPage() {
                           <input
                             type="checkbox"
                             className="h-4 w-4"
-                            checked={modalSelectedAuthors.includes(
-                              m.user_id
-                            )}
+                            checked={modalSelectedAuthors.includes(m.user_id)}
                             onChange={(e) => {
                               const checked = e.target.checked;
                               setModalSelectedAuthors((prev) => {
@@ -781,9 +1000,7 @@ export default function BookDetailPage() {
                                     ? prev
                                     : [...prev, m.user_id];
                                 } else {
-                                  return prev.filter(
-                                    (id) => id !== m.user_id
-                                  );
+                                  return prev.filter((id) => id !== m.user_id);
                                 }
                               });
                             }}
@@ -803,8 +1020,8 @@ export default function BookDetailPage() {
                   </div>
                 )}
                 <p className="mt-1 text-xs text-gray-500">
-                  Chỉ những người được phân công (author) mới thấy mục này
-                  trong danh sách công việc của họ.
+                  Chỉ những người được phân công (author) mới thấy mục này trong
+                  danh sách công việc của họ.
                 </p>
               </div>
 
