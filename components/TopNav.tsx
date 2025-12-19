@@ -1,144 +1,150 @@
-// components/AuthProvider.tsx
+// components/TopNav.tsx
 "use client";
 
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
-import type { User } from "@supabase/supabase-js";
+import Link from "next/link";
+import Image from "next/image";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useAuth } from "@/components/AuthProvider";
 import { supabase } from "@/lib/supabaseClient";
 
-type Profile = {
-  id: string;
-  email: string | null;
-  name: string | null;
-  created_at?: string | null;
-  system_role?: string | null; // nếu bạn có
-};
+function TopNav() {
+  const { user, profile, loading } = useAuth();
 
-type AuthContextValue = {
-  user: User | null;
-  profile: Profile | null;
-  loading: boolean;
-  refreshProfile: () => Promise<void>;
-  signOut: () => Promise<void>;
-};
+  const displayName = useMemo(() => {
+    return (
+      profile?.name?.trim() ||
+      profile?.email?.split("@")[0] ||
+      user?.email?.split("@")[0] ||
+      "Tài khoản"
+    );
+  }, [profile?.name, profile?.email, user?.email]);
 
-const AuthContext = createContext<AuthContextValue | null>(null);
+  const [open, setOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  // chống race-condition khi auth state change liên tục
-  const requestSeq = useRef(0);
-
-  async function fetchProfile(uid: string) {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("id,email,name,created_at,system_role")
-      .eq("id", uid)
-      .maybeSingle();
-
-    if (error) {
-      // Nếu RLS chặn thì bạn sẽ thấy ở đây
-      console.error("profiles select error:", error);
-      return null;
+  // close dropdown when click outside
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      if (!open) return;
+      const target = e.target as Node;
+      if (menuRef.current && !menuRef.current.contains(target)) setOpen(false);
     }
-    return (data as Profile | null) ?? null;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  async function handleLogout() {
+    if (loggingOut) return;
+    try {
+      setLoggingOut(true);
+      setOpen(false);
+
+      const { error } = await supabase.auth.signOut();
+      if (error) console.error("signOut error:", error);
+
+      window.location.href = "/login";
+    } finally {
+      setLoggingOut(false);
+    }
   }
 
-  const refreshProfile = async () => {
-    const current = user;
-    if (!current?.id) {
-      setProfile(null);
-      return;
-    }
-    const p = await fetchProfile(current.id);
-    setProfile(p);
-  };
+  return (
+    <header className="sticky top-0 z-[1000] isolate border-b bg-white/80 backdrop-blur">
+      <div className="mx-auto max-w-6xl px-6 py-3 flex items-center justify-between gap-4">
+        <Link href="/" className="flex items-center gap-3">
+          <Image
+            src="/logo-square.png"
+            alt="Logo"
+            width={32}
+            height={32}
+            className="h-8 w-8"
+            priority
+          />
+          <span className="font-semibold text-lg">EPUB</span>
+        </Link>
 
-  const signOut = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) console.error("signOut error:", error);
-    // Auth state change sẽ tự sync lại user/profile/loading
-  };
+        <nav className="flex items-center gap-2">
+          <Link
+            className="px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-100"
+            href="/"
+          >
+            Trang chủ
+          </Link>
 
-  useEffect(() => {
-    let mounted = true;
+          <Link
+            className="px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-100"
+            href="/books"
+          >
+            Biên tập
+          </Link>
 
-    const run = async () => {
-      const seq = ++requestSeq.current;
-      setLoading(true);
+          <span className="px-3 py-2 rounded-lg text-sm font-medium text-gray-400 cursor-not-allowed">
+            Biên soạn
+          </span>
+          <span className="px-3 py-2 rounded-lg text-sm font-medium text-gray-400 cursor-not-allowed">
+            Xuất bản
+          </span>
 
-      // 1) Lấy session ban đầu
-      const { data, error } = await supabase.auth.getUser();
-      if (!mounted) return;
+          {/* Auth area */}
+          {loading ? (
+            <span className="px-3 py-2 rounded-lg text-sm font-semibold text-gray-400">
+              ...
+            </span>
+          ) : !user ? (
+            <Link
+              className="px-3 py-2 rounded-lg text-sm font-semibold hover:bg-gray-100"
+              href="/login"
+            >
+              Đăng nhập
+            </Link>
+          ) : (
+            <div className="relative" ref={menuRef}>
+              <button
+                type="button"
+                className="px-3 py-2 rounded-lg text-sm font-semibold hover:bg-gray-100"
+                onClick={() => setOpen((v) => !v)}
+                aria-haspopup="menu"
+                aria-expanded={open}
+                title={profile?.email ?? user?.email ?? ""}
+              >
+                {displayName}
+              </button>
 
-      if (error) console.warn("auth.getUser error:", error);
+              {open && (
+                <div
+                  className="absolute right-0 mt-2 w-48 rounded-xl border bg-white shadow-lg overflow-hidden z-[9999]"
+                  role="menu"
+                >
+                  <div className="px-3 py-2 text-xs text-gray-500 border-b">
+                    {profile?.email ?? user?.email ?? ""}
+                  </div>
 
-      const u = data?.user ?? null;
-      setUser(u);
-
-      // 2) Nếu có user => fetch profile trước khi tắt loading
-      if (u?.id) {
-        const p = await fetchProfile(u.id);
-        if (!mounted) return;
-        // chỉ apply nếu đây là request mới nhất
-        if (seq === requestSeq.current) setProfile(p);
-      } else {
-        setProfile(null);
-      }
-
-      if (!mounted) return;
-      if (seq === requestSeq.current) setLoading(false);
-    };
-
-    run();
-
-    // 3) Subscribe auth changes
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      const seq = ++requestSeq.current;
-      if (!mounted) return;
-
-      setLoading(true);
-
-      const u = session?.user ?? null;
-      setUser(u);
-
-      if (u?.id) {
-        const p = await fetchProfile(u.id);
-        if (!mounted) return;
-        if (seq === requestSeq.current) setProfile(p);
-      } else {
-        setProfile(null);
-      }
-
-      if (!mounted) return;
-      if (seq === requestSeq.current) setLoading(false);
-    });
-
-    return () => {
-      mounted = false;
-      sub?.subscription?.unsubscribe();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const value = useMemo<AuthContextValue>(
-    () => ({
-      user,
-      profile,
-      loading,
-      refreshProfile,
-      signOut,
-    }),
-    [user, profile, loading]
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    disabled={loggingOut}
+                    className="w-full text-left px-3 py-2 text-sm font-semibold hover:bg-gray-50 disabled:opacity-50"
+                    role="menuitem"
+                  >
+                    {loggingOut ? "Đang đăng xuất..." : "Đăng xuất"}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </nav>
+      </div>
+    </header>
   );
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-export function useAuth() {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error("useAuth must be used within <AuthProvider />");
-  return ctx;
-}
+export default TopNav;
+export { TopNav };
