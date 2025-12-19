@@ -30,55 +30,86 @@ export default function TopNav() {
   }
 
   return (
-    <header className="border-b bg-white/80 backdrop-blur">
-      <nav className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-2">
-          <Link href="/" className="flex items-center gap-2">
+    // sticky để header luôn dính trên, z-40 để nằm trên hero/logo
+    <header className="sticky top-0 z-40 border-b bg-white/80 backdrop-blur">
+      <nav
+        className="
+          max-w-6xl mx-auto px-4 py-3
+          flex items-center justify-between gap-4 flex-nowrap
+        "
+      >
+        {/* Bên trái: logo + menu */}
+        <div className="flex items-center gap-2 min-w-0">
+          <Link href="/" className="flex items-center gap-2 shrink-0">
             <img
               src="/logo-square.png"
               alt="EPUB"
               className="h-8 w-8 rounded-full"
             />
-            <span className="font-semibold">EPUB</span>
+            <span className="font-semibold whitespace-nowrap">EPUB</span>
           </Link>
 
-          <div className="hidden md:flex items-center gap-4 ml-6 text-sm">
-            {NAV_LINKS.map((link) => (
-              <button
-                key={link.href}
-                disabled={link.disabled}
-                onClick={() => !link.disabled && router.push(link.href)}
-                className={`${
-                  pathname === link.href
-                    ? "text-blue-700 font-semibold"
-                    : "text-gray-700 hover:text-blue-700"
-                } ${link.disabled ? "opacity-40 cursor-not-allowed" : ""}`}
-              >
-                {link.label}
-              </button>
-            ))}
+          <div className="hidden md:flex items-center gap-4 ml-6 text-sm whitespace-nowrap">
+            {NAV_LINKS.map((link) => {
+              const isActive = pathname === link.href;
+              const base = link.disabled
+                ? "opacity-40 cursor-not-allowed"
+                : "cursor-pointer";
+              const color = isActive
+                ? "text-blue-700 font-semibold"
+                : "text-gray-700 hover:text-blue-700";
+
+              return (
+                <button
+                  key={link.href}
+                  disabled={link.disabled}
+                  onClick={() => !link.disabled && router.push(link.href)}
+                  className={`${base} ${color}`}
+                  type="button"
+                >
+                  {link.label}
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        {/* Góc phải */}
-        <div className="flex items-center gap-2">
-          {/* khi còn loading: tránh nhảy chữ liên tục */}
+        {/* Bên phải */}
+        <div className="flex items-center gap-2 flex-shrink-0">
           {loading ? (
-            <div className="h-9 w-32 rounded-full bg-gray-100 animate-pulse" />
+            // placeholder cố định để tránh nhảy layout
+            <div className="h-9 w-40 rounded-full bg-gray-100 animate-pulse" />
           ) : user ? (
             <>
               <Link
                 href="/books"
-                className="hidden sm:inline-flex items-center px-3 py-2 rounded-full bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700"
+                className="
+                  hidden sm:inline-flex items-center px-3 py-2
+                  rounded-full bg-blue-600 text-white text-sm font-semibold
+                  hover:bg-blue-700 whitespace-nowrap
+                "
               >
                 Vào My Books
               </Link>
-              <button className="px-3 py-2 rounded-full border text-sm">
+
+              <button
+                type="button"
+                className="
+                  px-3 py-2 rounded-full border text-sm
+                  max-w-[220px] truncate
+                "
+                title={displayName || "user"}
+              >
                 Xin chào, {displayName || "user"}
               </button>
+
               <button
+                type="button"
                 onClick={handleLogout}
-                className="hidden sm:inline-flex px-3 py-2 rounded-full text-sm text-gray-600 hover:bg-gray-100"
+                className="
+                  hidden sm:inline-flex px-3 py-2 rounded-full text-sm
+                  text-gray-600 hover:bg-gray-100 whitespace-nowrap
+                "
               >
                 Đăng xuất
               </button>
@@ -86,7 +117,10 @@ export default function TopNav() {
           ) : (
             <Link
               href="/login"
-              className="px-3 py-2 rounded-full bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700"
+              className="
+                px-3 py-2 rounded-full bg-blue-600 text-white text-sm
+                font-semibold hover:bg-blue-700 whitespace-nowrap
+              "
             >
               Đăng nhập
             </Link>
