@@ -355,8 +355,8 @@ export async function POST(req: NextRequest) {
     const browser = await pwChromium.launch({
       args: chromium.args,
       executablePath: await chromium.executablePath(),
-      headless: chromium.headless,
-    });
+      headless: true, // ✅ fix type + chạy ổn trên serverless
+      });
 
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "load" });
