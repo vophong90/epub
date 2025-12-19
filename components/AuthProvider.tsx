@@ -1,133 +1,151 @@
-// components/AuthProvider.tsx
 "use client";
 
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
-import type { User } from "@supabase/supabase-js";
+import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabaseClient";
 
-type Profile = {
+export type Profile = {
   id: string;
   email: string | null;
   name: string | null;
+  role?: string | null;
   created_at?: string | null;
-  system_role?: string | null;
 };
 
 type AuthContextValue = {
   user: User | null;
+  session: Session | null;
   profile: Profile | null;
   loading: boolean;
   refreshProfile: () => Promise<void>;
-  signOut: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function AuthProvider({ children }: { children: React.ReactNode }) {
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([p, sleep(ms).then(() => fallback)]);
+}
+
+async function fetchProfile(userId: string): Promise<Profile | null> {
+  // profiles.id = auth.users.id
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id,email,name,role,created_at")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (error) {
+    console.warn("fetchProfile error:", error);
+    return null;
+  }
+  return (data as any) ?? null;
+}
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const requestSeq = useRef(0);
+  const mountedRef = useRef(true);
+  const lastUserIdRef = useRef<string | null>(null);
 
-  async function fetchProfile(uid: string) {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("id,email,name,created_at,system_role")
-      .eq("id", uid)
-      .maybeSingle();
-
-    if (error) {
-      console.error("profiles select error:", error);
-      return null;
-    }
-    return (data as Profile | null) ?? null;
-  }
-
-  const refreshProfile = async () => {
-    if (!user?.id) {
+  async function refreshProfile() {
+    const uid = user?.id ?? null;
+    if (!uid) {
       setProfile(null);
       return;
     }
-    const p = await fetchProfile(user.id);
+    const p = await fetchProfile(uid);
+    if (!mountedRef.current) return;
     setProfile(p);
-  };
-
-  const signOut = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) console.error("signOut error:", error);
-  };
+  }
 
   useEffect(() => {
-    let mounted = true;
+    mountedRef.current = true;
 
-    const init = async () => {
-      const seq = ++requestSeq.current;
-      setLoading(true);
+    (async () => {
+      // ✅ Quan trọng: dùng getSession (không dễ bị AuthSessionMissingError như getUser)
+      // + timeout để không kẹt “Đang xác thực…”
+      const sessRes = await withTimeout(supabase.auth.getSession(), 8000, { data: { session: null }, error: null } as any);
 
-      // ✅ an toàn: đọc session từ localStorage
-      const { data, error } = await supabase.auth.getSession();
-      if (!mounted) return;
+      if (!mountedRef.current) return;
 
-      if (error) console.warn("auth.getSession error:", error);
+      const s = sessRes?.data?.session ?? null;
+      setSession(s);
+      setUser(s?.user ?? null);
 
-      const u = data?.session?.user ?? null;
-      setUser(u);
-
-      if (u?.id) {
-        const p = await fetchProfile(u.id);
-        if (!mounted) return;
-        if (seq === requestSeq.current) setProfile(p);
+      // load profile nếu có user
+      if (s?.user?.id) {
+        lastUserIdRef.current = s.user.id;
+        const p = await fetchProfile(s.user.id);
+        if (!mountedRef.current) return;
+        setProfile(p);
       } else {
         setProfile(null);
       }
 
-      if (!mounted) return;
-      if (seq === requestSeq.current) setLoading(false);
-    };
+      setLoading(false);
+    })();
 
-    init();
+    // ✅ Subscribe auth changes
+    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
+      if (!mountedRef.current) return;
 
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      const seq = ++requestSeq.current;
-      if (!mounted) return;
+      setSession(newSession);
+      const nextUser = newSession?.user ?? null;
+      setUser(nextUser);
 
-      setLoading(true);
+      const nextUid = nextUser?.id ?? null;
 
-      const u = session?.user ?? null;
-      setUser(u);
-
-      if (u?.id) {
-        const p = await fetchProfile(u.id);
-        if (!mounted) return;
-        if (seq === requestSeq.current) setProfile(p);
-      } else {
+      // chỉ fetch profile khi đổi user
+      if (!nextUid) {
+        lastUserIdRef.current = null;
         setProfile(null);
+        setLoading(false);
+        return;
       }
 
-      if (!mounted) return;
-      if (seq === requestSeq.current) setLoading(false);
+      if (lastUserIdRef.current !== nextUid) {
+        lastUserIdRef.current = nextUid;
+        const p = await fetchProfile(nextUid);
+        if (!mountedRef.current) return;
+        setProfile(p);
+      }
+
+      setLoading(false);
     });
 
     return () => {
-      mounted = false;
+      mountedRef.current = false;
       sub?.subscription?.unsubscribe();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ user, profile, loading, refreshProfile, signOut }),
-    [user, profile, loading]
+    () => ({
+      user,
+      session,
+      profile,
+      loading,
+      refreshProfile,
+    }),
+    [user, session, profile, loading]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
+
+// ✅ default export để import AuthProvider from "...";
+export default AuthProvider;
 
 export function useAuth() {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error("useAuth must be used within <AuthProvider />");
   return ctx;
 }
-
-export { AuthProvider };
-export default AuthProvider;
