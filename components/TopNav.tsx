@@ -2,6 +2,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "./AuthProvider";
@@ -41,10 +42,14 @@ export default function TopNav() {
         {/* Bên trái: logo + menu */}
         <div className="flex items-center gap-2 min-w-0">
           <Link href="/" className="flex items-center gap-2 shrink-0">
-            <img
+            {/* ✅ dùng next/image + width/height cố định,
+                logo sẽ KHÔNG bao giờ phóng to toàn màn hình nữa */}
+            <Image
               src="/logo-square.png"
               alt="EPUB"
-              className="h-8 w-8 rounded-full"
+              width={32}
+              height={32}
+              className="rounded-full shrink-0"
             />
             <span className="font-semibold whitespace-nowrap">EPUB</span>
           </Link>
