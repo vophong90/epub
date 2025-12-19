@@ -41,7 +41,9 @@ function buildChildrenMap(items: TocItem[]) {
   return m;
 }
 
-function safeJsonParse(s: string): { ok: true; value: any } | { ok: false; error: string } {
+function safeJsonParse(s: string):
+  | { ok: true; value: any }
+  | { ok: false; error: string } {
   try {
     return { ok: true, value: JSON.parse(s) };
   } catch (e: any) {
@@ -50,16 +52,27 @@ function safeJsonParse(s: string): { ok: true; value: any } | { ok: false; error
 }
 
 export default function TocPage() {
-  const params = useParams<{ bookId: string; versionId: string }>();
-  const bookId = useMemo(() => String(params?.bookId || ""), [params]);
-  const versionId = useMemo(() => String(params?.versionId || ""), [params]);
+  const params = useParams();
+
+  // ✅ Không dùng useMemo([params]) nữa
+  const bookId = useMemo(() => {
+    const v = (params as any)?.bookId;
+    return typeof v === "string" ? v : "";
+  }, [(params as any)?.bookId]);
+
+  const versionId = useMemo(() => {
+    const v = (params as any)?.versionId;
+    return typeof v === "string" ? v : "";
+  }, [(params as any)?.versionId]);
 
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<"viewer" | "author" | "editor" | null>(null);
   const [items, setItems] = useState<TocItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<TocItem | null>(null);
-  const [contentJsonText, setContentJsonText] = useState<string>("{\n  \"type\": \"doc\",\n  \"content\": []\n}");
+  const [contentJsonText, setContentJsonText] = useState<string>(
+    '{\n  "type": "doc",\n  "content": []\n}'
+  );
   const [contentStatus, setContentStatus] = useState<string>("");
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
@@ -73,7 +86,12 @@ export default function TocPage() {
   const canEditContent = role === "editor" || role === "author";
 
   async function ensureAuthed() {
-    const { data } = await supabase.auth.getUser();
+    const { data, error } = await supabase.auth.getUser();
+    if (error) {
+      console.error("auth getUser error:", error);
+      window.location.href = "/login";
+      return null;
+    }
     if (!data?.user) {
       window.location.href = "/login";
       return null;
@@ -83,40 +101,58 @@ export default function TocPage() {
 
   async function loadTree() {
     setLoading(true);
-    const u = await ensureAuthed();
-    if (!u) return;
+    try {
+      const u = await ensureAuthed();
+      if (!u) return;
 
-    const res = await fetch(`/api/toc/tree?version_id=${encodeURIComponent(versionId)}`);
-    const json = await res.json();
-    if (!res.ok) {
-      console.error("tree error", json);
+      const res = await fetch(
+        `/api/toc/tree?version_id=${encodeURIComponent(versionId)}`
+      );
+      const json = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        console.error("tree error", json);
+        return;
+      }
+
+      setRole(json.role);
+      setItems(json.items || []);
+
+      // members for assignment (only needed for editor UI)
+      const mRes = await fetch(
+        `/api/toc/members?version_id=${encodeURIComponent(versionId)}`
+      );
+      const mJson = await mRes.json().catch(() => ({}));
+      if (mRes.ok) setMembers(mJson.members || []);
+    } catch (e) {
+      console.error("loadTree FAILED:", e);
+      setRole(null);
+      setItems([]);
+      setMembers([]);
+    } finally {
       setLoading(false);
-      return;
-    }
-    setRole(json.role);
-    setItems(json.items || []);
-    setLoading(false);
-
-    // members for assignment (only needed for editor UI)
-    const mRes = await fetch(`/api/toc/members?version_id=${encodeURIComponent(versionId)}`);
-    const mJson = await mRes.json();
-    if (mRes.ok) {
-      setMembers(mJson.members || []);
     }
   }
 
   async function loadItem(tocItemId: string) {
-    const res = await fetch(`/api/toc/item?toc_item_id=${encodeURIComponent(tocItemId)}`);
-    const json = await res.json();
-    if (!res.ok) {
-      console.error("item error", json);
-      return;
+    try {
+      const res = await fetch(
+        `/api/toc/item?toc_item_id=${encodeURIComponent(tocItemId)}`
+      );
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        console.error("item error", json);
+        return;
+      }
+
+      setSelectedItem(json.item);
+      setAssignments(json.assignments || []);
+      const c = json.content?.content_json ?? { type: "doc", content: [] };
+      setContentJsonText(JSON.stringify(c, null, 2));
+      setContentStatus("");
+    } catch (e) {
+      console.error("loadItem FAILED:", e);
     }
-    setSelectedItem(json.item);
-    setAssignments(json.assignments || []);
-    const c = json.content?.content_json ?? { type: "doc", content: [] };
-    setContentJsonText(JSON.stringify(c, null, 2));
-    setContentStatus("");
   }
 
   useEffect(() => {
@@ -183,7 +219,7 @@ export default function TocPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ toc_item_id: selectedId, content_json: parsed.value }),
     });
-    const j = await res.json();
+    const j = await res.json().catch(() => ({}));
     if (!res.ok) {
       setContentStatus("Lưu thất bại: " + (j?.error || ""));
       return;
@@ -199,7 +235,7 @@ export default function TocPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ book_version_id: versionId, parent_id, title }),
     });
-    const j = await res.json();
+    const j = await res.json().catch(() => ({}));
     if (!res.ok) {
       alert(j?.error || "Tạo mục thất bại");
       return;
@@ -219,8 +255,10 @@ export default function TocPage() {
   }
 
   async function onDeleteItem(id: string) {
-    if (!confirm("Xoá mục này? (sẽ xoá cả các mục con)") ) return;
-    const res = await fetch(`/api/toc/items?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!confirm("Xoá mục này? (sẽ xoá cả các mục con)")) return;
+    const res = await fetch(`/api/toc/items?id=${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) {
       alert(j?.error || "Delete failed");
@@ -240,84 +278,6 @@ export default function TocPage() {
     e.dataTransfer.effectAllowed = "move";
   }
 
-  async function handleDropOnItem(e: React.DragEvent, target: TocItem) {
-    e.preventDefault();
-    if (!canEditToc) return;
-    const dragId = dragIdRef.current;
-    if (!dragId || dragId === target.id) return;
-
-    const dragged = items.find((x) => x.id === dragId);
-    if (!dragged) return;
-
-    const fromParent = dragged.parent_id ?? null;
-    const toParent = e.ctrlKey ? target.id : target.parent_id ?? null;
-
-    // Remove from old siblings
-    const next = items.map((x) => ({ ...x }));
-    const draggedIdx = next.findIndex((x) => x.id === dragId);
-    if (draggedIdx < 0) return;
-    next[draggedIdx].parent_id = toParent;
-
-    // Rebuild siblings arrays
-    const byParent = buildChildrenMap(next);
-    const fromSibs = (byParent.get(fromParent) || []).filter((x) => x.id !== dragId);
-    const toSibs = byParent.get(toParent) || [];
-
-    if (e.ctrlKey) {
-      // Make child: append to end of toParent
-      const appended = [...toSibs.filter((x) => x.id !== dragId), next[draggedIdx]];
-      appended.forEach((x, idx) => (x.order_index = idx + 1));
-      // also normalize from
-      fromSibs.forEach((x, idx) => (x.order_index = idx + 1));
-      replaceItems([...byParentToFlat(byParent, fromParent, fromSibs, toParent, appended)]);
-    } else {
-      // Reorder within same parent: place before target
-      const targetParent = target.parent_id ?? null;
-      const sibs = (byParent.get(targetParent) || []).filter((x) => x.id !== dragId);
-      const targetIdx = sibs.findIndex((x) => x.id === target.id);
-      const insertIdx = targetIdx >= 0 ? targetIdx : sibs.length;
-      sibs.splice(insertIdx, 0, next[draggedIdx]);
-      sibs.forEach((x, idx) => {
-        x.parent_id = targetParent;
-        x.order_index = idx + 1;
-      });
-      if (fromParent !== targetParent) {
-        fromSibs.forEach((x, idx) => (x.order_index = idx + 1));
-        replaceItems([...byParentToFlat(byParent, fromParent, fromSibs, targetParent, sibs)]);
-      } else {
-        replaceItems(next);
-      }
-    }
-
-    // Persist (minimal but deterministic):
-    // 1) patch parent_id
-    // 2) call reorder for affected parent(s) using client order
-    try {
-      await apiPatchItem(dragId, { parent_id: toParent });
-
-      // Build latest client order from our local "next" list (not the old state)
-      const latest = next;
-      const latestChildren = buildChildrenMap(latest);
-
-      const affectedParents = new Set<string | null>();
-      affectedParents.add(fromParent);
-      affectedParents.add(toParent);
-
-      for (const p of affectedParents) {
-        const ordered = (latestChildren.get(p) || []).map((x) => x.id);
-        if (ordered.length) {
-          await apiReorder(p, ordered);
-        }
-      }
-
-      // Refresh from server to avoid drift
-      await loadTree();
-    } catch (err) {
-      console.error(err);
-      await loadTree();
-    }
-  }
-
   function handleDragOver(e: React.DragEvent) {
     if (!canEditToc) return;
     e.preventDefault();
@@ -330,13 +290,82 @@ export default function TocPage() {
     p2: string | null,
     p2Arr: TocItem[]
   ) {
-    // Replace two parents arrays in map then flatten
     const clone = new Map(byParent);
-    if (p1 !== undefined) clone.set(p1, p1Arr);
-    if (p2 !== undefined) clone.set(p2, p2Arr);
+    clone.set(p1, p1Arr);
+    clone.set(p2, p2Arr);
     const out: TocItem[] = [];
     for (const arr of clone.values()) out.push(...arr);
     return out;
+  }
+
+  async function handleDropOnItem(e: React.DragEvent, target: TocItem) {
+    e.preventDefault();
+    if (!canEditToc) return;
+
+    const dragId = dragIdRef.current;
+    if (!dragId || dragId === target.id) return;
+
+    const dragged = items.find((x) => x.id === dragId);
+    if (!dragged) return;
+
+    const fromParent = dragged.parent_id ?? null;
+    const toParent = e.ctrlKey ? target.id : target.parent_id ?? null;
+
+    const next = items.map((x) => ({ ...x }));
+    const draggedIdx = next.findIndex((x) => x.id === dragId);
+    if (draggedIdx < 0) return;
+
+    next[draggedIdx].parent_id = toParent;
+
+    const byParent = buildChildrenMap(next);
+    const fromSibs = (byParent.get(fromParent) || []).filter((x) => x.id !== dragId);
+    const toSibs = byParent.get(toParent) || [];
+
+    if (e.ctrlKey) {
+      const appended = [...toSibs.filter((x) => x.id !== dragId), next[draggedIdx]];
+      appended.forEach((x, idx) => (x.order_index = idx + 1));
+      fromSibs.forEach((x, idx) => (x.order_index = idx + 1));
+      replaceItems([...byParentToFlat(byParent, fromParent, fromSibs, toParent, appended)]);
+    } else {
+      const targetParent = target.parent_id ?? null;
+      const sibs = (byParent.get(targetParent) || []).filter((x) => x.id !== dragId);
+      const targetIdx = sibs.findIndex((x) => x.id === target.id);
+      const insertIdx = targetIdx >= 0 ? targetIdx : sibs.length;
+
+      sibs.splice(insertIdx, 0, next[draggedIdx]);
+      sibs.forEach((x, idx) => {
+        x.parent_id = targetParent;
+        x.order_index = idx + 1;
+      });
+
+      if (fromParent !== targetParent) {
+        fromSibs.forEach((x, idx) => (x.order_index = idx + 1));
+        replaceItems([...byParentToFlat(byParent, fromParent, fromSibs, targetParent, sibs)]);
+      } else {
+        replaceItems(next);
+      }
+    }
+
+    try {
+      await apiPatchItem(dragId, { parent_id: toParent });
+
+      const latest = next;
+      const latestChildren = buildChildrenMap(latest);
+
+      const affectedParents = new Set<string | null>();
+      affectedParents.add(fromParent);
+      affectedParents.add(toParent);
+
+      for (const p of affectedParents) {
+        const ordered = (latestChildren.get(p) || []).map((x) => x.id);
+        if (ordered.length) await apiReorder(p, ordered);
+      }
+
+      await loadTree();
+    } catch (err) {
+      console.error(err);
+      await loadTree();
+    }
   }
 
   async function onAddAssignment() {
@@ -345,9 +374,13 @@ export default function TocPage() {
     const res = await fetch(`/api/toc/assignments`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ toc_item_id: selectedId, user_id: memberPick, role_in_item: assignRole }),
+      body: JSON.stringify({
+        toc_item_id: selectedId,
+        user_id: memberPick,
+        role_in_item: assignRole,
+      }),
     });
-    const j = await res.json();
+    const j = await res.json().catch(() => ({}));
     if (!res.ok) {
       alert(j?.error || "Assign failed");
       return;
@@ -372,6 +405,7 @@ export default function TocPage() {
   function renderNode(it: TocItem, depth: number) {
     const children = childrenMap.get(it.id) || [];
     const isSelected = selectedId === it.id;
+
     return (
       <div key={it.id} className="select-none">
         <div
@@ -383,12 +417,13 @@ export default function TocPage() {
           onDragStart={(e) => handleDragStart(e, it)}
           onDragOver={handleDragOver}
           onDrop={(e) => handleDropOnItem(e, it)}
-          title={canEditToc ? "Kéo thả để sắp xếp. Giữ Ctrl khi thả để đưa vào làm mục con." : undefined}
+          title={
+            canEditToc
+              ? "Kéo thả để sắp xếp. Giữ Ctrl khi thả để đưa vào làm mục con."
+              : undefined
+          }
         >
-          <button
-            className="flex-1 text-left"
-            onClick={() => setSelectedId(it.id)}
-          >
+          <button className="flex-1 text-left" onClick={() => setSelectedId(it.id)}>
             <span className="font-medium">{it.title}</span>
             <span className="ml-2 text-xs text-gray-500">/{it.slug}</span>
           </button>
@@ -416,10 +451,9 @@ export default function TocPage() {
             </div>
           )}
         </div>
+
         {children.length > 0 && (
-          <div className="mt-1">
-            {children.map((c) => renderNode(c, depth + 1))}
-          </div>
+          <div className="mt-1">{children.map((c) => renderNode(c, depth + 1))}</div>
         )}
       </div>
     );
@@ -435,7 +469,8 @@ export default function TocPage() {
         <div>
           <h1 className="text-2xl font-bold">TOC</h1>
           <div className="text-sm text-gray-600">
-            Version: <span className="font-semibold">{versionId}</span> · Role: <span className="font-semibold">{role}</span>
+            Version: <span className="font-semibold">{versionId}</span> · Role:{" "}
+            <span className="font-semibold">{role}</span>
           </div>
         </div>
 
@@ -478,7 +513,11 @@ export default function TocPage() {
 
         {/* Right: detail */}
         <div className="border rounded-2xl p-3">
-          {!selectedId && <div className="text-gray-600">Chọn 1 mục ở TOC để xem / sửa nội dung.</div>}
+          {!selectedId && (
+            <div className="text-gray-600">
+              Chọn 1 mục ở TOC để xem / sửa nội dung.
+            </div>
+          )}
 
           {selectedId && selectedItem && (
             <div className="space-y-4">
@@ -500,13 +539,18 @@ export default function TocPage() {
                     </button>
                   )}
                 </div>
+
                 <textarea
                   className="w-full mt-2 border rounded-xl p-3 font-mono text-sm min-h-[220px]"
                   value={contentJsonText}
                   onChange={(e) => setContentJsonText(e.target.value)}
                   readOnly={!canEditContent}
                 />
-                {!!contentStatus && <div className="text-sm text-gray-600 mt-1">{contentStatus}</div>}
+
+                {!!contentStatus && (
+                  <div className="text-sm text-gray-600 mt-1">{contentStatus}</div>
+                )}
+
                 <div className="text-xs text-gray-500 mt-1">
                   (Bước sau mình sẽ thay textarea này bằng TipTap editor đúng chuẩn.)
                 </div>
@@ -515,6 +559,7 @@ export default function TocPage() {
               {role === "editor" && (
                 <div>
                   <div className="font-semibold mb-2">Phân công theo mục</div>
+
                   <div className="flex flex-col gap-2">
                     <div className="flex gap-2">
                       <select
@@ -525,10 +570,12 @@ export default function TocPage() {
                         <option value="">-- Chọn user --</option>
                         {members.map((m) => (
                           <option key={m.user_id} value={m.user_id}>
-                            {(m.profile?.name || m.profile?.email || m.user_id) + ` (${m.role})`}
+                            {(m.profile?.name || m.profile?.email || m.user_id) +
+                              ` (${m.role})`}
                           </option>
                         ))}
                       </select>
+
                       <select
                         className="border rounded-lg px-3 py-2"
                         value={assignRole}
@@ -537,6 +584,7 @@ export default function TocPage() {
                         <option value="author">author</option>
                         <option value="editor">editor</option>
                       </select>
+
                       <button
                         className="px-3 py-2 rounded-lg border hover:bg-gray-50"
                         onClick={onAddAssignment}
@@ -550,10 +598,15 @@ export default function TocPage() {
                         const prof = members.find((m) => m.user_id === a.user_id)?.profile;
                         const label = prof?.name || prof?.email || a.user_id;
                         return (
-                          <div key={a.id} className="flex items-center justify-between border rounded-lg px-3 py-2">
+                          <div
+                            key={a.id}
+                            className="flex items-center justify-between border rounded-lg px-3 py-2"
+                          >
                             <div>
                               <div className="font-medium">{label}</div>
-                              <div className="text-xs text-gray-600">role_in_item: {a.role_in_item}</div>
+                              <div className="text-xs text-gray-600">
+                                role_in_item: {a.role_in_item}
+                              </div>
                             </div>
                             <button
                               className="px-2 py-1 text-xs rounded-md border hover:bg-gray-50"
@@ -564,7 +617,10 @@ export default function TocPage() {
                           </div>
                         );
                       })}
-                      {!assignments.length && <div className="text-sm text-gray-600">Chưa phân công.</div>}
+
+                      {!assignments.length && (
+                        <div className="text-sm text-gray-600">Chưa phân công.</div>
+                      )}
                     </div>
                   </div>
                 </div>
