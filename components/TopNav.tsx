@@ -57,7 +57,7 @@ function TopNav() {
   }
 
   return (
-    <header className="sticky top-0 z-[1000] isolate border-b bg-white/80 backdrop-blur">
+    <header className="sticky top-0 z-50 border-b bg-white/80 backdrop-blur">
       <div className="mx-auto max-w-6xl px-6 py-3 flex items-center justify-between gap-4">
         <Link href="/" className="flex items-center gap-3">
           <Image
