@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
 type Book = {
@@ -26,9 +26,27 @@ function toISOEndOfDay(dateStr: string) {
   return d.toISOString();
 }
 
+// Promise timeout helper
+function withTimeout<T>(p: Promise<T>, ms: number, label = "timeout"): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = window.setTimeout(() => reject(new Error(label)), ms);
+    p.then(
+      (v) => {
+        window.clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        window.clearTimeout(t);
+        reject(e);
+      }
+    );
+  });
+}
+
 export default function BooksPage() {
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errMsg, setErrMsg] = useState<string>("");
 
   // Filters
   const [q, setQ] = useState("");
@@ -36,48 +54,71 @@ export default function BooksPage() {
   const [dateTo, setDateTo] = useState(""); // YYYY-MM-DD
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
 
- async function loadBooks() {
-  setLoading(true);
+  // chống race condition / response cũ
+  const reqIdRef = useRef(0);
+  const mountedRef = useRef(true);
 
-  try {
-    const { data: { user }, error: authErr } = await supabase.auth.getUser();
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
-    if (authErr) throw authErr;
+  async function loadBooks() {
+    const myReqId = ++reqIdRef.current;
 
-    if (!user) {
-      window.location.href = "/login";
-      return;
+    setErrMsg("");
+    setLoading(true);
+
+    try {
+      // Nếu request auth bị treo -> timeout để không "đơ" UI
+      const authRes = await withTimeout(supabase.auth.getUser(), 12000, "auth timeout");
+      const user = authRes.data?.user;
+
+      if (!user) {
+        window.location.href = "/login";
+        return;
+      }
+
+      let queryBuilder = supabase
+        .from("books")
+        .select("id,title,created_at,unit_name")
+        .order("created_at", { ascending: sortDir === "asc" });
+
+      const qTrim = q.trim();
+      if (qTrim) queryBuilder = queryBuilder.ilike("title", `%${qTrim}%`);
+      if (dateFrom) queryBuilder = queryBuilder.gte("created_at", toISOStartOfDay(dateFrom));
+      if (dateTo) queryBuilder = queryBuilder.lte("created_at", toISOEndOfDay(dateTo));
+
+      // Nếu request DB bị treo -> timeout
+      const { data, error } = await withTimeout(queryBuilder, 12000, "query timeout");
+
+      if (error) throw error;
+
+      // nếu có request mới hơn thì bỏ qua response này
+      if (!mountedRef.current || myReqId !== reqIdRef.current) return;
+
+      setBooks((data || []) as any);
+    } catch (e: any) {
+      console.error("loadBooks FAILED:", e);
+
+      if (!mountedRef.current || myReqId !== reqIdRef.current) return;
+
+      setBooks([]);
+      setErrMsg(e?.message ? String(e.message) : "Không tải được danh sách sách.");
+    } finally {
+      if (!mountedRef.current || myReqId !== reqIdRef.current) return;
+      setLoading(false);
     }
-
-    let query = supabase
-      .from("books")
-      .select("id,title,created_at,unit_name")
-      .order("created_at", { ascending: sortDir === "asc" });
-
-    const qTrim = q.trim();
-    if (qTrim) query = query.ilike("title", `%${qTrim}%`);
-    if (dateFrom) query = query.gte("created_at", toISOStartOfDay(dateFrom));
-    if (dateTo) query = query.lte("created_at", toISOEndOfDay(dateTo));
-
-    const { data, error } = await query;
-
-    if (error) throw error;
-
-    setBooks((data || []) as any);
-  } catch (e) {
-    console.error("loadBooks FAILED:", e);
-    setBooks([]);
-  } finally {
-    setLoading(false);
   }
-}
 
-useEffect(() => {
-  loadBooks(); // ok vì loadBooks đã tự catch/finally
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [sortDir]);
+  // Load lần đầu + khi đổi sort
+  useEffect(() => {
+    loadBooks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortDir]);
 
- 
   const qHint = useMemo(() => {
     const parts: string[] = [];
     if (q.trim()) parts.push(`tên chứa "${q.trim()}"`);
@@ -88,18 +129,9 @@ useEffect(() => {
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6">
-      {/* Header */}
+      {/* Header (bỏ nút Đăng xuất ở đây, chỉ để trên TopNav) */}
       <div className="flex items-center justify-between gap-3 mb-4">
         <h1 className="text-2xl font-bold">Sách của tôi</h1>
-        <button
-          className={BTN}
-          onClick={async () => {
-            await supabase.auth.signOut();
-            window.location.href = "/login";
-          }}
-        >
-          Đăng xuất
-        </button>
       </div>
 
       {/* Filters */}
@@ -176,6 +208,12 @@ useEffect(() => {
         <div className="text-xs text-gray-500 mt-3">
           Bộ lọc: {qHint}. Đang hiển thị {books.length} sách.
         </div>
+
+        {!!errMsg && (
+          <div className="mt-3 text-sm text-red-600">
+            Lỗi tải dữ liệu: {errMsg}
+          </div>
+        )}
       </div>
 
       {/* List */}
@@ -207,7 +245,6 @@ useEffect(() => {
                     <div className="text-xs text-gray-400 mt-1">ID: {b.id}</div>
                   </div>
 
-                  {/* ✅ Hard navigation: chắc chắn đổi URL */}
                   <a
                     href={`/books/${b.id}`}
                     className="inline-flex items-center justify-center px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
