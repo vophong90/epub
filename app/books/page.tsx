@@ -213,8 +213,8 @@ export default function BooksPage() {
                   <button
                     type="button"
                     onClick={() => {
-                      console.log("Go to book", b.id); // để bạn thấy click có chạy
-                      router.push(`/books/${b.id}`);
+                      console.log("Go to book", b.id);
+                      window.location.href = `/books/${b.id}`;
                     }}
                     className="inline-flex items-center justify-center px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
                     >
