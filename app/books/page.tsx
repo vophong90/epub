@@ -27,9 +27,15 @@ function toISOEndOfDay(dateStr: string) {
 }
 
 // Promise timeout helper
-function withTimeout<T>(p: Promise<T>, ms: number, label = "timeout"): Promise<T> {
+function withTimeout<T>(
+  p: PromiseLike<T>,
+  ms: number,
+  label = "timeout"
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const t = window.setTimeout(() => reject(new Error(label)), ms);
+
+    // PromiseLike chỉ có then, không có catch/finally
     p.then(
       (v) => {
         window.clearTimeout(t);
