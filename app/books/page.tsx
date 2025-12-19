@@ -214,7 +214,7 @@ export default function BooksPage() {
                     type="button"
                     onClick={() => {
                       console.log("Go to book", b.id);
-                      window.location.href = `/book/${b.id}`;
+                      window.location.href = `/books/${b.id}`;
                     }}
                     className="inline-flex items-center justify-center px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
                     >
