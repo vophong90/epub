@@ -210,13 +210,16 @@ export default function BooksPage() {
                     </div>
                     <div className="text-xs text-gray-400 mt-1">ID: {b.id}</div>
                   </div>
-
-                  <Link
-                    href={`/books/${b.id}`}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      console.log("Go to book", b.id); // để bạn thấy click có chạy
+                      router.push(`/books/${b.id}`);
+                    }}
                     className="inline-flex items-center justify-center px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
-                  >
+                    >
                     Mở
-                  </Link>
+                  </button>
                 </div>
               </div>
             );
