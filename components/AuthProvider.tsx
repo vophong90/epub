@@ -1,127 +1,106 @@
 // components/AuthProvider.tsx
 "use client";
 
-import React, {
+import {
   createContext,
   useContext,
   useEffect,
-  useMemo,
-  useRef,
   useState,
+  ReactNode,
 } from "react";
-import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabaseClient";
 
-export type Profile = {
+type Profile = {
   id: string;
   email: string | null;
   name: string | null;
-  role?: string | null;
-  created_at?: string | null;
+  system_role: string | null; // cột thật trong DB
 };
 
 type AuthContextValue = {
-  user: User | null;
-  session: Session | null;
+  user: any;
   profile: Profile | null;
   loading: boolean;
-  refreshProfile: () => Promise<void>;
 };
 
-const AuthContext = createContext<AuthContextValue | null>(null);
+const AuthContext = createContext<AuthContextValue>({
+  user: null,
+  profile: null,
+  loading: true,
+});
 
-async function fetchProfile(userId: string): Promise<Profile | null> {
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("id,email,name,role:system_role,created_at")
-    .eq("id", userId)
-    .maybeSingle();
-
-  if (error) {
-    console.warn("fetchProfile error:", error);
-    return null;
-  }
-  return (data as any) ?? null;
-}
-
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [session, setSession] = useState<Session | null>(null);
-  const [user, setUser] = useState<User | null>(null);
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const mountedRef = useRef(true);
+  async function loadSessionAndProfile() {
+    setLoading(true);
 
-  async function loadProfileForUser(u: User | null) {
-    if (!u) {
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser();
+
+    if (error || !user) {
+      setUser(null);
       setProfile(null);
+      setLoading(false);
       return;
     }
-    const p = await fetchProfile(u.id);
-    if (!mountedRef.current) return;
-    setProfile(p);
-  }
 
-  async function refreshProfile() {
-    await loadProfileForUser(user);
+    setUser(user);
+
+    // ⚠️ CHỈ lấy các cột có thật trong bảng profiles
+    const { data: p, error: pErr } = await supabase
+      .from("profiles")
+      .select("id,email,name,system_role")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (!pErr && p) {
+      setProfile({
+        id: p.id,
+        email: p.email,
+        name: p.name,
+        system_role: p.system_role ?? null,
+      });
+    } else {
+      // fallback tối thiểu, tránh vỡ UI
+      setProfile({
+        id: user.id,
+        email: user.email ?? null,
+        name: (user.user_metadata as any)?.full_name ?? null,
+        system_role: null,
+      });
+    }
+
+    setLoading(false);
   }
 
   useEffect(() => {
-    mountedRef.current = true;
+    // load lần đầu
+    loadSessionAndProfile();
 
-    (async () => {
-      // ✅ KHÔNG timeout, cứ để Supabase getSession bình thường
-      const { data, error } = await supabase.auth.getSession();
-      if (!mountedRef.current) return;
-
-      if (error) {
-        console.warn("getSession error:", error);
-      }
-
-      const s = data?.session ?? null;
-      setSession(s);
-      const u = s?.user ?? null;
-      setUser(u);
-      await loadProfileForUser(u);
-      if (mountedRef.current) setLoading(false);
-    })();
-
-    const { data: sub } = supabase.auth.onAuthStateChange(
-      async (_event, newSession) => {
-        if (!mountedRef.current) return;
-
-        setSession(newSession);
-        const nextUser = newSession?.user ?? null;
-        setUser(nextUser);
-        await loadProfileForUser(nextUser);
-        if (mountedRef.current) setLoading(false);
-      }
-    );
+    // lắng nghe thay đổi auth
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, _session) => {
+      loadSessionAndProfile();
+    });
 
     return () => {
-      mountedRef.current = false;
-      sub?.subscription?.unsubscribe();
+      subscription.unsubscribe();
     };
   }, []);
 
-  const value = useMemo<AuthContextValue>(
-    () => ({
-      user,
-      session,
-      profile,
-      loading,
-      refreshProfile,
-    }),
-    [user, session, profile, loading]
+  return (
+    <AuthContext.Provider value={{ user, profile, loading }}>
+      {children}
+    </AuthContext.Provider>
   );
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-export default AuthProvider;
-
 export function useAuth() {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error("useAuth must be used within <AuthProvider />");
-  return ctx;
+  return useContext(AuthContext);
 }
