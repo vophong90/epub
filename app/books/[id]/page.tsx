@@ -14,8 +14,13 @@ type BookVersion = {
 };
 
 export default function BookDetailPage() {
-  const params = useParams<{ id: string }>();
-  const bookId = useMemo(() => (params?.id ? String(params.id) : ""), [params]);
+  const params = useParams();
+
+  // ✅ Không dùng useMemo([params]) vì params object có thể đổi mỗi render
+  const bookId = useMemo(() => {
+    const v = (params as any)?.id;
+    return typeof v === "string" ? v : "";
+  }, [(params as any)?.id]);
 
   const [loading, setLoading] = useState(true);
   const [book, setBook] = useState<Book | null>(null);
@@ -24,45 +29,64 @@ export default function BookDetailPage() {
 
   useEffect(() => {
     if (!bookId) return;
+
+    let alive = true;
+
     (async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) {
-        window.location.href = "/login";
-        return;
+      setLoading(true);
+      try {
+        const { data: { user }, error: authErr } = await supabase.auth.getUser();
+        if (authErr) throw authErr;
+
+        if (!user) {
+          window.location.href = "/login";
+          return;
+        }
+
+        // Book
+        const { data: b, error: bErr } = await supabase
+          .from("books")
+          .select("id,title,unit_name")
+          .eq("id", bookId)
+          .maybeSingle();
+        if (bErr) console.error("book select error:", bErr);
+
+        // My role in this book (for UI gating only; RLS is source of truth)
+        const { data: perm, error: pErr } = await supabase
+          .from("book_permissions")
+          .select("role")
+          .eq("book_id", bookId)
+          .eq("user_id", user.id)
+          .maybeSingle();
+        if (pErr) console.error("book_permissions select error:", pErr);
+
+        // Versions
+        const { data: v, error: vErr } = await supabase
+          .from("book_versions")
+          .select("id,version_name,status,created_at")
+          .eq("book_id", bookId)
+          .order("created_at", { ascending: false });
+        if (vErr) console.error("book_versions select error:", vErr);
+
+        if (!alive) return;
+
+        setBook((b as any) || null);
+        setRole((perm as any)?.role ?? null);
+        setVersions((v as any) || []);
+      } catch (e) {
+        console.error("BookDetailPage load FAILED:", e);
+        if (!alive) return;
+        setBook(null);
+        setRole(null);
+        setVersions([]);
+      } finally {
+        if (alive) setLoading(false);
       }
-
-      // Book
-      const { data: b, error: bErr } = await supabase
-        .from("books")
-        .select("id,title,unit_name")
-        .eq("id", bookId)
-        .maybeSingle();
-      if (bErr) console.error("book select error:", bErr);
-      setBook((b as any) || null);
-
-      // My role in this book (for UI gating only; RLS is source of truth)
-      const { data: perm, error: pErr } = await supabase
-        .from("book_permissions")
-        .select("role")
-        .eq("book_id", bookId)
-        .eq("user_id", user.id)
-        .maybeSingle();
-      if (pErr) console.error("book_permissions select error:", pErr);
-      setRole((perm as any)?.role ?? null);
-
-      // Versions
-      const { data: v, error: vErr } = await supabase
-        .from("book_versions")
-        .select("id,version_name,status,created_at")
-        .eq("book_id", bookId)
-        .order("created_at", { ascending: false });
-      if (vErr) console.error("book_versions select error:", vErr);
-      setVersions((v as any) || []);
-
-      setLoading(false);
     })();
+
+    return () => {
+      alive = false;
+    };
   }, [bookId]);
 
   if (loading) return <div className="p-6">Đang tải...</div>;
@@ -78,16 +102,22 @@ export default function BookDetailPage() {
           <div className="text-sm text-gray-500">{book.unit_name || ""}</div>
           <h1 className="text-2xl font-bold">{book.title}</h1>
           <div className="mt-1 text-sm text-gray-600">
-            Quyền của bạn: <span className="font-semibold">{role || "(không rõ)"}</span>
+            Quyền của bạn:{" "}
+            <span className="font-semibold">{role || "(không rõ)"}</span>
             {role && (
               <>
-                {" "}· TOC: {canEditToc ? "Sửa" : "Xem"} · Nội dung: {canEditContent ? "Sửa" : "Xem"}
+                {" "}
+                · TOC: {canEditToc ? "Sửa" : "Xem"} · Nội dung:{" "}
+                {canEditContent ? "Sửa" : "Xem"}
               </>
             )}
           </div>
         </div>
 
-        <Link href="/books" className="px-3 py-2 rounded-lg border hover:bg-gray-50">
+        <Link
+          href="/books"
+          className="px-3 py-2 rounded-lg border hover:bg-gray-50"
+        >
           ← Quay lại danh sách sách
         </Link>
       </div>
@@ -99,13 +129,18 @@ export default function BookDetailPage() {
 
         <div className="space-y-3">
           {versions.map((v) => (
-            <div key={v.id} className="border rounded-xl p-4 flex items-center justify-between">
+            <div
+              key={v.id}
+              className="border rounded-xl p-4 flex items-center justify-between"
+            >
               <div>
                 <div className="font-semibold">{v.version_name}</div>
                 <div className="text-sm text-gray-600">
-                  Trạng thái: {v.status} · Tạo lúc: {new Date(v.created_at).toLocaleString()}
+                  Trạng thái: {v.status} · Tạo lúc:{" "}
+                  {new Date(v.created_at).toLocaleString("vi-VN")}
                 </div>
               </div>
+
               <Link
                 href={`/books/${bookId}/toc/${v.id}`}
                 className="px-3 py-2 rounded-lg border hover:bg-gray-50"
@@ -117,8 +152,8 @@ export default function BookDetailPage() {
 
           {!versions.length && (
             <div className="text-gray-600 border rounded-xl p-4">
-              Chưa có phiên bản nào cho sách này. (Nếu cần, tạo version trong Supabase trước —
-              sau đó refresh trang.)
+              Chưa có phiên bản nào cho sách này. (Nếu cần, tạo version trong
+              Supabase trước — sau đó refresh trang.)
             </div>
           )}
         </div>
