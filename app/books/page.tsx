@@ -1,8 +1,6 @@
-// app/books/page.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/components/AuthProvider";
@@ -10,25 +8,18 @@ import { useAuth } from "@/components/AuthProvider";
 type Book = {
   id: string;
   title: string;
-  created_at: string | null;
   unit_name: string | null;
+  created_at: string | null;
 };
+
+type SortOrder = "newest" | "oldest";
 
 const INPUT =
   "w-full border rounded-lg px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-200";
 const BTN =
-  "inline-flex items-center justify-center px-3 py-2 rounded-lg border hover:bg-gray-50 disabled:opacity-50";
+  "inline-flex items-center justify-center px-3 py-2 rounded-lg border hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed";
 const BTN_PRIMARY =
-  "inline-flex items-center justify-center px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50";
-
-function toISOStartOfDay(dateStr: string) {
-  const d = new Date(`${dateStr}T00:00:00`);
-  return d.toISOString();
-}
-function toISOEndOfDay(dateStr: string) {
-  const d = new Date(`${dateStr}T23:59:59`);
-  return d.toISOString();
-}
+  "inline-flex items-center justify-center px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed";
 
 export default function BooksPage() {
   const router = useRouter();
@@ -36,200 +27,355 @@ export default function BooksPage() {
 
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
-  const [errMsg, setErrMsg] = useState<string>("");
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Filters
-  const [q, setQ] = useState("");
-  const [dateFrom, setDateFrom] = useState(""); // YYYY-MM-DD
-  const [dateTo, setDateTo] = useState(""); // YYYY-MM-DD
-  const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
+  // filters
+  const [searchTitle, setSearchTitle] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
 
-  // chống race condition / response cũ
-  const reqIdRef = useRef(0);
-  const mountedRef = useRef(true);
+  // create book
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [newTitle, setNewTitle] = useState("");
+  const [newUnitName, setNewUnitName] = useState("Khoa Y học cổ truyền");
+  const [creating, setCreating] = useState(false);
 
+  // ===== LOAD BOOKS =====
   useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
+    if (authLoading) return;
+    if (!user) {
+      router.push("/login");
+      return;
+    }
+
+    const load = async () => {
+      setLoading(true);
+      setErrorMsg(null);
+      try {
+        const { data, error } = await supabase
+          .from("books")
+          .select("id,title,unit_name,created_at")
+          .order("created_at", { ascending: false });
+
+        if (error) {
+          setErrorMsg(error.message);
+          setBooks([]);
+        } else {
+          setBooks((data || []) as Book[]);
+        }
+      } catch (e: any) {
+        setErrorMsg(e?.message || "Lỗi khi tải danh sách sách");
+        setBooks([]);
+      } finally {
+        setLoading(false);
+      }
     };
-  }, []);
 
-  // ✅ Guard auth: chưa login thì về /login (chỉ chạy khi authLoading đã xong)
-  useEffect(() => {
-    if (!authLoading && !user) router.replace("/login");
+    load();
   }, [authLoading, user, router]);
 
-  async function loadBooks() {
-    const myReqId = ++reqIdRef.current;
+  // ===== FILTER + SORT =====
+  const filteredBooks = useMemo(() => {
+    let list = [...books];
 
-    setErrMsg("");
-    setLoading(true);
+    if (searchTitle.trim()) {
+      const kw = searchTitle.trim().toLowerCase();
+      list = list.filter((b) =>
+        b.title.toLowerCase().includes(kw)
+      );
+    }
 
+    if (fromDate) {
+      const from = new Date(`${fromDate}T00:00:00`);
+      list = list.filter((b) => {
+        if (!b.created_at) return false;
+        return new Date(b.created_at) >= from;
+      });
+    }
+
+    if (toDate) {
+      const to = new Date(`${toDate}T23:59:59`);
+      list = list.filter((b) => {
+        if (!b.created_at) return false;
+        return new Date(b.created_at) <= to;
+      });
+    }
+
+    list.sort((a, b) => {
+      const da = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const db = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return sortOrder === "newest" ? db - da : da - db;
+    });
+
+    return list;
+  }, [books, searchTitle, fromDate, toDate, sortOrder]);
+
+  // ===== CREATE BOOK =====
+  async function handleCreateBook() {
+    if (!user) return;
+    if (!newTitle.trim()) {
+      setErrorMsg("Tiêu đề sách là bắt buộc");
+      return;
+    }
+
+    setCreating(true);
+    setErrorMsg(null);
     try {
-      if (authLoading) return;
-      if (!user) {
-        router.replace("/login");
+      // 1) Tạo book
+      const { data: bookRow, error: bErr } = await supabase
+        .from("books")
+        .insert({
+          title: newTitle.trim(),
+          unit_name: newUnitName.trim() || "Khoa Y học cổ truyền",
+          created_by: user.id,
+        })
+        .select("id,title,unit_name,created_at")
+        .maybeSingle();
+
+      if (bErr || !bookRow) {
+        setErrorMsg(
+          bErr?.message || "Không tạo được sách mới"
+        );
         return;
       }
 
-      let queryBuilder = supabase
-        .from("books")
-        .select("id,title,created_at,unit_name")
-        .order("created_at", { ascending: sortDir === "asc" });
+      // 2) Gán quyền editor cho chính user
+      const { error: pErr } = await supabase
+        .from("book_permissions")
+        .insert({
+          book_id: bookRow.id,
+          user_id: user.id,
+          role: "editor",
+        });
 
-      const qTrim = q.trim();
-      if (qTrim) queryBuilder = queryBuilder.ilike("title", `%${qTrim}%`);
-      if (dateFrom) queryBuilder = queryBuilder.gte("created_at", toISOStartOfDay(dateFrom));
-      if (dateTo) queryBuilder = queryBuilder.lte("created_at", toISOEndOfDay(dateTo));
+      if (pErr) {
+        // không fail cứng; nhưng báo cho user biết
+        setErrorMsg(
+          `Đã tạo sách nhưng không gán được quyền editor: ${pErr.message}`
+        );
+      } else {
+        setErrorMsg(null);
+      }
 
-      // 👇 Chờ trực tiếp supabase query, không dùng withTimeout nữa
-      const { data, error } = await queryBuilder;
+      // 3) Cập nhật list
+      setBooks((prev) => [bookRow as Book, ...prev]);
+      setShowCreateForm(false);
+      setNewTitle("");
+      setNewUnitName("Khoa Y học cổ truyền");
 
-      if (error) throw error;
-      if (!mountedRef.current || myReqId !== reqIdRef.current) return;
-
-      setBooks((data || []) as Book[]);
+      // 4) Điều hướng trực tiếp vào trang chi tiết sách
+      router.push(`/books/${bookRow.id}`);
     } catch (e: any) {
-      console.error("loadBooks FAILED:", e);
-      if (!mountedRef.current || myReqId !== reqIdRef.current) return;
-
-      setBooks([]);
-      setErrMsg(e?.message ? String(e.message) : "Không tải được danh sách sách.");
+      setErrorMsg(
+        e?.message || "Lỗi không xác định khi tạo sách mới"
+      );
     } finally {
-      if (!mountedRef.current || myReqId !== reqIdRef.current) return;
-      setLoading(false);
+      setCreating(false);
     }
   }
 
-  // ✅ Load lần đầu khi auth đã sẵn sàng + khi đổi sort
-  useEffect(() => {
-    if (authLoading) return;
-    if (!user) return;
-    loadBooks();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, user, sortDir]);
+  function handleResetFilters() {
+    setSearchTitle("");
+    setFromDate("");
+    setToDate("");
+    setSortOrder("newest");
+  }
 
-  const qHint = useMemo(() => {
-    const parts: string[] = [];
-    if (q.trim()) parts.push(`tên chứa "${q.trim()}"`);
-    if (dateFrom) parts.push(`từ ${dateFrom}`);
-    if (dateTo) parts.push(`đến ${dateTo}`);
-    return parts.length ? parts.join(", ") : "không lọc";
-  }, [q, dateFrom, dateTo]);
-
-  if (authLoading) return <div className="max-w-4xl mx-auto px-4 py-6">Đang xác thực...</div>;
-  if (!user) return null;
-
+  // ===== RENDER =====
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6">
-      <div className="flex items-center justify-between gap-3 mb-4">
+    <main className="max-w-6xl mx-auto px-4 py-8 space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-2xl font-bold">Sách của tôi</h1>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            className={BTN_PRIMARY}
+            onClick={() => setShowCreateForm((v) => !v)}
+          >
+            {showCreateForm ? "Đóng khung tạo sách" : "Tạo sách mới"}
+          </button>
+        </div>
       </div>
 
-      {/* Filters */}
-      <div className="border rounded-xl p-4 bg-white mb-5">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <div className="md:col-span-2">
-            <label className="text-sm text-gray-600">Tìm theo tên sách</label>
+      {errorMsg && (
+        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+          {errorMsg}
+        </div>
+      )}
+
+      {/* Khung tạo sách mới */}
+      {showCreateForm && (
+        <section className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 md:p-6 space-y-4">
+          <h2 className="font-semibold text-lg">Tạo sách mới</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">
+                Tên sách <span className="text-red-500">*</span>
+              </label>
+              <input
+                className={INPUT}
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+                placeholder="Ví dụ: Các vấn đề lâm sàng thiết yếu"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Đơn vị</label>
+              <input
+                className={INPUT}
+                value={newUnitName}
+                onChange={(e) => setNewUnitName(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className={BTN_PRIMARY}
+              onClick={handleCreateBook}
+              disabled={creating}
+            >
+              {creating ? "Đang tạo..." : "Lưu và mở sách"}
+            </button>
+            <button
+              className={BTN}
+              type="button"
+              onClick={() => setShowCreateForm(false)}
+            >
+              Hủy
+            </button>
+          </div>
+          <p className="text-xs text-gray-500">
+            Khi tạo thành công, bạn sẽ được gán quyền{" "}
+            <strong>editor</strong> cho sách này thông qua bảng{" "}
+            <code className="font-mono text-[11px]">
+              book_permissions
+            </code>
+            .
+          </p>
+        </section>
+      )}
+
+      {/* Bộ lọc */}
+      <section className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 md:p-6 space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="space-y-1">
+            <label className="text-sm font-medium">
+              Tìm theo tên sách
+            </label>
             <input
               className={INPUT}
               placeholder="Nhập tên sách..."
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
+              value={searchTitle}
+              onChange={(e) => setSearchTitle(e.target.value)}
             />
           </div>
-
-          <div>
-            <label className="text-sm text-gray-600">Từ ngày tạo</label>
-            <input className={INPUT} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Từ ngày tạo</label>
+            <input
+              type="date"
+              className={INPUT}
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+            />
           </div>
-
-          <div>
-            <label className="text-sm text-gray-600">Đến ngày tạo</label>
-            <input className={INPUT} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Đến ngày tạo</label>
+            <input
+              type="date"
+              className={INPUT}
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+            />
           </div>
         </div>
 
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mt-4">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-600">Sắp xếp:</span>
-            <button className={BTN} onClick={() => setSortDir("desc")} disabled={sortDir === "desc"}>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="font-medium">Sắp xếp:</span>
+            <button
+              type="button"
+              className={`${BTN} text-xs ${
+                sortOrder === "newest"
+                  ? "border-blue-500 text-blue-600"
+                  : ""
+              }`}
+              onClick={() => setSortOrder("newest")}
+            >
               Mới → Cũ
             </button>
-            <button className={BTN} onClick={() => setSortDir("asc")} disabled={sortDir === "asc"}>
+            <button
+              type="button"
+              className={`${BTN} text-xs ${
+                sortOrder === "oldest"
+                  ? "border-blue-500 text-blue-600"
+                  : ""
+              }`}
+              onClick={() => setSortOrder("oldest")}
+            >
               Cũ → Mới
             </button>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap gap-2 ml-auto">
             <button
+              type="button"
               className={BTN}
-              onClick={() => {
-                setQ("");
-                setDateFrom("");
-                setDateTo("");
-              }}
+              onClick={handleResetFilters}
             >
-              Xoá lọc
-            </button>
-
-            <button className={BTN_PRIMARY} onClick={loadBooks}>
-              Áp dụng lọc
+              Xóa lọc
             </button>
           </div>
         </div>
 
-        <div className="text-xs text-gray-500 mt-3">
-          Bộ lọc: {qHint}. Đang hiển thị {books.length} sách.
-        </div>
+        <p className="text-xs text-gray-500">
+          Bộ lọc: đang hiển thị{" "}
+          <strong>{filteredBooks.length}</strong> /{" "}
+          <strong>{books.length}</strong> sách.
+        </p>
+      </section>
 
-        {!!errMsg && <div className="mt-3 text-sm text-red-600">Lỗi tải dữ liệu: {errMsg}</div>}
-      </div>
-
-      {/* List */}
-      {loading ? (
-        <div>Đang tải...</div>
-      ) : (
-        <div className="space-y-3">
-          {books.map((b) => {
-            const created = b.created_at ? new Date(b.created_at).toLocaleString("vi-VN") : "—";
-
-            return (
-              <div key={b.id} className="border rounded-xl p-4 bg-white hover:bg-gray-50">
-                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                  <div>
-                    <div className="text-lg font-semibold">{b.title}</div>
-                    <div className="text-sm text-gray-600 mt-1">
-                      <span className="mr-3">
-                        <b>Đơn vị:</b> {b.unit_name || "—"}
-                      </span>
-                      <span className="mr-3">
-                        <b>Ngày tạo:</b> {created}
-                      </span>
-                    </div>
-                    <div className="text-xs text-gray-400 mt-1">ID: {b.id}</div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      console.log("Go to book", b.id);
-                      window.location.href = `/books/${b.id}`;
-                    }}
-                    className="inline-flex items-center justify-center px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
-                    >
-                    Mở
-                  </button>
-                </div>
+      {/* Danh sách sách */}
+      <section className="space-y-3">
+        {loading ? (
+          <p className="text-sm text-gray-600">Đang tải danh sách...</p>
+        ) : filteredBooks.length === 0 ? (
+          <p className="text-sm text-gray-600">
+            Không có sách nào phù hợp.
+          </p>
+        ) : (
+          filteredBooks.map((b) => (
+            <article
+              key={b.id}
+              className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 md:p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
+            >
+              <div className="space-y-1">
+                <h3 className="font-semibold text-base md:text-lg">
+                  {b.title}
+                </h3>
+                <p className="text-sm text-gray-600">
+                  Đơn vị: {b.unit_name || "Khoa Y học cổ truyền"}
+                </p>
+                <p className="text-xs text-gray-500">
+                  Ngày tạo:{" "}
+                  {b.created_at
+                    ? new Date(b.created_at).toLocaleString()
+                    : "Không rõ"}
+                </p>
+                <p className="text-[11px] text-gray-400">
+                  ID: <span className="font-mono">{b.id}</span>
+                </p>
               </div>
-            );
-          })}
-
-          {!books.length && (
-            <div className="text-gray-600">Chưa có sách nào được phân quyền (hoặc bộ lọc không khớp).</div>
-          )}
-        </div>
-      )}
-    </div>
+              <button
+                className={`${BTN_PRIMARY} w-full md:w-auto`}
+                onClick={() => router.push(`/books/${b.id}`)}
+              >
+                Mở
+              </button>
+            </article>
+          ))
+        )}
+      </section>
+    </main>
   );
 }
