@@ -2,6 +2,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/components/AuthProvider";
@@ -29,22 +30,6 @@ function toISOEndOfDay(dateStr: string) {
   return d.toISOString();
 }
 
-function withTimeout<T>(p: PromiseLike<T>, ms: number, label = "timeout"): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const t = window.setTimeout(() => reject(new Error(label)), ms);
-    p.then(
-      (v) => {
-        window.clearTimeout(t);
-        resolve(v);
-      },
-      (e) => {
-        window.clearTimeout(t);
-        reject(e);
-      }
-    );
-  });
-}
-
 export default function BooksPage() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
@@ -55,8 +40,8 @@ export default function BooksPage() {
 
   // Filters
   const [q, setQ] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
+  const [dateFrom, setDateFrom] = useState(""); // YYYY-MM-DD
+  const [dateTo, setDateTo] = useState(""); // YYYY-MM-DD
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
 
   // chống race condition / response cũ
@@ -70,9 +55,8 @@ export default function BooksPage() {
     };
   }, []);
 
-  // ✅ Guard auth
+  // ✅ Guard auth: chưa login thì về /login (chỉ chạy khi authLoading đã xong)
   useEffect(() => {
-    console.log("[BooksPage] auth state", { authLoading, user }); // 🔴 log thêm
     if (!authLoading && !user) router.replace("/login");
   }, [authLoading, user, router]);
 
@@ -83,17 +67,11 @@ export default function BooksPage() {
     setLoading(true);
 
     try {
-      if (authLoading) {
-        console.log("[BooksPage] loadBooks aborted: authLoading still true"); // 🔴
-        return;
-      }
+      if (authLoading) return;
       if (!user) {
-        console.log("[BooksPage] loadBooks aborted: no user"); // 🔴
         router.replace("/login");
         return;
       }
-
-      console.log("[BooksPage] loadBooks start", { sortDir, q, dateFrom, dateTo }); // 🔴
 
       let queryBuilder = supabase
         .from("books")
@@ -105,18 +83,13 @@ export default function BooksPage() {
       if (dateFrom) queryBuilder = queryBuilder.gte("created_at", toISOStartOfDay(dateFrom));
       if (dateTo) queryBuilder = queryBuilder.lte("created_at", toISOEndOfDay(dateTo));
 
-      // supabase-js trả Promise; mình chỉ chờ kết quả
-      const { data, error } = await withTimeout(
-        queryBuilder as any,
-        12000,
-        "query timeout"
-      );
+      // 👇 Chờ trực tiếp supabase query, không dùng withTimeout nữa
+      const { data, error } = await queryBuilder;
 
       if (error) throw error;
       if (!mountedRef.current || myReqId !== reqIdRef.current) return;
 
-      console.log("[BooksPage] loadBooks ok, count =", (data || []).length); // 🔴
-      setBooks((data || []) as any);
+      setBooks((data || []) as Book[]);
     } catch (e: any) {
       console.error("loadBooks FAILED:", e);
       if (!mountedRef.current || myReqId !== reqIdRef.current) return;
@@ -129,7 +102,7 @@ export default function BooksPage() {
     }
   }
 
-  // ✅ Load lần đầu
+  // ✅ Load lần đầu khi auth đã sẵn sàng + khi đổi sort
   useEffect(() => {
     if (authLoading) return;
     if (!user) return;
@@ -145,12 +118,6 @@ export default function BooksPage() {
     return parts.length ? parts.join(", ") : "không lọc";
   }, [q, dateFrom, dateTo]);
 
-  // 🔴 handler riêng cho nút Mở
-  const handleOpenBook = (id: string) => {
-    console.log("[BooksPage] click Mở", id);
-    router.push(`/books/${id}`);
-  };
-
   if (authLoading) return <div className="max-w-4xl mx-auto px-4 py-6">Đang xác thực...</div>;
   if (!user) return null;
 
@@ -162,17 +129,62 @@ export default function BooksPage() {
 
       {/* Filters */}
       <div className="border rounded-xl p-4 bg-white mb-5">
-        {/* ... phần filter giữ nguyên ... */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div className="md:col-span-2">
+            <label className="text-sm text-gray-600">Tìm theo tên sách</label>
+            <input
+              className={INPUT}
+              placeholder="Nhập tên sách..."
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="text-sm text-gray-600">Từ ngày tạo</label>
+            <input className={INPUT} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+          </div>
+
+          <div>
+            <label className="text-sm text-gray-600">Đến ngày tạo</label>
+            <input className={INPUT} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          </div>
+        </div>
+
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mt-4">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-600">Sắp xếp:</span>
+            <button className={BTN} onClick={() => setSortDir("desc")} disabled={sortDir === "desc"}>
+              Mới → Cũ
+            </button>
+            <button className={BTN} onClick={() => setSortDir("asc")} disabled={sortDir === "asc"}>
+              Cũ → Mới
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              className={BTN}
+              onClick={() => {
+                setQ("");
+                setDateFrom("");
+                setDateTo("");
+              }}
+            >
+              Xoá lọc
+            </button>
+
+            <button className={BTN_PRIMARY} onClick={loadBooks}>
+              Áp dụng lọc
+            </button>
+          </div>
+        </div>
 
         <div className="text-xs text-gray-500 mt-3">
           Bộ lọc: {qHint}. Đang hiển thị {books.length} sách.
         </div>
 
-        {!!errMsg && (
-          <div className="mt-3 text-sm text-red-600">
-            Lỗi tải dữ liệu: {errMsg}
-          </div>
-        )}
+        {!!errMsg && <div className="mt-3 text-sm text-red-600">Lỗi tải dữ liệu: {errMsg}</div>}
       </div>
 
       {/* List */}
@@ -199,23 +211,19 @@ export default function BooksPage() {
                     <div className="text-xs text-gray-400 mt-1">ID: {b.id}</div>
                   </div>
 
-                  {/* 🔴 đổi Link → button gọi router.push để debug rõ */}
-                  <button
-                    type="button"
-                    onClick={() => handleOpenBook(b.id)}
+                  <Link
+                    href={`/books/${b.id}`}
                     className="inline-flex items-center justify-center px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
                   >
                     Mở
-                  </button>
+                  </Link>
                 </div>
               </div>
             );
           })}
 
           {!books.length && (
-            <div className="text-gray-600">
-              Chưa có sách nào được phân quyền (hoặc bộ lọc không khớp).
-            </div>
+            <div className="text-gray-600">Chưa có sách nào được phân quyền (hoặc bộ lọc không khớp).</div>
           )}
         </div>
       )}
