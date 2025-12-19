@@ -128,6 +128,9 @@ export default function TocItemPage() {
             html = `<p>${raw.text}</p>`;
           }
           setEditorHtml(html || "<p></p>");
+          if (editorRef.current) {
+            editorRef.current.innerHTML = html || "<p></p>";
+          }
         }
       } catch (e: any) {
         setErrorMsg(e?.message || "Lỗi không xác định khi tải dữ liệu");
@@ -140,14 +143,7 @@ export default function TocItemPage() {
     load();
   }, [tocItemId]);
 
-  // đồng bộ innerHTML khi editorHtml thay đổi
-  useEffect(() => {
-    if (editorRef.current && activeTab === "edit") {
-      editorRef.current.innerHTML = editorHtml;
-    }
-  }, [editorHtml, activeTab]);
-
-  // Load sub-sections
+    // Load sub-sections
   useEffect(() => {
     if (!tocItemId) return;
     const loadSubs = async () => {
@@ -255,6 +251,9 @@ export default function TocItemPage() {
         html = `<p>${raw.text}</p>`;
       }
       setEditorHtml(html || "<p></p>");
+      if (editorRef.current) {
+        editorRef.current.innerHTML = html || "<p></p>";
+      }
     } catch {
       // giữ state cũ
     }
