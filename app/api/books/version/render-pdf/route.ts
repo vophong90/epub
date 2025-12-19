@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getRouteClient } from "@/lib/supabaseServer";
 import { getAdminClient } from "@/lib/supabase-admin";
 
+import { createRequire } from "module";
+import nodePath from "node:path";
 import chromium from "@sparticuz/chromium";
 import { chromium as pwChromium } from "playwright-core";
 import fs from "node:fs/promises";
@@ -132,6 +134,40 @@ async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNo
   walk(null, 1, "");
 
   return nodes;
+}
+
+const require = createRequire(import.meta.url);
+
+async function loadPagedPolyfillCode() {
+  // Resolve entrypoint hợp lệ theo exports
+  const entry = require.resolve("pagedjs");
+
+  // Tìm root của package pagedjs bằng cách dò lên đến khi thấy package.json
+  let dir = nodePath.dirname(entry);
+  for (let i = 0; i < 8; i++) {
+    const pkg = nodePath.join(dir, "package.json");
+    try {
+      await fs.access(pkg);
+      // root = dir
+      // thử các tên file thường gặp
+      const candidates = [
+        nodePath.join(dir, "dist", "paged.polyfill.js"),
+        nodePath.join(dir, "dist", "paged.polyfill.cjs"),
+        nodePath.join(dir, "dist", "pagedjs.polyfill.js"),
+      ];
+      for (const f of candidates) {
+        try {
+          return await fs.readFile(f, "utf8");
+        } catch {}
+      }
+      throw new Error(
+        "Found pagedjs package.json but cannot find dist/paged.polyfill.js"
+      );
+    } catch {
+      dir = nodePath.dirname(dir);
+    }
+  }
+  throw new Error("Cannot locate pagedjs package root");
 }
 
 export async function POST(req: NextRequest) {
@@ -293,8 +329,7 @@ export async function POST(req: NextRequest) {
       .join("\n");
 
     // Inline paged.js (no CDN)
-    const pagedPath = require.resolve("pagedjs/dist/paged.polyfill.js");
-    const pagedCode = await fs.readFile(pagedPath, "utf8");
+    const pagedCode = await loadPagedPolyfillCode();
 
     const html = `<!doctype html>
 <html>
