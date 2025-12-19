@@ -1,11 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
-import { useAuth } from "@/components/AuthProvider";
 
+/** UI helpers */
+const BTN =
+  "inline-flex items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-50";
+const BTN_PRIMARY =
+  "inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50";
+const BTN_DANGER =
+  "inline-flex items-center justify-center rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50";
+
+/** DB types (tối giản cho UI này) */
 type Book = {
   id: string;
   title: string;
@@ -13,26 +21,24 @@ type Book = {
   created_at: string | null;
 };
 
-type BookVersionStatus = "draft" | "in_review" | "published" | string;
-
 type BookVersion = {
   id: string;
-  book_id: string;
   version_no: number;
-  status: BookVersionStatus;
+  status: string;
   created_at: string | null;
 };
 
-type BookRole = "viewer" | "author" | "editor" | null;
-
 type TocItem = {
   id: string;
+  book_version_id: string;
   parent_id: string | null;
   title: string;
   slug: string;
   order_index: number;
   created_at?: string | null;
 };
+
+type BookRole = "viewer" | "author" | "editor";
 
 type TocTreeResponse = {
   version_id: string;
@@ -49,7 +55,7 @@ type MemberProfile = {
 
 type Member = {
   user_id: string;
-  role: "viewer" | "author" | "editor";
+  role: BookRole;
   profile: MemberProfile | null;
 };
 
@@ -59,15 +65,22 @@ type MembersResponse = {
   members: Member[];
 };
 
-const BTN =
-  "inline-flex items-center justify-center px-3 py-2 rounded-lg border hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed";
-const BTN_PRIMARY =
-  "inline-flex items-center justify-center px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed";
-const INPUT =
-  "w-full border rounded-lg px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-200";
-const CHIP =
-  "inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold";
+type TocItemDetailResponse = {
+  item: TocItem;
+  book_id: string;
+  role: BookRole;
+  content: any | null;
+  assignments: { user_id: string; role_in_item: "author" | "editor" }[];
+};
 
+function formatDateTime(dt: string | null | undefined) {
+  if (!dt) return "";
+  const d = new Date(dt);
+  if (Number.isNaN(d.getTime())) return dt;
+  return d.toLocaleString("vi-VN");
+}
+
+/** Xây map parent_id -> list children, sort theo order_index */
 function buildChildrenMap(items: TocItem[]) {
   const m = new Map<string | null, TocItem[]>();
   for (const it of items) {
@@ -75,532 +88,771 @@ function buildChildrenMap(items: TocItem[]) {
     if (!m.has(key)) m.set(key, []);
     m.get(key)!.push(it);
   }
-  for (const arr of m.values()) {
-    arr.sort((a, b) => a.order_index - b.order_index);
+  for (const [key, list] of m.entries()) {
+    list.sort((a, b) => a.order_index - b.order_index);
+    m.set(key, list);
   }
   return m;
 }
 
-function getVersionStatusLabel(status: BookVersionStatus) {
-  switch (status) {
-    case "draft":
-      return "Bản nháp";
-    case "in_review":
-      return "Đang rà soát";
-    case "published":
-      return "Đã xuất bản";
-    default:
-      return status || "Không rõ";
-  }
-}
-
-function getVersionStatusClass(status: BookVersionStatus) {
-  switch (status) {
-    case "draft":
-      return `${CHIP} bg-gray-100 text-gray-800`;
-    case "in_review":
-      return `${CHIP} bg-blue-100 text-blue-800`;
-    case "published":
-      return `${CHIP} bg-green-100 text-green-800`;
-    default:
-      return `${CHIP} bg-gray-100 text-gray-800`;
-  }
-}
-
 export default function BookDetailPage() {
-  const params = useParams<{ id: string }>();
-  const router = useRouter();
-  const { user, loading: authLoading } = useAuth();
-
-  const bookId = params.id;
-
-  const [loading, setLoading] = useState(true);
-  const [treeLoading, setTreeLoading] = useState(false);
-  const [creatingVersion, setCreatingVersion] = useState(false);
+  const params = useParams();
+  const bookId =
+    typeof params?.id === "string"
+      ? params.id
+      : Array.isArray(params?.id)
+      ? params.id[0]
+      : "";
 
   const [book, setBook] = useState<Book | null>(null);
   const [version, setVersion] = useState<BookVersion | null>(null);
-  const [toc, setToc] = useState<TocTreeResponse | null>(null);
+  const [tocData, setTocData] = useState<TocTreeResponse | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
+  const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [creatingVersion, setCreatingVersion] = useState(false);
 
-  const [newRootTitle, setNewRootTitle] = useState("");
-  const [addingRoot, setAddingRoot] = useState(false);
+  /** Modal state cho tạo / sửa TOC */
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<"create" | "edit">("create");
+  const [modalParentId, setModalParentId] = useState<string | null>(null);
+  const [modalItem, setModalItem] = useState<TocItem | null>(null);
+  const [modalTitle, setModalTitle] = useState("");
+  const [modalSaving, setModalSaving] = useState(false);
+  const [modalDeleting, setModalDeleting] = useState(false);
 
-  // Load book + latest version
+  const [modalSelectedAuthors, setModalSelectedAuthors] = useState<string[]>([]);
+  const [modalOriginalAuthors, setModalOriginalAuthors] = useState<string[]>([]);
+  const [modalLoadingAssignments, setModalLoadingAssignments] = useState(false);
+
+  /** Load book + version + toc + members */
   useEffect(() => {
     if (!bookId) return;
-    if (authLoading) return;
 
-    if (!user) {
-      router.push("/login");
-      return;
-    }
+    let cancelled = false;
 
-    const load = async () => {
+    async function loadAll() {
       setLoading(true);
       setErrorMsg(null);
       try {
-        // 1) Lấy thông tin book
-        const { data: bk, error: bErr } = await supabase
+        // 1) Load book
+        const { data: bookRow, error: bookErr } = await supabase
           .from("books")
           .select("id,title,unit_name,created_at")
           .eq("id", bookId)
           .maybeSingle();
 
-        if (bErr || !bk) {
-          setErrorMsg(
-            bErr?.message || "Không tìm thấy thông tin sách"
-          );
-          setBook(null);
-          setVersion(null);
-          setToc(null);
-          setMembers([]);
+        if (bookErr || !bookRow) {
+          if (!cancelled) {
+            setErrorMsg("Không tìm thấy sách.");
+            setLoading(false);
+          }
           return;
         }
+        if (cancelled) return;
+        setBook(bookRow as Book);
 
-        setBook(bk as Book);
-
-        // 2) Lấy phiên bản mới nhất
-        const { data: ver, error: vErr } = await supabase
+        // 2) Load latest version (nếu có)
+        const { data: versionRow, error: vErr } = await supabase
           .from("book_versions")
-          .select("id,book_id,version_no,status,created_at")
-          .eq("book_id", bk.id)
+          .select("id,version_no,status,created_at")
+          .eq("book_id", bookId)
           .order("version_no", { ascending: false })
           .limit(1)
           .maybeSingle();
 
-        if (vErr) {
-          setErrorMsg(
-            vErr.message ||
-              "Lỗi khi tải thông tin phiên bản sách"
-          );
-          setVersion(null);
-          setToc(null);
-          setMembers([]);
-          return;
-        }
+        if (cancelled) return;
 
-        if (!ver) {
-          // Sách chưa có phiên bản nào
-          setErrorMsg(
-            "Sách này chưa có phiên bản nào (book_versions trống)"
-          );
-          setVersion(null);
-          setToc(null);
-          setMembers([]);
-          return;
-        }
+        if (!vErr && versionRow) {
+          const v = versionRow as BookVersion;
+          setVersion(v);
 
-        setVersion(ver as BookVersion);
-        await loadTreeAndMembers(ver.id);
-      } catch (e: any) {
-        setErrorMsg(
-          e?.message || "Lỗi không xác định khi tải thông tin sách"
-        );
-        setBook(null);
-        setVersion(null);
-        setToc(null);
-        setMembers([]);
-      } finally {
-        setLoading(false);
-      }
-    };
+          // 3) Load TOC tree
+          await loadTocTree(v.id, cancelled);
 
-    load();
-  }, [bookId, authLoading, user, router]);
-
-  async function loadTreeAndMembers(versionId: string) {
-    setTreeLoading(true);
-    try {
-      const [treeRes, memRes] = await Promise.all([
-        fetch(`/api/toc/tree?version_id=${versionId}`),
-        fetch(`/api/toc/members?version_id=${versionId}`),
-      ]);
-
-      if (!treeRes.ok) {
-        const j = await treeRes.json().catch(() => ({}));
-        throw new Error(
-          j.error || `Lỗi lấy TOC (status ${treeRes.status})`
-        );
-      }
-      const treeJson = (await treeRes.json()) as TocTreeResponse;
-      setToc(treeJson);
-
-      if (memRes.ok) {
-        const memJson = (await memRes.json()) as MembersResponse;
-        if (memJson.ok) {
-          setMembers(memJson.members || []);
+          // 4) Load members
+          await loadMembers(v.id, cancelled);
         } else {
-          setMembers([]);
+          setVersion(null);
         }
-      } else {
-        setMembers([]);
+      } catch (e: any) {
+        if (!cancelled) setErrorMsg(e?.message || "Lỗi khi tải dữ liệu.");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-    } catch (e: any) {
-      setErrorMsg(
-        e?.message ||
-          "Lỗi khi tải mục lục (TOC) hoặc danh sách thành viên"
-      );
-      setToc(null);
-      setMembers([]);
-    } finally {
-      setTreeLoading(false);
+    }
+
+    loadAll();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId]);
+
+  async function loadTocTree(versionId: string, cancelledFlag?: boolean) {
+    try {
+      const res = await fetch(`/api/toc/tree?version_id=${versionId}`);
+      if (!res.ok) {
+        console.error("toc/tree error", await res.text());
+        return;
+      }
+      const json = (await res.json()) as TocTreeResponse;
+      if (!cancelledFlag) setTocData(json);
+    } catch (e) {
+      console.error("loadTocTree error", e);
     }
   }
 
+  async function loadMembers(versionId: string, cancelledFlag?: boolean) {
+    try {
+      const res = await fetch(`/api/toc/members?version_id=${versionId}`);
+      if (!res.ok) {
+        console.error("toc/members error", await res.text());
+        return;
+      }
+      const json = (await res.json()) as MembersResponse;
+      if (!cancelledFlag && json.ok) {
+        setMembers(json.members || []);
+      }
+    } catch (e) {
+      console.error("loadMembers error", e);
+    }
+  }
+
+  const isEditor = tocData?.role === "editor";
+
+  /** Children map cho hiển thị + reorder */
   const childrenMap = useMemo(
-    () => buildChildrenMap(toc?.items || []),
-    [toc]
+    () => buildChildrenMap(tocData?.items || []),
+    [tocData]
   );
 
-  const isEditor = toc?.role === "editor";
+  const rootItems = useMemo(
+    () => childrenMap.get(null) || [],
+    [childrenMap]
+  );
 
-  async function handleAddRootItem() {
-    if (!version || !newRootTitle.trim()) return;
-    setAddingRoot(true);
-    setErrorMsg(null);
-    try {
-      const res = await fetch("/api/toc/items", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          book_version_id: version.id,
-          parent_id: null,
-          title: newRootTitle.trim(),
-        }),
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok || j.error) {
-        setErrorMsg(
-          j.error || "Không thêm được mục TOC mới"
-        );
-      } else {
-        setNewRootTitle("");
-        await loadTreeAndMembers(version.id);
-      }
-    } catch (e: any) {
-      setErrorMsg(
-        e?.message || "Lỗi khi thêm mục TOC mới"
-      );
-    } finally {
-      setAddingRoot(false);
-    }
-  }
-
-  function renderTocBranch(parentId: string | null, depth = 0) {
-    const items = childrenMap.get(parentId) || [];
-    if (!items.length) return null;
-
-    return (
-      <ul className={depth === 0 ? "space-y-1" : "ml-4 space-y-1"}>
-        {items.map((it) => (
-          <li key={it.id}>
-            <div className="flex items-center justify-between gap-2">
-              <Link
-                href={`/books/${bookId}/toc/${it.id}`}
-                className="text-sm text-blue-700 hover:underline"
-              >
-                {it.title}
-              </Link>
-              <span className="text-[11px] text-gray-400">
-                #{it.order_index}
-              </span>
-            </div>
-            {renderTocBranch(it.id, depth + 1)}
-          </li>
-        ))}
-      </ul>
-    );
-  }
-
-  // Tạo phiên bản đầu tiên cho sách chưa có version
+  /** Tạo phiên bản đầu tiên */
   async function handleCreateFirstVersion() {
-    if (!book || !user) return;
+    if (!bookId) return;
     setCreatingVersion(true);
     setErrorMsg(null);
-
     try {
-      const { data, error } = await supabase
+      const { data: userData, error: userErr } =
+        await supabase.auth.getUser();
+      if (userErr || !userData?.user) {
+        setErrorMsg("Không xác định được người dùng.");
+        return;
+      }
+      const userId = userData.user.id;
+
+      const { data: newVersion, error: insErr } = await supabase
         .from("book_versions")
         .insert({
-          book_id: book.id,
-          version_no: 1,
+          book_id: bookId,
+          created_by: userId,
           status: "draft",
-          created_by: user.id,
         })
-        .select("id,book_id,version_no,status,created_at")
+        .select("id,version_no,status,created_at")
         .maybeSingle();
 
-      if (error || !data) {
-        setErrorMsg(
-          error?.message || "Không tạo được phiên bản đầu tiên"
-        );
+      if (insErr || !newVersion) {
+        setErrorMsg(insErr?.message || "Không tạo được phiên bản mới.");
         return;
       }
 
-      const ver = data as BookVersion;
-      setVersion(ver);
-      await loadTreeAndMembers(ver.id);
-      setErrorMsg(null);
-    } catch (e: any) {
-      setErrorMsg(
-        e?.message || "Lỗi khi tạo phiên bản đầu tiên"
-      );
+      const v = newVersion as BookVersion;
+      setVersion(v);
+
+      await loadTocTree(v.id);
+      await loadMembers(v.id);
     } finally {
       setCreatingVersion(false);
     }
   }
 
-  if (authLoading || loading) {
+  /** Modal helpers */
+  function openCreateModal(parentId: string | null = null) {
+    setModalMode("create");
+    setModalParentId(parentId);
+    setModalItem(null);
+    setModalTitle("");
+    setModalSelectedAuthors([]);
+    setModalOriginalAuthors([]);
+    setModalOpen(true);
+  }
+
+  async function openEditModal(item: TocItem) {
+    setModalMode("edit");
+    setModalParentId(item.parent_id);
+    setModalItem(item);
+    setModalTitle(item.title);
+    setModalSelectedAuthors([]);
+    setModalOriginalAuthors([]);
+    setModalOpen(true);
+    setModalLoadingAssignments(true);
+
+    try {
+      const res = await fetch(`/api/toc/item?toc_item_id=${item.id}`);
+      if (!res.ok) {
+        console.error("load toc item error", await res.text());
+        return;
+      }
+      const json = (await res.json()) as TocItemDetailResponse;
+      const authorIds =
+        json.assignments?.map((a) => a.user_id) ?? [];
+      setModalSelectedAuthors(authorIds);
+      setModalOriginalAuthors(authorIds);
+    } catch (e) {
+      console.error("openEditModal error", e);
+    } finally {
+      setModalLoadingAssignments(false);
+    }
+  }
+
+  function closeModal() {
+    if (modalSaving || modalDeleting) return;
+    setModalOpen(false);
+  }
+
+  /** Lưu TOC (create / edit) + đồng bộ assignments */
+  async function handleSaveToc() {
+    if (!version) return;
+    if (!modalTitle.trim()) {
+      alert("Tiêu đề không được để trống.");
+      return;
+    }
+    setModalSaving(true);
+    try {
+      let currentItemId = modalItem?.id || "";
+
+      if (modalMode === "create") {
+        const res = await fetch("/api/toc/items", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            book_version_id: version.id,
+            parent_id: modalParentId,
+            title: modalTitle.trim(),
+          }),
+        });
+        if (!res.ok) {
+          console.error("create toc item error", await res.text());
+          alert("Không tạo được mục lục mới.");
+          return;
+        }
+        const json = await res.json();
+        currentItemId = json.item?.id;
+      } else if (modalMode === "edit" && modalItem) {
+        const res = await fetch("/api/toc/items", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: modalItem.id,
+            title: modalTitle.trim(),
+          }),
+        });
+        if (!res.ok) {
+          console.error("update toc item error", await res.text());
+          alert("Không cập nhật được mục lục.");
+          return;
+        }
+      }
+
+      // Đồng bộ assignments (author)
+      if (currentItemId) {
+        const origSet = new Set(modalOriginalAuthors);
+        const newSet = new Set(modalSelectedAuthors);
+
+        const toAdd = [...newSet].filter((id) => !origSet.has(id));
+        const toRemove = [...origSet].filter(
+          (id) => !newSet.has(id)
+        );
+
+        for (const uid of toAdd) {
+          await fetch("/api/toc/assignments", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              toc_item_id: currentItemId,
+              user_id: uid,
+              role_in_item: "author",
+            }),
+          });
+        }
+
+        for (const uid of toRemove) {
+          await fetch(
+            `/api/toc/assignments?toc_item_id=${currentItemId}&user_id=${uid}`,
+            { method: "DELETE" }
+          );
+        }
+      }
+
+      // Reload TOC
+      await loadTocTree(version.id);
+      closeModal();
+    } finally {
+      setModalSaving(false);
+    }
+  }
+
+  /** Xoá TOC (cả cây con) */
+  async function handleDeleteToc() {
+    if (!version || !modalItem) return;
+    if (
+      !confirm(
+        "Bạn chắc chắn muốn xóa mục này (bao gồm các mục con và nội dung liên quan)?"
+      )
+    ) {
+      return;
+    }
+    setModalDeleting(true);
+    try {
+      const res = await fetch(
+        `/api/toc/items?id=${modalItem.id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        console.error("delete toc item error", await res.text());
+        alert("Không xóa được mục lục.");
+        return;
+      }
+      await loadTocTree(version.id);
+      closeModal();
+    } finally {
+      setModalDeleting(false);
+    }
+  }
+
+  /** Reorder ↑ / ↓ */
+  async function handleMoveItem(
+    itemId: string,
+    direction: "up" | "down"
+  ) {
+    if (!version || !tocData) return;
+    const items = tocData.items;
+    const item = items.find((i) => i.id === itemId);
+    if (!item) return;
+
+    const parentKey = item.parent_id ?? null;
+    const siblings = [...(childrenMap.get(parentKey) || [])];
+    const index = siblings.findIndex((s) => s.id === itemId);
+    if (index === -1) return;
+
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= siblings.length) return;
+
+    [siblings[index], siblings[targetIndex]] = [
+      siblings[targetIndex],
+      siblings[index],
+    ];
+
+    const orderedIds = siblings.map((s) => s.id);
+
+    const res = await fetch("/api/toc/items/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        book_version_id: version.id,
+        parent_id: item.parent_id,
+        ordered_ids: orderedIds,
+      }),
+    });
+    if (!res.ok) {
+      console.error("reorder error", await res.text());
+      alert("Không đổi thứ tự được.");
+      return;
+    }
+    await loadTocTree(version.id);
+  }
+
+  if (!bookId) {
     return (
-      <main className="max-w-6xl mx-auto px-4 py-8">
-        <p className="text-gray-600">Đang tải...</p>
-      </main>
+      <div className="p-6">
+        <p>Thiếu ID sách.</p>
+      </div>
     );
   }
 
-  // Không tìm thấy sách
+  if (loading) {
+    return (
+      <div className="p-6">
+        <p>Đang tải dữ liệu…</p>
+      </div>
+    );
+  }
+
+  if (errorMsg) {
+    return (
+      <div className="p-6 space-y-4">
+        <p className="text-red-600">{errorMsg}</p>
+        <Link href="/books" className={BTN}>
+          ← Quay lại danh sách
+        </Link>
+      </div>
+    );
+  }
+
   if (!book) {
     return (
-      <main className="max-w-6xl mx-auto px-4 py-8 space-y-4">
-        {errorMsg && (
-          <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
-            {errorMsg}
-          </div>
-        )}
-        <button
-          className={BTN}
-          onClick={() => router.push("/books")}
-        >
-          ← Quay lại danh sách sách
-        </button>
-      </main>
-    );
-  }
-
-  // Sách tồn tại nhưng chưa có version nào
-  if (!version) {
-    return (
-      <main className="max-w-6xl mx-auto px-4 py-8 space-y-6">
-        <div className="space-y-2">
-          <div className="text-sm text-gray-500">
-            <Link href="/books" className="hover:underline">
-              Sách của tôi
-            </Link>
-            <span className="mx-1">/</span>
-            <span className="text-gray-700">{book.title}</span>
-          </div>
-          <h1 className="text-2xl font-bold">{book.title}</h1>
-        </div>
-
-        {errorMsg && (
-          <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
-            {errorMsg}
-          </div>
-        )}
-
-        <section className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 md:p-6 space-y-4">
-          <p className="text-sm text-gray-700">
-            Sách này hiện chưa có phiên bản nào trong bảng{" "}
-            <code className="font-mono text-xs bg-gray-100 px-1 py-0.5 rounded">
-              book_versions
-            </code>
-            .
-          </p>
-          <p className="text-sm text-gray-600">
-            Nếu bạn là <strong>editor</strong> hoặc có quyền phù
-            hợp, hãy tạo{" "}
-            <strong>phiên bản đầu tiên (version 1)</strong> để bắt
-            đầu xây dựng mục lục và nội dung.
-          </p>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              className={BTN_PRIMARY}
-              onClick={handleCreateFirstVersion}
-              disabled={creatingVersion}
-            >
-              {creatingVersion
-                ? "Đang tạo phiên bản..."
-                : "Tạo phiên bản đầu tiên (v1)"}
-            </button>
-            <button
-              className={BTN}
-              onClick={() => router.push("/books")}
-            >
-              ← Quay lại danh sách sách
-            </button>
-          </div>
-
-          <p className="text-xs text-gray-400 mt-2">
-            (Phân quyền thực tế sẽ do RLS trên bảng{" "}
-            <code className="font-mono">book_versions</code> quyết
-            định. Nếu bạn không đủ quyền, thao tác này sẽ bị Supabase
-            chặn.)
-          </p>
-        </section>
-      </main>
+      <div className="p-6 space-y-4">
+        <p>Không tìm thấy sách.</p>
+        <Link href="/books" className={BTN}>
+          ← Quay lại danh sách
+        </Link>
+      </div>
     );
   }
 
   return (
-    <main className="max-w-6xl mx-auto px-4 py-8 space-y-6">
-      {/* Header sách */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="space-y-1">
-          <div className="text-sm text-gray-500">
-            <Link href="/books" className="hover:underline">
-              Sách của tôi
-            </Link>
-            <span className="mx-1">/</span>
-            <span className="text-gray-700">{book.title}</span>
-          </div>
+    <div className="p-6 space-y-6">
+      {/* Breadcrumb */}
+      <div className="text-sm text-gray-500">
+        <Link href="/books" className="hover:underline">
+          Sách của tôi
+        </Link>{" "}
+        / <span className="text-gray-700">{book.title}</span>
+      </div>
+
+      {/* Header */}
+      <div className="flex flex-col items-start justify-between gap-2 md:flex-row md:items-center">
+        <div>
           <h1 className="text-2xl font-bold">{book.title}</h1>
-          <p className="text-sm text-gray-600">
-            Đơn vị: {book.unit_name || "Khoa Y học cổ truyền"}
+          <p className="text-sm text-gray-500">
+            Đơn vị: {book.unit_name || "—"}
           </p>
-          <div className="flex items-center gap-2 text-sm">
-            <span className={getVersionStatusClass(version.status)}>
+          {version && (
+            <p className="mt-1 text-sm text-gray-500">
               Phiên bản {version.version_no} –{" "}
-              {getVersionStatusLabel(version.status)}
-            </span>
-            {toc?.role && (
-              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700">
-                Vai trò của bạn: {toc.role}
-              </span>
-            )}
-          </div>
-          {version.created_at && (
-            <p className="text-xs text-gray-500">
-              Tạo phiên bản lúc:{" "}
-              {new Date(version.created_at).toLocaleString()}
+              <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                {version.status}
+              </span>{" "}
+              · Tạo lúc {formatDateTime(version.created_at)}
             </p>
           )}
         </div>
 
-        <div className="flex flex-col items-end gap-2">
-          {errorMsg && (
-            <div className="max-w-xs rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
-              {errorMsg}
-            </div>
-          )}
-          <button
-            className={BTN}
-            onClick={() => router.push("/books")}
-          >
+        <div className="flex gap-2">
+          <Link href="/books" className={BTN}>
             ← Quay lại danh sách
+          </Link>
+        </div>
+      </div>
+
+      {/* Nếu chưa có version */}
+      {!version && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4 space-y-3">
+          <p className="text-sm text-red-800">
+            Sách này chưa có phiên bản nào. Bạn cần tạo phiên bản đầu
+            tiên trước khi xây dựng mục lục.
+          </p>
+          <button
+            className={BTN_PRIMARY}
+            onClick={handleCreateFirstVersion}
+            disabled={creatingVersion}
+          >
+            {creatingVersion ? "Đang tạo phiên bản…" : "Tạo phiên bản đầu tiên"}
           </button>
         </div>
-      </div>
+      )}
 
-      {/* Nội dung chính: TOC + Members */}
-      <div className="grid grid-cols-1 md:grid-cols-[2fr,1fr] gap-6 items-start">
-        {/* TOC */}
-        <section className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 md:p-6 space-y-4">
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="font-semibold text-lg">
-              Mục lục (TOC) của phiên bản này
-            </h2>
-            {treeLoading && (
-              <span className="text-xs text-gray-400">
-                Đang tải mục lục...
-              </span>
-            )}
+      {/* Khi đã có version */}
+      {version && (
+        <div className="grid gap-6 md:grid-cols-[2fr,1fr]">
+          {/* LEFT: TOC + actions */}
+          <div className="space-y-4">
+            <div className="rounded-lg border bg-white p-4 shadow-sm">
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold">
+                    Mục lục (TOC) của phiên bản này
+                  </h2>
+                  <p className="text-xs text-gray-500">
+                    Vai trò của bạn: {tocData?.role || "—"}
+                  </p>
+                </div>
+                {isEditor && (
+                  <button
+                    className={BTN_PRIMARY}
+                    onClick={() => openCreateModal(null)}
+                  >
+                    + Tạo chương mới
+                  </button>
+                )}
+              </div>
+
+              {rootItems.length === 0 && (
+                <p className="text-sm text-gray-500">
+                  Chưa có chương nào. Nhấn “Tạo chương mới” để bắt đầu.
+                </p>
+              )}
+
+              <div className="space-y-3">
+                {rootItems.map((it, idx) => (
+                  <div
+                    key={it.id}
+                    className="rounded-lg border bg-gray-50 p-3 transition hover:bg-gray-100"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1">
+                        <button
+                          type="button"
+                          className="text-left text-sm font-semibold text-gray-900 hover:underline"
+                          onClick={() => openEditModal(it)}
+                        >
+                          {idx + 1}. {it.title}
+                        </button>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                          <span>ID: {it.id.slice(0, 8)}…</span>
+                          <span>· Thứ tự: {it.order_index}</span>
+                          {childrenMap.get(it.id)?.length ? (
+                            <span>
+                              · {childrenMap.get(it.id)?.length} mục con
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      {isEditor && (
+                        <div className="flex flex-col items-end gap-1">
+                          <div className="flex gap-1">
+                            <button
+                              className={BTN}
+                              onClick={() => handleMoveItem(it.id, "up")}
+                              title="Đưa lên trên"
+                            >
+                              ↑
+                            </button>
+                            <button
+                              className={BTN}
+                              onClick={() => handleMoveItem(it.id, "down")}
+                              title="Đưa xuống dưới"
+                            >
+                              ↓
+                            </button>
+                          </div>
+                          <button
+                            className={BTN}
+                            onClick={() => openCreateModal(it.id)}
+                          >
+                            + Mục con
+                          </button>
+                          <Link
+                            href={`/books/${book.id}/toc/${it.id}`}
+                            className="mt-1 text-xs text-blue-600 hover:underline"
+                          >
+                            Mở trang biên soạn →
+                          </Link>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
 
-          {!toc && !treeLoading && (
-            <p className="text-sm text-gray-500">
-              Chưa có mục lục cho phiên bản này.
-            </p>
-          )}
+          {/* RIGHT: Members (read-only) */}
+          <div className="space-y-4">
+            <div className="rounded-lg border bg-white p-4 shadow-sm">
+              <h2 className="text-lg font-semibold">
+                Thành viên & phân quyền (cấp sách)
+              </h2>
+              <p className="mb-2 text-xs text-gray-500">
+                Danh sách này lấy từ <code>book_permissions</code>. Chỉ đọc.
+              </p>
+              {members.length === 0 ? (
+                <p className="text-sm text-gray-500">
+                  Chưa có thông tin thành viên, hoặc bạn không có quyền
+                  xem danh sách này.
+                </p>
+              ) : (
+                <ul className="mt-2 space-y-2 text-sm">
+                  {members.map((m) => (
+                    <li
+                      key={m.user_id}
+                      className="flex items-center justify-between rounded border px-2 py-1"
+                    >
+                      <div>
+                        <div className="font-medium">
+                          {m.profile?.name || "(Không tên)"}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {m.profile?.email}
+                        </div>
+                      </div>
+                      <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                        {m.role}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
-          {toc && renderTocBranch(null)}
-
-          {isEditor && (
-            <div className="mt-4 border-t pt-4 space-y-2">
-              <h3 className="text-sm font-semibold text-gray-800">
-                Thêm mục cấp 1 (chỉ editor)
+      {/* MODAL tạo / sửa TOC */}
+      {modalOpen && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30">
+          <div className="w-full max-w-2xl rounded-lg bg-white p-5 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">
+                {modalMode === "create"
+                  ? modalParentId
+                    ? "Tạo mục con mới"
+                    : "Tạo chương mới (cấp 1)"
+                  : "Chỉnh sửa mục lục"}
               </h3>
-              <div className="flex flex-col sm:flex-row gap-2">
+              <button
+                className="text-sm text-gray-500 hover:text-gray-800"
+                onClick={closeModal}
+                disabled={modalSaving || modalDeleting}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {modalParentId && (
+                <p className="text-xs text-gray-500">
+                  Mục cha:{" "}
+                  <span className="font-medium">
+                    {
+                      (tocData?.items || []).find(
+                        (i) => i.id === modalParentId
+                      )?.title
+                    }
+                  </span>
+                </p>
+              )}
+
+              {/* Tiêu đề */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700">
+                  Tiêu đề
+                </label>
                 <input
                   type="text"
-                  className={INPUT}
-                  placeholder="Tiêu đề chương mới (cấp 1)"
-                  value={newRootTitle}
-                  onChange={(e) => setNewRootTitle(e.target.value)}
+                  className="mt-1 w-full rounded border px-3 py-2 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                  value={modalTitle}
+                  onChange={(e) => setModalTitle(e.target.value)}
+                  placeholder="Nhập tiêu đề chương / mục…"
                 />
+              </div>
+
+              {/* Gán author */}
+              <div>
+                <div className="mb-1 flex items-center justify-between">
+                  <label className="text-sm font-medium text-gray-700">
+                    Phân công tác giả cho mục này
+                  </label>
+                  {modalLoadingAssignments && (
+                    <span className="text-xs text-gray-500">
+                      Đang tải phân công…
+                    </span>
+                  )}
+                </div>
+                {members.length === 0 ? (
+                  <p className="text-xs text-gray-500">
+                    Không có thành viên nào để phân công.
+                  </p>
+                ) : (
+                  <div className="max-h-48 space-y-1 overflow-auto rounded border p-2">
+                    {members.map((m) => (
+                      <label
+                        key={m.user_id}
+                        className="flex items-center justify-between gap-2 rounded px-2 py-1 text-sm hover:bg-gray-50"
+                      >
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4"
+                            checked={modalSelectedAuthors.includes(
+                              m.user_id
+                            )}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setModalSelectedAuthors((prev) => {
+                                if (checked) {
+                                  return prev.includes(m.user_id)
+                                    ? prev
+                                    : [...prev, m.user_id];
+                                } else {
+                                  return prev.filter(
+                                    (id) => id !== m.user_id
+                                  );
+                                }
+                              });
+                            }}
+                          />
+                          <span>
+                            {m.profile?.name || "(Không tên)"}{" "}
+                            <span className="text-xs text-gray-500">
+                              ({m.profile?.email})
+                            </span>
+                          </span>
+                        </div>
+                        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
+                          {m.role}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+                <p className="mt-1 text-xs text-gray-500">
+                  Chỉ những người được phân công (author) mới thấy mục này
+                  trong danh sách công việc của họ.
+                </p>
+              </div>
+
+              {/* Link mở trang biên soạn */}
+              {modalItem && (
+                <div className="rounded bg-gray-50 p-2 text-xs text-gray-600">
+                  <span className="mr-1">Trang biên soạn nội dung:</span>
+                  <Link
+                    href={`/books/${book.id}/toc/${modalItem.id}`}
+                    className="text-blue-600 hover:underline"
+                  >
+                    /books/{book.id}/toc/{modalItem.id}
+                  </Link>
+                </div>
+              )}
+            </div>
+
+            {/* Footer buttons */}
+            <div className="mt-5 flex items-center justify-between">
+              <div className="flex gap-2">
+                <button
+                  className={BTN}
+                  onClick={closeModal}
+                  disabled={modalSaving || modalDeleting}
+                >
+                  Hủy
+                </button>
                 <button
                   className={BTN_PRIMARY}
-                  onClick={handleAddRootItem}
-                  disabled={
-                    addingRoot ||
-                    !newRootTitle.trim() ||
-                    treeLoading
-                  }
+                  onClick={handleSaveToc}
+                  disabled={modalSaving || modalDeleting}
                 >
-                  {addingRoot ? "Đang thêm..." : "Thêm chương"}
+                  {modalSaving ? "Đang lưu…" : "Lưu"}
                 </button>
               </div>
-              <p className="text-xs text-gray-500">
-                Các mục con chi tiết hơn sẽ được tạo ở màn hình chi
-                tiết từng mục (sub-section của author).
-              </p>
-            </div>
-          )}
-        </section>
-
-        {/* Members & meta */}
-        <section className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 md:p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="font-semibold text-lg">
-              Thành viên & phân quyền
-            </h2>
-          </div>
-
-          {members.length === 0 ? (
-            <p className="text-sm text-gray-500">
-              Chưa có thông tin thành viên hoặc bạn không có quyền
-              xem danh sách này.
-            </p>
-          ) : (
-            <ul className="space-y-2 text-sm">
-              {members.map((m) => (
-                <li
-                  key={m.user_id}
-                  className="flex items-start justify-between gap-2"
+              {modalMode === "edit" && (
+                <button
+                  className={BTN_DANGER}
+                  onClick={handleDeleteToc}
+                  disabled={modalSaving || modalDeleting}
                 >
-                  <div>
-                    <div className="font-medium">
-                      {m.profile?.name ||
-                        m.profile?.email ||
-                        m.user_id}
-                    </div>
-                    {m.profile?.email && (
-                      <div className="text-xs text-gray-500">
-                        {m.profile.email}
-                      </div>
-                    )}
-                  </div>
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">
-                    {m.role}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <div className="pt-2 border-t text-xs text-gray-500 space-y-1">
-            <div>
-              ID sách: <span className="font-mono">{book.id}</span>
-            </div>
-            <div>
-              ID phiên bản:{" "}
-              <span className="font-mono">{version.id}</span>
+                  {modalDeleting ? "Đang xóa…" : "Xóa mục này"}
+                </button>
+              )}
             </div>
           </div>
-        </section>
-      </div>
-    </main>
+        </div>
+      )}
+    </div>
   );
 }
