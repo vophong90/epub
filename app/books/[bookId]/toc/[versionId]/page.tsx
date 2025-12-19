@@ -1,3 +1,4 @@
+// app/books/[bookId]/toc/[versionId]/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -54,7 +55,6 @@ function safeJsonParse(s: string):
 export default function TocPage() {
   const params = useParams();
 
-  // ✅ Không dùng useMemo([params]) nữa
   const bookId = useMemo(() => {
     const v = (params as any)?.bookId;
     return typeof v === "string" ? v : "";
@@ -66,6 +66,8 @@ export default function TocPage() {
   }, [(params as any)?.versionId]);
 
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState("");
+
   const [role, setRole] = useState<"viewer" | "author" | "editor" | null>(null);
   const [items, setItems] = useState<TocItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -80,7 +82,6 @@ export default function TocPage() {
   const [assignRole, setAssignRole] = useState<"author" | "editor">("author");
 
   const dragIdRef = useRef<string | null>(null);
-  const dragFromParentRef = useRef<string | null>(null);
 
   const canEditToc = role === "editor";
   const canEditContent = role === "editor" || role === "author";
@@ -101,9 +102,15 @@ export default function TocPage() {
 
   async function loadTree() {
     setLoading(true);
+    setErrorMsg("");
     try {
       const u = await ensureAuthed();
       if (!u) return;
+
+      if (!versionId) {
+        setErrorMsg("Thiếu versionId trên URL.");
+        return;
+      }
 
       const res = await fetch(
         `/api/toc/tree?version_id=${encodeURIComponent(versionId)}`
@@ -112,20 +119,24 @@ export default function TocPage() {
 
       if (!res.ok) {
         console.error("tree error", json);
+        setErrorMsg(json?.error || "Không tải được TOC tree");
+        setRole(null);
+        setItems([]);
+        setMembers([]);
         return;
       }
 
       setRole(json.role);
       setItems(json.items || []);
 
-      // members for assignment (only needed for editor UI)
       const mRes = await fetch(
         `/api/toc/members?version_id=${encodeURIComponent(versionId)}`
       );
       const mJson = await mRes.json().catch(() => ({}));
       if (mRes.ok) setMembers(mJson.members || []);
-    } catch (e) {
+    } catch (e: any) {
       console.error("loadTree FAILED:", e);
+      setErrorMsg(e?.message || "Lỗi tải TOC.");
       setRole(null);
       setItems([]);
       setMembers([]);
@@ -142,6 +153,7 @@ export default function TocPage() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
         console.error("item error", json);
+        setContentStatus(json?.error || "Không tải được nội dung mục");
         return;
       }
 
@@ -152,6 +164,7 @@ export default function TocPage() {
       setContentStatus("");
     } catch (e) {
       console.error("loadItem FAILED:", e);
+      setContentStatus("Lỗi load item");
     }
   }
 
@@ -170,7 +183,6 @@ export default function TocPage() {
   const childrenMap = useMemo(() => buildChildrenMap(items), [items]);
 
   function replaceItems(next: TocItem[]) {
-    // Normalize order_index per parent (1..n)
     const byParent = new Map<string | null, TocItem[]>();
     for (const it of next) {
       const k = it.parent_id ?? null;
@@ -274,28 +286,12 @@ export default function TocPage() {
   function handleDragStart(e: React.DragEvent, it: TocItem) {
     if (!canEditToc) return;
     dragIdRef.current = it.id;
-    dragFromParentRef.current = it.parent_id ?? null;
     e.dataTransfer.effectAllowed = "move";
   }
 
   function handleDragOver(e: React.DragEvent) {
     if (!canEditToc) return;
     e.preventDefault();
-  }
-
-  function byParentToFlat(
-    byParent: Map<string | null, TocItem[]>,
-    p1: string | null,
-    p1Arr: TocItem[],
-    p2: string | null,
-    p2Arr: TocItem[]
-  ) {
-    const clone = new Map(byParent);
-    clone.set(p1, p1Arr);
-    clone.set(p2, p2Arr);
-    const out: TocItem[] = [];
-    for (const arr of clone.values()) out.push(...arr);
-    return out;
   }
 
   async function handleDropOnItem(e: React.DragEvent, target: TocItem) {
@@ -317,44 +313,14 @@ export default function TocPage() {
 
     next[draggedIdx].parent_id = toParent;
 
-    const byParent = buildChildrenMap(next);
-    const fromSibs = (byParent.get(fromParent) || []).filter((x) => x.id !== dragId);
-    const toSibs = byParent.get(toParent) || [];
-
-    if (e.ctrlKey) {
-      const appended = [...toSibs.filter((x) => x.id !== dragId), next[draggedIdx]];
-      appended.forEach((x, idx) => (x.order_index = idx + 1));
-      fromSibs.forEach((x, idx) => (x.order_index = idx + 1));
-      replaceItems([...byParentToFlat(byParent, fromParent, fromSibs, toParent, appended)]);
-    } else {
-      const targetParent = target.parent_id ?? null;
-      const sibs = (byParent.get(targetParent) || []).filter((x) => x.id !== dragId);
-      const targetIdx = sibs.findIndex((x) => x.id === target.id);
-      const insertIdx = targetIdx >= 0 ? targetIdx : sibs.length;
-
-      sibs.splice(insertIdx, 0, next[draggedIdx]);
-      sibs.forEach((x, idx) => {
-        x.parent_id = targetParent;
-        x.order_index = idx + 1;
-      });
-
-      if (fromParent !== targetParent) {
-        fromSibs.forEach((x, idx) => (x.order_index = idx + 1));
-        replaceItems([...byParentToFlat(byParent, fromParent, fromSibs, targetParent, sibs)]);
-      } else {
-        replaceItems(next);
-      }
-    }
+    // update local ordering quickly
+    replaceItems(next);
 
     try {
       await apiPatchItem(dragId, { parent_id: toParent });
 
-      const latest = next;
-      const latestChildren = buildChildrenMap(latest);
-
-      const affectedParents = new Set<string | null>();
-      affectedParents.add(fromParent);
-      affectedParents.add(toParent);
+      const latestChildren = buildChildrenMap(next);
+      const affectedParents = new Set<string | null>([fromParent, toParent]);
 
       for (const p of affectedParents) {
         const ordered = (latestChildren.get(p) || []).map((x) => x.id);
@@ -430,22 +396,13 @@ export default function TocPage() {
 
           {canEditToc && (
             <div className="flex items-center gap-1">
-              <button
-                className="px-2 py-1 text-xs rounded-md border hover:bg-gray-50"
-                onClick={() => onCreateItem(it.id)}
-              >
+              <button className="px-2 py-1 text-xs rounded-md border hover:bg-gray-50" onClick={() => onCreateItem(it.id)}>
                 +Con
               </button>
-              <button
-                className="px-2 py-1 text-xs rounded-md border hover:bg-gray-50"
-                onClick={() => onRenameItem(it.id, it.title)}
-              >
+              <button className="px-2 py-1 text-xs rounded-md border hover:bg-gray-50" onClick={() => onRenameItem(it.id, it.title)}>
                 Sửa
               </button>
-              <button
-                className="px-2 py-1 text-xs rounded-md border hover:bg-gray-50"
-                onClick={() => onDeleteItem(it.id)}
-              >
+              <button className="px-2 py-1 text-xs rounded-md border hover:bg-gray-50" onClick={() => onDeleteItem(it.id)}>
                 Xoá
               </button>
             </div>
@@ -460,6 +417,25 @@ export default function TocPage() {
   }
 
   if (loading) return <div className="p-6">Đang tải TOC...</div>;
+
+  if (errorMsg) {
+    return (
+      <div className="max-w-6xl mx-auto p-6">
+        <div className="border rounded-2xl p-4 bg-white">
+          <div className="text-red-600 font-semibold">Lỗi</div>
+          <div className="mt-2 text-sm text-gray-700">{errorMsg}</div>
+          <div className="mt-4 flex gap-2">
+            <button className="px-3 py-2 rounded-lg border hover:bg-gray-50" onClick={loadTree} type="button">
+              Thử lại
+            </button>
+            <Link href={`/books/${bookId}`} className="px-3 py-2 rounded-lg border hover:bg-gray-50">
+              ← Quay lại sách
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const roots = childrenMap.get(null) || [];
 
@@ -479,10 +455,7 @@ export default function TocPage() {
             ← Quay lại sách
           </Link>
           {canEditToc && (
-            <button
-              className="px-3 py-2 rounded-lg border hover:bg-gray-50"
-              onClick={() => onCreateItem(null)}
-            >
+            <button className="px-3 py-2 rounded-lg border hover:bg-gray-50" onClick={() => onCreateItem(null)}>
               + Thêm mục gốc
             </button>
           )}
@@ -490,7 +463,7 @@ export default function TocPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Left: tree */}
+        {/* Left */}
         <div className="border rounded-2xl p-3">
           <div className="flex items-center justify-between mb-2">
             <div className="font-semibold">Mục lục</div>
@@ -503,21 +476,11 @@ export default function TocPage() {
             {roots.map((r) => renderNode(r, 0))}
             {!roots.length && <div className="text-gray-600">Chưa có mục nào.</div>}
           </div>
-
-          {canEditToc && (
-            <div className="mt-3 text-xs text-gray-600">
-              Tip: Kéo thả để sắp xếp. <span className="font-semibold">Giữ Ctrl</span> khi thả để đưa mục vào làm con.
-            </div>
-          )}
         </div>
 
-        {/* Right: detail */}
+        {/* Right */}
         <div className="border rounded-2xl p-3">
-          {!selectedId && (
-            <div className="text-gray-600">
-              Chọn 1 mục ở TOC để xem / sửa nội dung.
-            </div>
-          )}
+          {!selectedId && <div className="text-gray-600">Chọn 1 mục ở TOC để xem / sửa nội dung.</div>}
 
           {selectedId && selectedItem && (
             <div className="space-y-4">
@@ -531,10 +494,7 @@ export default function TocPage() {
                 <div className="flex items-center justify-between">
                   <div className="font-semibold">Nội dung (JSON - tạm thời)</div>
                   {canEditContent && (
-                    <button
-                      className="px-3 py-2 rounded-lg border hover:bg-gray-50"
-                      onClick={onSaveContent}
-                    >
+                    <button className="px-3 py-2 rounded-lg border hover:bg-gray-50" onClick={onSaveContent}>
                       Lưu
                     </button>
                   )}
@@ -547,13 +507,7 @@ export default function TocPage() {
                   readOnly={!canEditContent}
                 />
 
-                {!!contentStatus && (
-                  <div className="text-sm text-gray-600 mt-1">{contentStatus}</div>
-                )}
-
-                <div className="text-xs text-gray-500 mt-1">
-                  (Bước sau mình sẽ thay textarea này bằng TipTap editor đúng chuẩn.)
-                </div>
+                {!!contentStatus && <div className="text-sm text-gray-600 mt-1">{contentStatus}</div>}
               </div>
 
               {role === "editor" && (
@@ -570,8 +524,7 @@ export default function TocPage() {
                         <option value="">-- Chọn user --</option>
                         {members.map((m) => (
                           <option key={m.user_id} value={m.user_id}>
-                            {(m.profile?.name || m.profile?.email || m.user_id) +
-                              ` (${m.role})`}
+                            {(m.profile?.name || m.profile?.email || m.user_id) + ` (${m.role})`}
                           </option>
                         ))}
                       </select>
@@ -585,10 +538,7 @@ export default function TocPage() {
                         <option value="editor">editor</option>
                       </select>
 
-                      <button
-                        className="px-3 py-2 rounded-lg border hover:bg-gray-50"
-                        onClick={onAddAssignment}
-                      >
+                      <button className="px-3 py-2 rounded-lg border hover:bg-gray-50" onClick={onAddAssignment}>
                         Thêm
                       </button>
                     </div>
@@ -598,15 +548,10 @@ export default function TocPage() {
                         const prof = members.find((m) => m.user_id === a.user_id)?.profile;
                         const label = prof?.name || prof?.email || a.user_id;
                         return (
-                          <div
-                            key={a.id}
-                            className="flex items-center justify-between border rounded-lg px-3 py-2"
-                          >
+                          <div key={a.id} className="flex items-center justify-between border rounded-lg px-3 py-2">
                             <div>
                               <div className="font-medium">{label}</div>
-                              <div className="text-xs text-gray-600">
-                                role_in_item: {a.role_in_item}
-                              </div>
+                              <div className="text-xs text-gray-600">role_in_item: {a.role_in_item}</div>
                             </div>
                             <button
                               className="px-2 py-1 text-xs rounded-md border hover:bg-gray-50"
@@ -618,9 +563,7 @@ export default function TocPage() {
                         );
                       })}
 
-                      {!assignments.length && (
-                        <div className="text-sm text-gray-600">Chưa phân công.</div>
-                      )}
+                      {!assignments.length && <div className="text-sm text-gray-600">Chưa phân công.</div>}
                     </div>
                   </div>
                 </div>
