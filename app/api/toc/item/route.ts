@@ -38,6 +38,13 @@ type ProfileRow = {
   email: string | null;
 };
 
+// thêm kiểu cho version để có template_id
+type VersionRow = {
+  id: string;
+  book_id: string;
+  template_id: string | null;
+};
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const tocItemId = searchParams.get("toc_item_id") || "";
@@ -65,12 +72,12 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // 2) Version -> book_id
+  // 2) Version -> book_id + template_id (logic mới)
   const { data: version, error: vErr } = await supabase
     .from("book_versions")
-    .select("id,book_id")
+    .select("id,book_id,template_id")
     .eq("id", item.book_version_id)
-    .maybeSingle<{ id: string; book_id: string }>();
+    .maybeSingle<VersionRow>();
 
   if (vErr || !version?.book_id) {
     return NextResponse.json(
@@ -184,5 +191,7 @@ export async function GET(req: NextRequest) {
     book_title: book?.title ?? null,
     content: content ?? null,
     assignments: assignmentsWithProfiles,
+    // ✅ logic mới: trả thêm template_id của version
+    version_template_id: version.template_id,
   });
 }
