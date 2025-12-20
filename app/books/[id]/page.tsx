@@ -129,6 +129,8 @@ export default function BookDetailPage() {
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [publishingId, setPublishingId] = useState<string | null>(null);
+  /** trạng thái clone bản nháp mới từ bản publish */
+  const [cloningDraft, setCloningDraft] = useState(false);
 
   /** Modal state cho tạo / sửa TOC */
   const [modalOpen, setModalOpen] = useState(false);
@@ -142,6 +144,18 @@ export default function BookDetailPage() {
   const [modalSelectedAuthors, setModalSelectedAuthors] = useState<string[]>([]);
   const [modalOriginalAuthors, setModalOriginalAuthors] = useState<string[]>([]);
   const [modalLoadingAssignments, setModalLoadingAssignments] = useState(false);
+
+  /** Search user để phân công (theo email) */
+  const [userSearchQuery, setUserSearchQuery] = useState("");
+  const [userSearchResults, setUserSearchResults] = useState<MemberProfile[]>([]);
+  const [userSearchLoading, setUserSearchLoading] = useState(false);
+  const [userSearchError, setUserSearchError] = useState<string | null>(null);
+
+  /** Set id set để lọc kết quả search không trùng với members */
+  const memberIdSet = useMemo(
+    () => new Set(members.map((m) => m.user_id)),
+    [members]
+  );
 
   /** Load book + version + toc + members */
   useEffect(() => {
@@ -219,10 +233,7 @@ export default function BookDetailPage() {
         const res = await fetch(`/api/books/versions?book_id=${bookId}`);
         const j = (await res.json().catch(() => ({}))) as VersionsApiResponse;
         if (!res.ok || !j.ok) {
-          console.error(
-            "load versions error:",
-            (j as any).error || res.status
-          );
+          console.error("load versions error:", (j as any).error || res.status);
           return;
         }
         if (cancelled) return;
@@ -381,6 +392,67 @@ export default function BookDetailPage() {
     }
   }
 
+  /** Tạo bản nháp mới từ phiên bản published mới nhất */
+  async function handleCloneDraftFromPublished() {
+    if (!bookId) return;
+
+    if (
+      !window.confirm(
+        "Tạo bản nháp mới từ phiên bản đã publish mới nhất? Phiên bản nháp mới sẽ được dùng để tiếp tục biên tập."
+      )
+    ) {
+      return;
+    }
+
+    setCloningDraft(true);
+    try {
+      const res = await fetch("/api/books/version/clone", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ book_id: bookId }),
+      });
+
+      const j = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        new_version?: BookVersion;
+      };
+
+      if (!res.ok || !j.ok || !j.new_version) {
+        alert(j.error || "Không tạo được bản nháp mới.");
+        return;
+      }
+
+      const newVer = j.new_version;
+
+      // Cập nhật version hiện tại sang bản nháp mới
+      setVersion(newVer);
+
+      // Reload TOC + members cho bản nháp mới
+      await loadTocTree(newVer.id);
+      await loadMembers(newVer.id);
+
+      // Reload danh sách versions (panel admin)
+      try {
+        const again = await fetch(`/api/books/versions?book_id=${bookId}`);
+        const jj = (await again
+          .json()
+          .catch(() => ({}))) as VersionsApiResponse;
+        if (again.ok && jj.ok) {
+          setVersions(jj.versions || []);
+          setIsAdmin(!!jj.is_admin);
+        }
+      } catch (e) {
+        console.error("reload versions after clone error:", e);
+      }
+    } catch (e: any) {
+      console.error("handleCloneDraftFromPublished error:", e);
+      alert(e?.message || "Lỗi khi tạo bản nháp mới");
+    } finally {
+      setCloningDraft(false);
+    }
+  }
+
   /** Modal helpers */
   function openCreateModal(parentId: string | null = null) {
     setModalMode("create");
@@ -389,6 +461,9 @@ export default function BookDetailPage() {
     setModalTitle("");
     setModalSelectedAuthors([]);
     setModalOriginalAuthors([]);
+    setUserSearchQuery("");
+    setUserSearchResults([]);
+    setUserSearchError(null);
     setModalOpen(true);
   }
 
@@ -399,6 +474,9 @@ export default function BookDetailPage() {
     setModalTitle(item.title);
     setModalSelectedAuthors([]);
     setModalOriginalAuthors([]);
+    setUserSearchQuery("");
+    setUserSearchResults([]);
+    setUserSearchError(null);
     setModalOpen(true);
     setModalLoadingAssignments(true);
 
@@ -422,6 +500,44 @@ export default function BookDetailPage() {
   function closeModal() {
     if (modalSaving || modalDeleting) return;
     setModalOpen(false);
+  }
+
+  /** Search user theo email (client-side qua Supabase) */
+  async function handleSearchUsers() {
+    const q = userSearchQuery.trim();
+    if (!q) {
+      setUserSearchResults([]);
+      setUserSearchError(null);
+      return;
+    }
+    setUserSearchLoading(true);
+    setUserSearchError(null);
+    try {
+      // profiles.id = auth.users.id theo schema của bạn
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id,name,email")
+        .ilike("email", `%${q}%`)
+        .limit(10);
+
+      if (error) {
+        console.error("search users error:", error);
+        setUserSearchError("Không tìm được user phù hợp hoặc lỗi khi tìm kiếm.");
+        setUserSearchResults([]);
+        return;
+      }
+
+      setUserSearchResults((data || []) as MemberProfile[]);
+      if (!data || data.length === 0) {
+        setUserSearchError("Không tìm thấy user nào với email này.");
+      }
+    } catch (e) {
+      console.error("search users exception:", e);
+      setUserSearchError("Lỗi khi tìm user.");
+      setUserSearchResults([]);
+    } finally {
+      setUserSearchLoading(false);
+    }
   }
 
   /** Lưu TOC (create / edit) + đồng bộ assignments */
@@ -496,8 +612,10 @@ export default function BookDetailPage() {
         }
       }
 
-      // Reload TOC
+      // Reload TOC + members (vì backend có thể auto-add vào book_permissions)
       await loadTocTree(version.id);
+      await loadMembers(version.id);
+
       closeModal();
     } finally {
       setModalSaving(false);
@@ -646,7 +764,7 @@ export default function BookDetailPage() {
       {/* Nếu chưa có version */}
       {!version && (
         <div className="space-y-4">
-          <div className="rounded-lg border border-red-200 bg-red-50 p-4 space-y-3">
+          <div className="space-y-3 rounded-lg border border-red-200 bg-red-50 p-4">
             <p className="text-sm text-red-800">
               Sách này chưa có phiên bản nào. Bạn cần tạo phiên bản đầu tiên
               trước khi xây dựng mục lục.
@@ -665,7 +783,9 @@ export default function BookDetailPage() {
             <section className="rounded-lg border bg-white p-4 shadow-sm">
               <h2 className="text-lg font-semibold">Phiên bản của sách này</h2>
               {versionsLoading ? (
-                <p className="mt-2 text-sm text-gray-500">Đang tải danh sách phiên bản...</p>
+                <p className="mt-2 text-sm text-gray-500">
+                  Đang tải danh sách phiên bản...
+                </p>
               ) : versions.length === 0 ? (
                 <p className="mt-2 text-sm text-gray-500">
                   Chưa có phiên bản nào được ghi nhận.
@@ -678,13 +798,15 @@ export default function BookDetailPage() {
                       className="flex items-center justify-between gap-3 rounded border px-3 py-2"
                     >
                       <div className="space-y-0.5">
-                        <div className="font-medium">Phiên bản {v.version_no}</div>
+                        <div className="font-medium">
+                          Phiên bản {v.version_no}
+                        </div>
                         <div className="text-xs text-gray-500">
                           Trạng thái:{" "}
                           <span
                             className={
                               v.status === "published"
-                                ? "text-green-700 font-semibold"
+                                ? "font-semibold text-green-700"
                                 : "text-gray-700"
                             }
                           >
@@ -701,7 +823,9 @@ export default function BookDetailPage() {
                       <button
                         className={BTN}
                         onClick={() => handlePublish(v.id)}
-                        disabled={v.status === "published" || publishingId === v.id}
+                        disabled={
+                          v.status === "published" || publishingId === v.id
+                        }
                       >
                         {v.status === "published"
                           ? "Đã publish"
@@ -714,8 +838,8 @@ export default function BookDetailPage() {
                 </ul>
               )}
               <p className="mt-2 text-xs text-gray-400">
-                Chỉ admin thấy panel này. Publish sẽ đặt trạng thái phiên bản thành{" "}
-                <strong>published</strong> và khoá sửa nội dung.
+                Chỉ admin thấy panel này. Publish sẽ đặt trạng thái phiên bản
+                thành <strong>published</strong> và khoá sửa nội dung.
               </p>
             </section>
           )}
@@ -753,11 +877,11 @@ export default function BookDetailPage() {
                 </p>
               )}
 
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {rootItems.map((it, idx) => (
                   <div
                     key={it.id}
-                    className="rounded-lg border bg-gray-50 p-3 transition hover:bg-gray-100"
+                    className="rounded-md border border-gray-200 bg-white px-3 py-2 transition hover:bg-gray-50"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex-1">
@@ -780,7 +904,7 @@ export default function BookDetailPage() {
                       </div>
 
                       {isEditor && (
-                        <div className="flex flex-col items-end gap-1">
+                        <div className="flex flex-col items-end gap-1 text-xs">
                           <div className="flex gap-1">
                             <button
                               className={BTN}
@@ -825,12 +949,15 @@ export default function BookDetailPage() {
                 Thành viên & phân quyền (cấp sách)
               </h2>
               <p className="mb-2 text-xs text-gray-500">
-                Danh sách này lấy từ <code>book_permissions</code>. Chỉ đọc.
+                Danh sách này tổng hợp từ quyền ở cấp sách (
+                <code>book_permissions</code>). Khi bạn phân công chương cho một
+                user chưa có trong sách, backend sẽ tự thêm họ với vai trò{" "}
+                <strong>author</strong>.
               </p>
               {members.length === 0 ? (
                 <p className="text-sm text-gray-500">
-                  Chưa có thông tin thành viên, hoặc bạn không có quyền
-                  xem danh sách này.
+                  Chưa có thành viên nào. Bạn có thể phân công tác giả ở từng
+                  chương, hệ thống sẽ tự thêm họ vào đây.
                 </p>
               ) : (
                 <ul className="mt-2 space-y-2 text-sm">
@@ -861,6 +988,28 @@ export default function BookDetailPage() {
                 <h2 className="text-lg font-semibold">
                   Phiên bản của sách này
                 </h2>
+
+                {/* Khối tạo bản nháp mới từ bản publish */}
+                {!versionsLoading &&
+                  versions.length > 0 &&
+                  versions.some((v) => v.status === "published") &&
+                  !versions.some((v) => v.status === "draft") && (
+                    <div className="mt-2 mb-3 flex items-center justify-between gap-2 rounded bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                      <span>
+                        Hiện không có phiên bản nháp. Bạn có thể tạo bản nháp
+                        mới từ phiên bản đã publish mới nhất để tiếp tục biên
+                        tập.
+                      </span>
+                      <button
+                        className={`${BTN_PRIMARY} !px-3 !py-1 text-xs`}
+                        onClick={handleCloneDraftFromPublished}
+                        disabled={cloningDraft}
+                      >
+                        {cloningDraft ? "Đang tạo…" : "Tạo bản nháp mới"}
+                      </button>
+                    </div>
+                  )}
+
                 {versionsLoading ? (
                   <p className="mt-2 text-sm text-gray-500">
                     Đang tải danh sách phiên bản...
@@ -885,7 +1034,7 @@ export default function BookDetailPage() {
                             <span
                               className={
                                 v.status === "published"
-                                  ? "text-green-700 font-semibold"
+                                  ? "font-semibold text-green-700"
                                   : "text-gray-700"
                               }
                             >
@@ -984,9 +1133,95 @@ export default function BookDetailPage() {
                     </span>
                   )}
                 </div>
+
+                {/* Tìm user theo email */}
+                <div className="mb-2 flex gap-2">
+                  <input
+                    type="text"
+                    className="w-full rounded border px-3 py-1.5 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                    placeholder="Nhập email (hoặc một phần) để tìm user…"
+                    value={userSearchQuery}
+                    onChange={(e) => setUserSearchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleSearchUsers();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className={BTN}
+                    onClick={handleSearchUsers}
+                    disabled={userSearchLoading}
+                  >
+                    {userSearchLoading ? "Đang tìm…" : "Tìm"}
+                  </button>
+                </div>
+                {userSearchError && (
+                  <p className="mb-1 text-xs text-red-600">
+                    {userSearchError}
+                  </p>
+                )}
+
+                {/* Kết quả tìm kiếm (user chưa là member của sách) */}
+                {userSearchResults.filter((u) => !memberIdSet.has(u.id))
+                  .length > 0 && (
+                  <div className="mb-2 rounded border border-dashed border-gray-300 p-2 text-xs">
+                    <p className="mb-1 font-semibold text-gray-700">
+                      Kết quả tìm kiếm (user chưa là thành viên sách):
+                    </p>
+                    <div className="max-h-32 space-y-1 overflow-auto">
+                      {userSearchResults
+                        .filter((u) => !memberIdSet.has(u.id))
+                        .map((u) => (
+                          <label
+                            key={u.id}
+                            className="flex items-center justify-between gap-2 rounded px-2 py-1 text-sm hover:bg-gray-50"
+                          >
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4"
+                                checked={modalSelectedAuthors.includes(u.id)}
+                                onChange={(e) => {
+                                  const checked = e.target.checked;
+                                  setModalSelectedAuthors((prev) => {
+                                    if (checked) {
+                                      return prev.includes(u.id)
+                                        ? prev
+                                        : [...prev, u.id];
+                                    } else {
+                                      return prev.filter((id) => id !== u.id);
+                                    }
+                                  });
+                                }}
+                              />
+                              <span>
+                                {u.name || "(Không tên)"}{" "}
+                                <span className="text-xs text-gray-500">
+                                  ({u.email})
+                                </span>
+                              </span>
+                            </div>
+                            <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold uppercase text-indigo-700">
+                              mới
+                            </span>
+                          </label>
+                        ))}
+                    </div>
+                    <p className="mt-1 text-[11px] text-gray-500">
+                      Khi lưu, các user này sẽ được thêm vào sách với vai trò{" "}
+                      <strong>author</strong> và phân công cho mục này.
+                    </p>
+                  </div>
+                )}
+
+                {/* Danh sách member (từ book_permissions) */}
                 {members.length === 0 ? (
                   <p className="text-xs text-gray-500">
-                    Không có thành viên nào để phân công.
+                    Hiện chưa có thành viên nào ở cấp sách. Bạn có thể tìm user
+                    theo email ở trên và tick chọn để phân công.
                   </p>
                 ) : (
                   <div className="max-h-48 space-y-1 overflow-auto rounded border p-2">
@@ -1008,7 +1243,9 @@ export default function BookDetailPage() {
                                     ? prev
                                     : [...prev, m.user_id];
                                 } else {
-                                  return prev.filter((id) => id !== m.user_id);
+                                  return prev.filter(
+                                    (id) => id !== m.user_id
+                                  );
                                 }
                               });
                             }}
@@ -1028,8 +1265,9 @@ export default function BookDetailPage() {
                   </div>
                 )}
                 <p className="mt-1 text-xs text-gray-500">
-                  Chỉ những người được phân công (author) mới thấy mục này trong
-                  danh sách công việc của họ.
+                  Role hiển thị bên phải là vai trò ở cấp sách (viewer/author/editor).
+                  Phân công ở đây sẽ tạo quyền <strong>author</strong> cho mục
+                  lục này (và tự thêm vào sách nếu chưa có).
                 </p>
               </div>
 
