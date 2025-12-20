@@ -168,20 +168,42 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // admin only
-  const { data: profile, error: pErr } = await supabase
-    .from("profiles")
-    .select("id,system_role")
-    .eq("id", user.id)
+ // ✅ quyền: admin OR (author/editor trên book)
+const { data: profile, error: pErr } = await supabase
+  .from("profiles")
+  .select("id,system_role")
+  .eq("id", user.id)
+  .maybeSingle();
+
+if (pErr) return NextResponse.json({ error: pErr.message }, { status: 500 });
+
+const isAdmin = profile?.system_role === "admin";
+
+let canRender = isAdmin;
+
+if (!canRender) {
+  // book_permissions: user_id + book_id + role ('author' | 'editor' | 'viewer')
+  const { data: perm, error: permErr } = await supabase
+    .from("book_permissions")
+    .select("role")
+    .eq("book_id", version.book_id)
+    .eq("user_id", user.id)
+    .in("role", ["author", "editor"])
     .maybeSingle();
 
-  if (pErr) return NextResponse.json({ error: pErr.message }, { status: 500 });
-  if (!profile || profile.system_role !== "admin") {
-    return NextResponse.json(
-      { error: "Chỉ admin mới được render PDF" },
-      { status: 403 }
-    );
+  if (permErr) {
+    return NextResponse.json({ error: permErr.message }, { status: 500 });
   }
+
+  canRender = !!perm;
+}
+
+if (!canRender) {
+  return NextResponse.json(
+    { error: "Bạn không có quyền render PDF" },
+    { status: 403 }
+  );
+}
 
   // body
   let body: Body = {};
