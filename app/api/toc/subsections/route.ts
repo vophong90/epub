@@ -17,36 +17,43 @@ function slugify(input: string) {
     .slice(0, 80);
 }
 
-/**
- * Ensure slug unique within a book_version_id (safe default).
- * If your DB unique constraint is narrower (e.g., parent_id+slug) this still works.
- */
-async function ensureUniqueSlug(
-  supabase: any,
-  bookVersionId: string,
-  desiredSlug: string,
-  excludeId?: string
-) {
-  const base = desiredSlug || `sub-${Date.now()}`;
-  let slug = base;
-  let i = 2;
+async function ensureUniqueSlug(opts: {
+  supabase: any;
+  book_version_id: string;
+  parent_id: string | null;
+  baseSlug: string;
+  excludeId?: string;
+}) {
+  const { supabase, book_version_id, parent_id, baseSlug, excludeId } = opts;
+
+  const base = (baseSlug || `node-${Date.now()}`).slice(0, 80);
+  let candidate = base;
+  let i = 0;
 
   while (true) {
     let q = supabase
       .from("toc_items")
       .select("id")
-      .eq("book_version_id", bookVersionId)
-      .eq("slug", slug)
+      .eq("book_version_id", book_version_id)
+      .eq("parent_id", parent_id)
+      .eq("slug", candidate)
       .limit(1);
 
     if (excludeId) q = q.neq("id", excludeId);
 
     const { data, error } = await q.maybeSingle();
-    if (error) throw error;
+    if (error) {
+      // nếu query lỗi, cứ trả candidate hiện tại để tránh crash
+      return candidate;
+    }
+    if (!data) return candidate;
 
-    if (!data) return slug;
-    slug = `${base}-${i++}`;
-    if (i > 200) return `${base}-${Date.now()}`;
+    i += 1;
+    const suffix = `-${i}`;
+    candidate = (base.slice(0, Math.max(1, 80 - suffix.length)) + suffix).slice(
+      0,
+      80
+    );
   }
 }
 
@@ -124,27 +131,97 @@ async function getParentContext(supabase: any, userId: string, parentId: string)
 
 function canManageSubsections(bookRole: BookRole, assignment: any | null) {
   if (bookRole === "editor") return true;
-  if (
-    bookRole === "author" &&
-    assignment &&
-    assignment.role_in_item === "author"
-  ) {
+  if (bookRole === "author" && assignment && assignment.role_in_item === "author")
     return true;
-  }
   return false;
 }
 
-/** GET: danh sách mục con của 1 TOC item */
+type TocRow = {
+  id: string;
+  parent_id: string | null;
+  title: string;
+  slug: string;
+  order_index: number;
+};
+
+type TocTreeNode = TocRow & {
+  depth: number;
+  children: TocTreeNode[];
+};
+
+function buildTree(rows: TocRow[], rootId: string): TocTreeNode | null {
+  const byId = new Map<string, TocTreeNode>();
+  for (const r of rows) {
+    byId.set(r.id, { ...r, depth: 0, children: [] });
+  }
+
+  // link children
+  for (const n of byId.values()) {
+    if (n.parent_id && byId.has(n.parent_id)) {
+      byId.get(n.parent_id)!.children.push(n);
+    }
+  }
+
+  // sort children by order_index
+  for (const n of byId.values()) {
+    n.children.sort((a, b) => a.order_index - b.order_index);
+  }
+
+  const root = byId.get(rootId);
+  if (!root) return null;
+
+  // set depth DFS
+  const dfs = (node: TocTreeNode, depth: number) => {
+    node.depth = depth;
+    for (const c of node.children) dfs(c, depth + 1);
+  };
+  dfs(root, 0);
+
+  return root;
+}
+
+/** GET:
+ * - ?parent_id=... -> list con trực tiếp (compat)
+ * - ?root_id=...   -> trả tree nhiều cấp (dùng cho sidebar tree)
+ */
 export async function GET(req: NextRequest) {
   const { supabase, user, error } = await requireUser();
   if (error) return error;
 
   const { searchParams } = new URL(req.url);
+  const root_id = searchParams.get("root_id") || "";
   const parent_id = searchParams.get("parent_id") || "";
-  if (!parent_id) {
-    return NextResponse.json({ error: "parent_id là bắt buộc" }, { status: 400 });
+
+  if (!root_id && !parent_id) {
+    return NextResponse.json(
+      { error: "parent_id hoặc root_id là bắt buộc" },
+      { status: 400 }
+    );
   }
 
+  // MODE TREE
+  if (root_id) {
+    const ctx = await getParentContext(supabase, user!.id, root_id);
+    if (!ctx.ok) return ctx.res;
+
+    const { parent } = ctx;
+
+    // lấy tất cả toc_items trong cùng book_version_id để build tree
+    const { data: rows, error: listErr } = await supabase
+      .from("toc_items")
+      .select("id,parent_id,title,slug,order_index")
+      .eq("book_version_id", parent.book_version_id)
+      .order("order_index", { ascending: true });
+
+    if (listErr) {
+      return NextResponse.json({ error: listErr.message }, { status: 500 });
+    }
+
+    const tree = buildTree((rows ?? []) as TocRow[], root_id);
+    return NextResponse.json({ ok: true, root: tree });
+  }
+
+  // MODE LIST (con trực tiếp)
   const ctx = await getParentContext(supabase, user!.id, parent_id);
   if (!ctx.ok) return ctx.res;
 
@@ -164,7 +241,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ ok: true, items: data ?? [] });
 }
 
-/** POST: tạo mục con mới */
+/** POST: tạo mục con mới dưới parent_id bất kỳ */
 export async function POST(req: NextRequest) {
   const { supabase, user, error } = await requireUser();
   if (error) return error;
@@ -204,17 +281,13 @@ export async function POST(req: NextRequest) {
 
   const nextOrder = (maxRow?.order_index ?? 0) + 1;
 
-  // ✅ slug unique
-  const desired = slugify(title) || `sub-${Date.now()}`;
-  let slug: string;
-  try {
-    slug = await ensureUniqueSlug(supabase, parent.book_version_id, desired);
-  } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message || "Không tạo được slug" },
-      { status: 400 }
-    );
-  }
+  const baseSlug = slugify(title) || `sub-${Date.now()}`;
+  const slug = await ensureUniqueSlug({
+    supabase,
+    book_version_id: parent.book_version_id,
+    parent_id: parent.id,
+    baseSlug,
+  });
 
   const { data, error: insErr } = await supabase
     .from("toc_items")
@@ -235,7 +308,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true, item: data });
 }
 
-/** PATCH: đổi tên mục con */
+/** PATCH: đổi tên node (và tự fix slug trùng) */
 export async function PATCH(req: NextRequest) {
   const { supabase, user, error } = await requireUser();
   if (error) return error;
@@ -244,25 +317,19 @@ export async function PATCH(req: NextRequest) {
   const id = String(body.id || "");
   const title = String(body.title || "").trim();
 
-  if (!id) {
-    return NextResponse.json({ error: "id là bắt buộc" }, { status: 400 });
-  }
-  if (!title) {
+  if (!id) return NextResponse.json({ error: "id là bắt buộc" }, { status: 400 });
+  if (!title)
     return NextResponse.json({ error: "title là bắt buộc" }, { status: 400 });
-  }
 
-  // Lấy mục con và parent
+  // Lấy node và parent
   const { data: sub, error: sErr } = await supabase
     .from("toc_items")
-    .select("id,parent_id,book_version_id,slug,title")
+    .select("id,parent_id,book_version_id,slug")
     .eq("id", id)
     .maybeSingle();
 
   if (sErr || !sub || !sub.parent_id) {
-    return NextResponse.json(
-      { error: "Không tìm thấy mục con để sửa" },
-      { status: 404 }
-    );
+    return NextResponse.json({ error: "Không tìm thấy mục để sửa" }, { status: 404 });
   }
 
   const ctx = await getParentContext(supabase, user!.id, sub.parent_id);
@@ -271,47 +338,22 @@ export async function PATCH(req: NextRequest) {
   const { bookRole, assignment } = ctx;
   if (!canManageSubsections(bookRole, assignment)) {
     return NextResponse.json(
-      { error: "Bạn không có quyền sửa mục con này." },
+      { error: "Bạn không có quyền sửa mục này." },
       { status: 403 }
     );
   }
 
-  const patch: any = { title };
+  // Mặc định: đổi title thì đổi slug theo title, nhưng phải unique để tránh duplicate
+  const baseSlug = slugify(title) || sub.slug || `sub-${Date.now()}`;
+  const nextSlug = await ensureUniqueSlug({
+    supabase,
+    book_version_id: sub.book_version_id,
+    parent_id: sub.parent_id,
+    baseSlug,
+    excludeId: id,
+  });
 
-  // ✅ Nếu client không gửi slug thì server tự sinh slug theo title (và đảm bảo unique)
-  // Nếu bạn muốn đổi title nhưng GIỮ nguyên slug → hãy gửi body.slug = sub.slug từ client.
-  if (!body.slug) {
-    const desired = slugify(title);
-    try {
-      patch.slug = await ensureUniqueSlug(
-        supabase,
-        sub.book_version_id,
-        desired,
-        id // exclude chính nó
-      );
-    } catch (e: any) {
-      return NextResponse.json(
-        { error: e?.message || "Không cập nhật được slug" },
-        { status: 400 }
-      );
-    }
-  } else if (typeof body.slug === "string") {
-    // nếu client muốn set slug cụ thể thì vẫn cho, nhưng đảm bảo unique
-    const desired = slugify(String(body.slug));
-    try {
-      patch.slug = await ensureUniqueSlug(
-        supabase,
-        sub.book_version_id,
-        desired,
-        id
-      );
-    } catch (e: any) {
-      return NextResponse.json(
-        { error: e?.message || "Không cập nhật được slug" },
-        { status: 400 }
-      );
-    }
-  }
+  const patch: any = { title, slug: nextSlug };
 
   const { data, error: upErr } = await supabase
     .from("toc_items")
@@ -327,16 +369,14 @@ export async function PATCH(req: NextRequest) {
   return NextResponse.json({ ok: true, item: data });
 }
 
-/** DELETE: xoá mục con */
+/** DELETE: xoá node */
 export async function DELETE(req: NextRequest) {
   const { supabase, user, error } = await requireUser();
   if (error) return error;
 
   const { searchParams } = new URL(req.url);
   const id = searchParams.get("id") || "";
-  if (!id) {
-    return NextResponse.json({ error: "id là bắt buộc" }, { status: 400 });
-  }
+  if (!id) return NextResponse.json({ error: "id là bắt buộc" }, { status: 400 });
 
   const { data: sub, error: sErr } = await supabase
     .from("toc_items")
@@ -345,10 +385,7 @@ export async function DELETE(req: NextRequest) {
     .maybeSingle();
 
   if (sErr || !sub || !sub.parent_id) {
-    return NextResponse.json(
-      { error: "Không tìm thấy mục con để xoá" },
-      { status: 404 }
-    );
+    return NextResponse.json({ error: "Không tìm thấy mục để xoá" }, { status: 404 });
   }
 
   const ctx = await getParentContext(supabase, user!.id, sub.parent_id);
@@ -357,7 +394,7 @@ export async function DELETE(req: NextRequest) {
   const { bookRole, assignment } = ctx;
   if (!canManageSubsections(bookRole, assignment)) {
     return NextResponse.json(
-      { error: "Bạn không có quyền xoá mục con này." },
+      { error: "Bạn không có quyền xoá mục này." },
       { status: 403 }
     );
   }
