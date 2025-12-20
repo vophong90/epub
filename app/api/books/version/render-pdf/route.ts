@@ -4,10 +4,12 @@ import { getRouteClient } from "@/lib/supabaseServer";
 import { getAdminClient } from "@/lib/supabase-admin";
 
 import chromium from "@sparticuz/chromium";
-import { chromium as pwChromium } from "playwright-core";
+import puppeteer from "puppeteer-core";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// Cho job render chạy lâu hơn một chút
+export const maxDuration = 300;
 
 const BUCKET_PREVIEW = "pdf_previews";
 const SIGNED_EXPIRES_SEC = 60 * 10;
@@ -62,7 +64,10 @@ function makeAnchor(tocItemId: string, slug: string) {
  * - depth 2 => section
  * - depth 3+ => sub-sections
  */
-async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNode[]> {
+async function buildNodesFromDB(
+  admin: any,
+  versionId: string
+): Promise<RenderNode[]> {
   // 1) load all toc items
   const { data: items, error: itErr } = await admin
     .from("toc_items")
@@ -76,7 +81,10 @@ async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNo
   const { data: contents, error: ctErr } = await admin
     .from("toc_contents")
     .select("toc_item_id,content_json,status")
-    .in("toc_item_id", tocItems.map((x) => x.id));
+    .in(
+      "toc_item_id",
+      tocItems.map((x) => x.id)
+    );
 
   if (ctErr) throw new Error("Load toc_contents failed: " + ctErr.message);
   const tocContents = (contents || []) as TocContentRow[];
@@ -132,6 +140,27 @@ async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNo
   return nodes;
 }
 
+/** Launch browser dùng puppeteer-core + @sparticuz/chromium (serverless-friendly) */
+async function launchBrowser() {
+  const isProd =
+    process.env.VERCEL === "1" || process.env.NODE_ENV === "production";
+
+  let executablePath: string | undefined = undefined;
+  if (isProd) {
+    // Trên Vercel / Lambda: chromium.executablePath() sẽ trả về /tmp/chromium
+    executablePath = await chromium.executablePath();
+  }
+
+  const browser = await puppeteer.launch({
+    args: chromium.args,
+    defaultViewport: chromium.defaultViewport,
+    executablePath,
+    headless: chromium.headless,
+  });
+
+  return browser;
+}
+
 export async function POST(req: NextRequest) {
   const supabase = getRouteClient();
   const admin = getAdminClient();
@@ -155,7 +184,10 @@ export async function POST(req: NextRequest) {
 
   if (pErr) return NextResponse.json({ error: pErr.message }, { status: 500 });
   if (!profile || profile.system_role !== "admin") {
-    return NextResponse.json({ error: "Chỉ admin mới được render PDF" }, { status: 403 });
+    return NextResponse.json(
+      { error: "Chỉ admin mới được render PDF" },
+      { status: 403 }
+    );
   }
 
   // body
@@ -183,7 +215,11 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
 
   if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 });
-  if (!version) return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
+  if (!version)
+    return NextResponse.json(
+      { error: "Không tìm thấy version" },
+      { status: 404 }
+    );
 
   const { data: book, error: bErr } = await admin
     .from("books")
@@ -192,7 +228,8 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
 
   if (bErr) return NextResponse.json({ error: bErr.message }, { status: 500 });
-  if (!book) return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
+  if (!book)
+    return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
 
   // load template
   const { data: tpl, error: tErr } = await admin
@@ -205,7 +242,11 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
 
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
-  if (!tpl) return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
+  if (!tpl)
+    return NextResponse.json(
+      { error: "Không tìm thấy template" },
+      { status: 404 }
+    );
 
   // create render job
   const { data: render, error: rInsErr } = await admin
@@ -265,11 +306,15 @@ export async function POST(req: NextRequest) {
             : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
 
         return `
-<section class="${isChapter ? "chapter" : "section"}" id="${esc(n.id)}" data-toc-item="${esc(
-          n.toc_item_id
-        )}" data-depth="${n.depth}" data-chapter-title="${esc(n.chapterTitle)}">
+<section class="${isChapter ? "chapter" : "section"}" id="${esc(
+          n.id
+        )}" data-toc-item="${esc(n.toc_item_id)}" data-depth="${
+          n.depth
+        }" data-chapter-title="${esc(n.chapterTitle)}">
   ${runningChapter}
-  <${tag} class="${isChapter ? "chapter-title" : ""}">${esc(n.title)}</${tag}>
+  <${tag} class="${isChapter ? "chapter-title" : ""}">${esc(
+          n.title
+        )}</${tag}>
   ${bodyHtml}
 </section>`;
       })
@@ -345,20 +390,14 @@ export async function POST(req: NextRequest) {
 </body>
 </html>`;
 
-    // 6) Launch Chromium (serverless-friendly)
-    const browser = await pwChromium.launch({
-      args: chromium.args,
-      executablePath: await chromium.executablePath(), // trên Vercel sẽ ra string path
-      headless: true,
-    });
-
+    // 6) Launch Chromium (serverless-friendly, dùng puppeteer)
+    const browser = await launchBrowser();
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "load" });
 
     // chờ Paged.js paginate xong
     await page.waitForFunction(
       () => (window as any).__PAGED_DONE__ === true,
-      null,
       { timeout: 120000 }
     );
 
