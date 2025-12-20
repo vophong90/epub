@@ -149,7 +149,6 @@ async function launchBrowser() {
   const browser = await puppeteer.launch({
     args: chromium.args,
     executablePath,
-    headless: "new",
   });
 
   return browser;
