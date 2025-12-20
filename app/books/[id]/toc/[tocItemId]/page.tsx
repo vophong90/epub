@@ -1196,7 +1196,7 @@ export default function TocItemPage() {
           <button
             className={BTN_PRIMARY}
             onClick={handleSaveAll}
-            disabled {!canEditContent || savingAll}
+            disabled={!canEditContent || savingAll}
           >
             {savingAll ? "Đang lưu cả chương..." : "Lưu bản nháp chương"}
           </button>
