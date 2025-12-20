@@ -5,6 +5,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  useRef,
   FormEvent,
   ChangeEvent,
 } from "react";
@@ -93,6 +94,7 @@ export default function TocItemPage() {
 
   const bookId = params.id;
   const tocItemId = params.tocItemId;
+  const editorRef = useRef<HTMLDivElement | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [subLoading, setSubLoading] = useState(false);
@@ -768,6 +770,14 @@ export default function TocItemPage() {
   }
 
   const activeHtml = getActiveHtml();
+   useEffect(() => {
+    if (authLoading || loading) return;
+    if (!data) return;
+    if (!editorRef.current) return;
+
+    const html = getActiveHtml();
+    editorRef.current.innerHTML = html || "<p></p>";
+   }, [authLoading, loading, activeSectionId, tocItemId, importPreview]);
 
   return (
     <main className="max-w-6xl mx-auto px-4 py-8 space-y-6">
@@ -1125,13 +1135,13 @@ export default function TocItemPage() {
 
             {/* contentEditable */}
             <div
+              ref={editorRef}   // 👈 gắn ref
               className={`${INPUT} min-h-[280px] leading-relaxed text-sm whitespace-pre-wrap`}
               contentEditable={canEditContent}
               suppressContentEditableWarning
               onInput={(e) =>
                 updateActiveHtml(e.currentTarget.innerHTML)
               }
-              dangerouslySetInnerHTML={{ __html: activeHtml }}
             />
 
             {/* Nút lưu phần hiện tại */}
