@@ -1,9 +1,10 @@
 // app/api/admin/users/[userId]/books/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { getRouteClient } from "@/lib/supabaseServer";
+import { getAdminClient } from "@/lib/supabase-admin";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-import { NextRequest, NextResponse } from "next/server";
-import { getAdminClient } from "@/lib/supabase-admin";
 
 type BookRow = {
   id: string;
@@ -15,11 +16,53 @@ type PermRow = {
   role: string;
 };
 
+async function ensureAdmin() {
+  const supabase = getRouteClient();
+  const {
+    data: { user },
+    error: uErr,
+  } = await supabase.auth.getUser();
+
+  if (uErr || !user) {
+    return {
+      errorRes: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
+    };
+  }
+
+  const { data: profile, error: pErr } = await supabase
+    .from("profiles")
+    .select("id,system_role")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  if (pErr) {
+    return {
+      errorRes: NextResponse.json({ error: pErr.message }, { status: 500 }),
+    };
+  }
+
+  if (!profile || profile.system_role !== "admin") {
+    return {
+      errorRes: NextResponse.json(
+        { error: "Chỉ admin mới dùng API này" },
+        { status: 403 }
+      ),
+    };
+  }
+
+  const admin = getAdminClient();
+  return { supabase, admin, user };
+}
+
 export async function GET(
   req: NextRequest,
-  context: { params: { userId: string } }
+  { params }: { params: { userId: string } } // 👈 phải destructure như vầy
 ) {
-  const userId = context.params.userId;
+  const check = await ensureAdmin();
+  if ("errorRes" in check) return check.errorRes;
+  const { admin } = check;
+
+  const userId = params.userId;
 
   if (!userId) {
     return NextResponse.json(
@@ -28,11 +71,8 @@ export async function GET(
     );
   }
 
-  const s = getAdminClient();
-
-  // TODO: tuỳ anh, có thể check quyền system_role=admin ở đây nếu cần
-
-  const { data: books, error: bErr } = await s
+  // Lấy danh sách sách
+  const { data: books, error: bErr } = await admin
     .from("books")
     .select("id,title")
     .order("created_at", { ascending: false });
@@ -45,7 +85,8 @@ export async function GET(
     );
   }
 
-  const { data: perms, error: pErr } = await s
+  // Lấy quyền sách của user
+  const { data: perms, error: pErr } = await admin
     .from("book_permissions")
     .select("book_id,role")
     .eq("user_id", userId);
@@ -66,7 +107,9 @@ export async function GET(
   const result = (books as BookRow[]).map((b) => ({
     book_id: b.id,
     title: b.title,
-    role: (roleByBook.get(b.id) as "viewer" | "author" | "editor" | undefined) ?? null,
+    role:
+      (roleByBook.get(b.id) as "viewer" | "author" | "editor" | undefined) ??
+      null,
   }));
 
   return NextResponse.json({ books: result });
