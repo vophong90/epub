@@ -21,7 +21,8 @@
     "@types/node": "^20.17.10",
     "@sparticuz/chromium": "^131.0.0",
     "pagedjs": "^0.4.3",
-    "playwright-core": "^1.49.1"
+    "playwright-core": "^1.49.1",
+    "puppeteer-core": "^22.15.0"
   },
   "devDependencies": {
     "typescript": "^5.5.4",
