@@ -4,8 +4,8 @@
 import {
   useEffect,
   useMemo,
-  useState,
   useRef,
+  useState,
   FormEvent,
   ChangeEvent,
 } from "react";
@@ -55,16 +55,19 @@ type TocItemResponse = {
   assignments: Assignment[];
 };
 
-type SubItem = {
+// Sidebar tree item (raw từ /api/toc/tree)
+type TocTreeItem = {
   id: string;
   parent_id: string | null;
   title: string;
   slug: string;
   order_index: number;
+  created_at?: string | null;
 };
 
-type SubItemWithContent = SubItem & {
-  editorHtml: string;
+type TocTreeNode = TocTreeItem & {
+  depth: number;
+  children: TocTreeNode[];
 };
 
 // Preview từ Word
@@ -95,10 +98,9 @@ export default function TocItemPage() {
   const bookId = params.id;
   const tocItemId = params.tocItemId;
   const editorRef = useRef<HTMLDivElement | null>(null);
-  const selectionRef = useRef<Range | null>(null);
 
   const [loading, setLoading] = useState(true);
-  const [subLoading, setSubLoading] = useState(false);
+  const [treeLoading, setTreeLoading] = useState(false);
 
   const [savingSection, setSavingSection] = useState(false);
   const [savingAll, setSavingAll] = useState(false);
@@ -109,12 +111,12 @@ export default function TocItemPage() {
 
   const [data, setData] = useState<TocItemResponse | null>(null);
 
-  // Editor state
-  const [rootHtml, setRootHtml] = useState("<p></p>");
-  const [subItems, setSubItems] = useState<SubItemWithContent[]>([]);
-  const [activeSectionId, setActiveSectionId] = useState<"root" | string>(
-    "root"
-  );
+  // Cây TOC (subtree dưới chương này)
+  const [treeRoot, setTreeRoot] = useState<TocTreeNode | null>(null);
+
+  // Nội dung HTML cho từng TOC item trong cây
+  const [sectionHtml, setSectionHtml] = useState<Record<string, string>>({});
+  const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -156,7 +158,8 @@ export default function TocItemPage() {
   const canApprove = isEditor && contentStatus === "submitted";
   const canRequestChange = isEditor && contentStatus === "submitted";
 
-  const canManageSubsections = isEditor || (isAuthorRole && isAssignedAuthor);
+  const canManageSubsections =
+    isEditor || (isAuthorRole && isAssignedAuthor);
 
   const canResolveNote =
     isAuthorRole &&
@@ -172,6 +175,16 @@ export default function TocItemPage() {
   const [importApplying, setImportApplying] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [replaceExistingSubs, setReplaceExistingSubs] = useState(true);
+
+  // Đổi tên mục con
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renamingTitle, setRenamingTitle] = useState("");
+  const [renamingSaving, setRenamingSaving] = useState(false);
+
+  // Thêm mục con
+  const [newChildParentId, setNewChildParentId] = useState<string | null>(null);
+  const [newChildTitle, setNewChildTitle] = useState("");
+  const [creatingChild, setCreatingChild] = useState(false);
 
   function statusLabel(s: TocContent["status"]) {
     switch (s) {
@@ -228,7 +241,7 @@ export default function TocItemPage() {
   }, [data?.content?.editor_note]);
 
   // ========================
-  // Load mục chính
+  // Load mục chính (chương)
   // ========================
   useEffect(() => {
     if (!tocItemId) return;
@@ -248,8 +261,8 @@ export default function TocItemPage() {
         setData(j);
 
         const html = parseContentJson(j.content?.content_json);
-        setRootHtml(html);
-        setActiveSectionId("root");
+        setSectionHtml({ [j.item.id]: html });
+        setActiveSectionId(j.item.id);
       } catch (e: any) {
         setErrorMsg(e?.message || "Lỗi không xác định khi tải dữ liệu");
         setData(null);
@@ -261,142 +274,205 @@ export default function TocItemPage() {
     load();
   }, [tocItemId]);
 
-  // Đồng bộ HTML từ state → editorRef
-  useEffect(() => {
-    if (authLoading || loading) return;
-    if (!data) return;
-    if (!editorRef.current) return;
-
-    const html = getActiveHtml();
-    editorRef.current.innerHTML = html || "<p></p>";
-  }, [
-    authLoading,
-    loading,
-    data,
-    activeSectionId,
-    rootHtml,
-    subItems,
-    importPreview,
-  ]);
-
   // ========================
-  // Load mục con + nội dung
+  // Load cây TOC (subtree) bằng /api/toc/tree
   // ========================
   useEffect(() => {
-    if (!tocItemId) return;
+    if (!data?.item?.book_version_id || !data.item.id) return;
 
-    const loadSubs = async () => {
-      setSubLoading(true);
+    const loadTree = async () => {
+      setTreeLoading(true);
       try {
-        const res = await fetch(`/api/toc/subsections?parent_id=${tocItemId}`);
+        const res = await fetch(
+          `/api/toc/tree?version_id=${encodeURIComponent(
+            data.item.book_version_id
+          )}`
+        );
         const j = await res.json().catch(() => ({}));
         if (!res.ok || j.error) {
-          console.error("load subsections error:", j.error || res.status);
-          setSubItems([]);
+          console.error("load TOC tree error:", j.error || res.status);
+          setTreeRoot(null);
           return;
         }
-        const bareItems: SubItem[] = j.items || [];
 
-        const withContent: SubItemWithContent[] = await Promise.all(
-          bareItems.map(async (s) => {
-            try {
-              const r = await fetch(`/api/toc/item?toc_item_id=${s.id}`);
-              if (!r.ok) {
-                return { ...s, editorHtml: "<p></p>" };
-              }
-              const tj = (await r.json()) as TocItemResponse;
-              const html = parseContentJson(tj.content?.content_json);
-              return { ...s, editorHtml: html };
-            } catch {
-              return { ...s, editorHtml: "<p></p>" };
-            }
-          })
-        );
-
-        withContent.sort((a, b) => a.order_index - b.order_index);
-        setSubItems(withContent);
+        const items: TocTreeItem[] = Array.isArray(j.items) ? j.items : [];
+        const root = buildSubtree(items, data.item.id, 0);
+        setTreeRoot(root);
       } catch (e) {
-        console.error("load subsections failed:", e);
-        setSubItems([]);
+        console.error("load TOC tree failed:", e);
+        setTreeRoot(null);
       } finally {
-        setSubLoading(false);
+        setTreeLoading(false);
       }
     };
 
-    loadSubs();
-  }, [tocItemId]);
+    loadTree();
+  }, [data?.item?.book_version_id, data?.item?.id]);
+
+  // Khi activeSectionId hoặc sectionHtml thay đổi → sync ra DOM editor
+  useEffect(() => {
+    if (authLoading || loading) return;
+    if (!editorRef.current) return;
+    if (!activeSectionId) return;
+
+    const html = sectionHtml[activeSectionId] ?? "<p></p>";
+    editorRef.current.innerHTML = html || "<p></p>";
+  }, [authLoading, loading, activeSectionId, sectionHtml]);
+
+  // ========================
+  // Helpers cho cây TOC
+  // ========================
+  function buildSubtree(
+    items: TocTreeItem[],
+    rootId: string,
+    depth: number
+  ): TocTreeNode | null {
+    const root = items.find((i) => i.id === rootId);
+    if (!root) return null;
+
+    const childrenRaw = items
+      .filter((i) => i.parent_id === rootId)
+      .sort((a, b) => a.order_index - b.order_index);
+
+    const children: TocTreeNode[] = childrenRaw
+      .map((c) => buildSubtree(items, c.id, depth + 1))
+      .filter(Boolean) as TocTreeNode[];
+
+    return { ...root, depth, children };
+  }
+
+  function findNodeTitle(node: TocTreeNode | null, id: string | null): string {
+    if (!node || !id) return "";
+    if (node.id === id) return node.title;
+    for (const child of node.children) {
+      const t = findNodeTitle(child, id);
+      if (t) return t;
+    }
+    return "";
+  }
+
+  function findParentId(
+    node: TocTreeNode | null,
+    targetId: string,
+    parentId: string | null = null
+  ): string | null {
+    if (!node) return null;
+    if (node.id === targetId) return parentId;
+    for (const child of node.children) {
+      const found = findParentId(child, targetId, node.id);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function updateNodeTitleInTree(
+    node: TocTreeNode,
+    id: string,
+    title: string
+  ): TocTreeNode {
+    if (node.id === id) {
+      return { ...node, title };
+    }
+    return {
+      ...node,
+      children: node.children.map((c) =>
+        updateNodeTitleInTree(c, id, title)
+      ),
+    };
+  }
+
+  function addChildToTree(
+    node: TocTreeNode,
+    parentId: string,
+    child: TocTreeItem
+  ): TocTreeNode {
+    if (node.id === parentId) {
+      const newChild: TocTreeNode = {
+        ...child,
+        depth: node.depth + 1,
+        children: [],
+      };
+      const children = [...node.children, newChild].sort(
+        (a, b) => a.order_index - b.order_index
+      );
+      return { ...node, children };
+    }
+    return {
+      ...node,
+      children: node.children.map((c) =>
+        addChildToTree(c, parentId, child)
+      ),
+    };
+  }
+
+  function removeNodeFromTree(
+    node: TocTreeNode,
+    targetId: string
+  ): TocTreeNode | null {
+    if (node.id === targetId) {
+      // Không bao giờ xoá root bằng UI, nên trường hợp này không dùng
+      return null;
+    }
+    const filteredChildren: TocTreeNode[] = [];
+    for (const child of node.children) {
+      if (child.id === targetId) {
+        // Bỏ qua child này (và toàn bộ subtree)
+        continue;
+      }
+      const updated = removeNodeFromTree(child, targetId);
+      if (updated) filteredChildren.push(updated);
+    }
+    return { ...node, children: filteredChildren };
+  }
 
   // ========================
   // Helpers cập nhật HTML
   // ========================
-  function updateActiveHtml(newHtml: string) {
-    if (activeSectionId === "root") {
-      setRootHtml(newHtml);
-    } else {
-      setSubItems((prev) =>
-        prev.map((s) =>
-          s.id === activeSectionId ? { ...s, editorHtml: newHtml } : s
-        )
-      );
-    }
+  function getActiveHtml(): string {
+    if (!activeSectionId) return "<p></p>";
+    return sectionHtml[activeSectionId] ?? "<p></p>";
   }
 
-  function getActiveHtml(): string {
-    if (activeSectionId === "root") return rootHtml;
-    const sub = subItems.find((s) => s.id === activeSectionId);
-    return sub?.editorHtml ?? "<p></p>";
+  function updateActiveHtml(newHtml: string) {
+    if (!activeSectionId) return;
+    setSectionHtml((prev) => ({
+      ...prev,
+      [activeSectionId]: newHtml,
+    }));
   }
 
   function getActiveTitle(): string {
-    if (!data) return "";
-    if (activeSectionId === "root") {
-      return data.item.title;
-    }
-    const sub = subItems.find((s) => s.id === activeSectionId);
-    return sub?.title ?? data.item.title;
+    if (!data || !activeSectionId) return "";
+    return findNodeTitle(treeRoot, activeSectionId) || data.item.title;
   }
 
-  // ========================
-  // Selection helpers cho toolbar
-  // ========================
-  function saveSelection() {
-    if (typeof window === "undefined") return;
+  function saveCurrentEditorToState() {
+    if (!activeSectionId) return;
     if (!editorRef.current) return;
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-    const range = sel.getRangeAt(0);
-    // chỉ lưu selection nằm trong editor
-    if (!editorRef.current.contains(range.commonAncestorContainer)) return;
-    selectionRef.current = range;
+    const html = editorRef.current.innerHTML || "<p></p>";
+    setSectionHtml((prev) => ({
+      ...prev,
+      [activeSectionId]: html,
+    }));
   }
 
-  function restoreSelection() {
-    if (typeof window === "undefined") return;
-    const range = selectionRef.current;
-    if (!range) return;
-    const sel = window.getSelection();
-    if (!sel) return;
-    sel.removeAllRanges();
-    sel.addRange(range);
-  }
-
+  // ========================
+  // Toolbar: execCommand helpers
+  // ========================
   function applyCommand(command: string, value?: string) {
     if (!canEditContent) return;
-    if (!editorRef.current) return;
-    if (typeof document === "undefined") return;
+    const el = editorRef.current;
+    if (!el) return;
 
-    editorRef.current.focus();
-    restoreSelection();
-
+    el.focus();
     if (value !== undefined) {
       document.execCommand(command, false, value);
     } else {
       document.execCommand(command, false);
     }
-
-    // cập nhật HTML & lưu lại selection mới
-    updateActiveHtml(editorRef.current.innerHTML);
-    saveSelection();
+    // sync lại state sau khi format
+    const html = el.innerHTML || "<p></p>";
+    updateActiveHtml(html);
   }
 
   // ========================
@@ -421,13 +497,19 @@ export default function TocItemPage() {
   }
 
   async function handleSaveCurrent() {
-    if (!tocItemId) return;
+    if (!activeSectionId) return;
     setSavingSection(true);
     setErrorMsg(null);
     try {
-      const html = getActiveHtml();
-      const targetId = activeSectionId === "root" ? tocItemId : activeSectionId;
-      await saveOne(targetId, html);
+      // lấy HTML mới nhất từ editorRef
+      if (editorRef.current) {
+        const html = editorRef.current.innerHTML || "<p></p>";
+        await saveOne(activeSectionId, html);
+        updateActiveHtml(html);
+      } else {
+        const html = getActiveHtml();
+        await saveOne(activeSectionId, html);
+      }
     } catch (e: any) {
       setErrorMsg(e?.message || "Lỗi khi lưu nội dung");
     } finally {
@@ -436,15 +518,26 @@ export default function TocItemPage() {
   }
 
   async function handleSaveAll() {
-    if (!tocItemId) return;
+    if (!data?.item?.id) return;
     setSavingAll(true);
     setErrorMsg(null);
     try {
+      // Lưu lại section đang mở
+      saveCurrentEditorToState();
+
       const tasks: Promise<void>[] = [];
-      tasks.push(saveOne(tocItemId, rootHtml));
-      for (const s of subItems) {
-        tasks.push(saveOne(s.id, s.editorHtml));
+      const entries = Object.entries(sectionHtml);
+
+      for (const [tocId, html] of entries) {
+        const content = html || "<p></p>";
+        tasks.push(saveOne(tocId, content));
       }
+
+      if (tasks.length === 0) {
+        // luôn lưu ít nhất chương chính
+        tasks.push(saveOne(data.item.id, getActiveHtml()));
+      }
+
       await Promise.all(tasks);
     } catch (e: any) {
       setErrorMsg(e?.message || "Lỗi khi lưu chương");
@@ -454,7 +547,7 @@ export default function TocItemPage() {
   }
 
   async function handleSubmitChapter() {
-    if (!tocItemId) return;
+    if (!data?.item?.id) return;
     setSubmitting(true);
     setErrorMsg(null);
     try {
@@ -463,13 +556,13 @@ export default function TocItemPage() {
       const res = await fetch("/api/toc/content/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ toc_item_id: tocItemId }),
+        body: JSON.stringify({ toc_item_id: data.item.id }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j.error) {
-        setErrorMsg(j.error || "Nộp nội dung thất bại");
+        setErrorMsg(j.error || "Nộp chương thất bại");
       } else {
-        const r = await fetch(`/api/toc/item?toc_item_id=${tocItemId}`);
+        const r = await fetch(`/api/toc/item?toc_item_id=${data.item.id}`);
         if (r.ok) {
           const j2 = (await r.json()) as TocItemResponse;
           setData(j2);
@@ -483,7 +576,7 @@ export default function TocItemPage() {
   }
 
   async function handleApproveChapter() {
-    if (!tocItemId) return;
+    if (!data?.item?.id) return;
     if (
       !window.confirm(
         "Duyệt chương này? Sau khi duyệt, tác giả sẽ không thể chỉnh sửa."
@@ -497,13 +590,13 @@ export default function TocItemPage() {
       const res = await fetch("/api/toc/content/approve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ toc_item_id: tocItemId }),
+        body: JSON.stringify({ toc_item_id: data.item.id }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j.error) {
         setErrorMsg(j.error || "Duyệt nội dung thất bại");
       } else {
-        const r = await fetch(`/api/toc/item?toc_item_id=${tocItemId}`);
+        const r = await fetch(`/api/toc/item?toc_item_id=${data.item.id}`);
         if (r.ok) {
           const j2 = (await r.json()) as TocItemResponse;
           setData(j2);
@@ -517,7 +610,7 @@ export default function TocItemPage() {
   }
 
   async function handleRequestChangeChapter() {
-    if (!tocItemId) return;
+    if (!data?.item?.id) return;
     setRequestingChange(true);
     setErrorMsg(null);
     try {
@@ -525,7 +618,7 @@ export default function TocItemPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          toc_item_id: tocItemId,
+          toc_item_id: data.item.id,
           editor_note: editorNote,
         }),
       });
@@ -533,7 +626,7 @@ export default function TocItemPage() {
       if (!res.ok || j.error) {
         setErrorMsg(j.error || "Yêu cầu chỉnh sửa thất bại");
       } else {
-        const r = await fetch(`/api/toc/item?toc_item_id=${tocItemId}`);
+        const r = await fetch(`/api/toc/item?toc_item_id=${data.item.id}`);
         if (r.ok) {
           const j2 = (await r.json()) as TocItemResponse;
           setData(j2);
@@ -551,12 +644,15 @@ export default function TocItemPage() {
     setGptError(null);
     setGptResult(null);
     try {
-      const pieces: string[] = [];
-      pieces.push(stripHtml(rootHtml));
-      for (const s of subItems) {
-        pieces.push(stripHtml(s.editorHtml));
+      // lưu lại đoạn đang mở
+      saveCurrentEditorToState();
+
+      const texts: string[] = [];
+      for (const html of Object.values(sectionHtml)) {
+        if (!html) continue;
+        texts.push(stripHtml(html));
       }
-      const text = pieces.filter(Boolean).join("\n\n");
+      const text = texts.filter(Boolean).join("\n\n");
       if (!text) {
         setGptError("Không có nội dung để kiểm tra.");
         return;
@@ -581,20 +677,20 @@ export default function TocItemPage() {
   }
 
   async function handleResolveNote() {
-    if (!tocItemId) return;
+    if (!data?.item?.id) return;
     setResolvingNote(true);
     setErrorMsg(null);
     try {
       const res = await fetch("/api/toc/content/resolve-note", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ toc_item_id: tocItemId }),
+        body: JSON.stringify({ toc_item_id: data.item.id }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j.error) {
         setErrorMsg(j.error || "Không đánh dấu được ghi chú là đã giải quyết");
       } else {
-        const r = await fetch(`/api/toc/item?toc_item_id=${tocItemId}`);
+        const r = await fetch(`/api/toc/item?toc_item_id=${data.item.id}`);
         if (r.ok) {
           const j2 = (await r.json()) as TocItemResponse;
           setData(j2);
@@ -608,47 +704,55 @@ export default function TocItemPage() {
   }
 
   // ========================
-  // Mục con: thêm / xoá / sửa tên
+  // Mục con: thêm / sửa / xoá
   // ========================
-  async function handleCreateSub(title: string) {
-    if (!tocItemId || !title.trim()) return;
-    setSubLoading(true);
+  async function handleCreateChild(parentId: string, title: string) {
+    if (!parentId || !title.trim()) return;
+    setCreatingChild(true);
+    setErrorMsg(null);
     try {
       const res = await fetch("/api/toc/subsections", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          parent_id: tocItemId,
+          parent_id: parentId,
           title: title.trim(),
         }),
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok || j.error) {
+      if (!res.ok || j.error || !j.item) {
         setErrorMsg(j.error || "Tạo mục con thất bại");
-      } else if (j.item) {
-        const s: SubItemWithContent = {
-          ...j.item,
-          editorHtml: "<p></p>",
-        };
-        setSubItems((prev) =>
-          [...prev, s].sort((a, b) => a.order_index - b.order_index)
-        );
+        return;
       }
+
+      const item: TocTreeItem = j.item;
+      setTreeRoot((prev) =>
+        prev ? addChildToTree(prev, parentId, item) : prev
+      );
+      // nội dung mới trống
+      setSectionHtml((prev) => ({
+        ...prev,
+        [item.id]: "<p></p>",
+      }));
+      setActiveSectionId(item.id);
     } catch (e: any) {
       setErrorMsg(e?.message || "Lỗi khi tạo mục con");
     } finally {
-      setSubLoading(false);
+      setCreatingChild(false);
+      setNewChildParentId(null);
+      setNewChildTitle("");
     }
   }
 
-  async function handleDeleteSub(id: string) {
+  async function handleDeleteNode(id: string, title: string) {
     if (
       !window.confirm(
-        "Xoá mục con này? Các mục con sâu hơn (nếu có) cũng sẽ bị xoá."
+        `Xoá mục "${title}"? Các mục con sâu hơn (nếu có) cũng sẽ bị xoá.`
       )
     ) {
       return;
     }
+    setErrorMsg(null);
     try {
       const res = await fetch(
         `/api/toc/subsections?id=${encodeURIComponent(id)}`,
@@ -657,39 +761,85 @@ export default function TocItemPage() {
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j.error) {
         setErrorMsg(j.error || "Xoá mục con thất bại");
-      } else {
-        setSubItems((prev) => prev.filter((s) => s.id !== id));
-        if (activeSectionId === id) {
-          setActiveSectionId("root");
-        }
+        return;
+      }
+
+      const parentId = findParentId(treeRoot, id);
+      setTreeRoot((prev) => (prev ? removeNodeFromTree(prev, id) : prev));
+
+      setSectionHtml((prev) => {
+        const clone = { ...prev };
+        delete clone[id];
+        return clone;
+      });
+
+      if (activeSectionId === id) {
+        setActiveSectionId(parentId || (data?.item.id ?? null));
       }
     } catch (e: any) {
       setErrorMsg(e?.message || "Lỗi khi xoá mục con");
     }
   }
 
-  async function handleRenameSub(id: string, oldTitle: string) {
-    const newTitle = window.prompt("Nhập tên mới cho mục con", oldTitle);
-    if (!newTitle) return;
-    const trimmed = newTitle.trim();
-    if (!trimmed || trimmed === oldTitle) return;
-
+  async function handleRenameNode(id: string, newTitle: string) {
+    if (!id || !newTitle.trim()) return;
+    setRenamingSaving(true);
+    setErrorMsg(null);
     try {
       const res = await fetch("/api/toc/subsections", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, title: trimmed }),
+        body: JSON.stringify({ id, title: newTitle.trim() }),
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok || j.error) {
+      if (!res.ok || j.error || !j.item) {
         setErrorMsg(j.error || "Đổi tên mục con thất bại");
         return;
       }
-      setSubItems((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, title: trimmed } : s))
+      const updated: TocTreeItem = j.item;
+      setTreeRoot((prev) =>
+        prev ? updateNodeTitleInTree(prev, id, updated.title) : prev
       );
+      setRenamingId(null);
+      setRenamingTitle("");
     } catch (e: any) {
       setErrorMsg(e?.message || "Lỗi khi đổi tên mục con");
+    } finally {
+      setRenamingSaving(false);
+    }
+  }
+
+  function startRename(node: TocTreeNode) {
+    setRenamingId(node.id);
+    setRenamingTitle(node.title);
+  }
+
+  // ========================
+  // Chọn section trong tree
+  // ========================
+  async function handleSelectSection(id: string) {
+    if (!id) return;
+    if (id === activeSectionId) return;
+
+    // lưu lại nội dung section hiện tại
+    saveCurrentEditorToState();
+
+    setActiveSectionId(id);
+
+    // nếu chưa có html trong state, fetch về
+    if (!sectionHtml[id]) {
+      try {
+        const res = await fetch(`/api/toc/item?toc_item_id=${id}`);
+        if (!res.ok) return;
+        const j = (await res.json()) as TocItemResponse;
+        const html = parseContentJson(j.content?.content_json);
+        setSectionHtml((prev) => ({
+          ...prev,
+          [id]: html,
+        }));
+      } catch (e) {
+        console.error("load section content error:", e);
+      }
     }
   }
 
@@ -704,7 +854,7 @@ export default function TocItemPage() {
   }
 
   async function handleImportPreview() {
-    if (!tocItemId) return;
+    if (!data?.item?.id) return;
     if (!importFile) {
       setImportError("Vui lòng chọn file .docx trước.");
       return;
@@ -715,7 +865,7 @@ export default function TocItemPage() {
     try {
       const form = new FormData();
       form.append("file", importFile);
-      form.append("toc_item_id", tocItemId);
+      form.append("toc_item_id", data.item.id);
 
       const res = await fetch("/api/toc/import-docx/preview", {
         method: "POST",
@@ -727,7 +877,9 @@ export default function TocItemPage() {
       } else {
         const preview: ImportPreview = {
           rootHtml: j.rootHtml || "<p></p>",
-          subsections: Array.isArray(j.subsections) ? j.subsections : [],
+          subsections: Array.isArray(j.subsections)
+            ? j.subsections
+            : [],
         };
         setImportPreview(preview);
       }
@@ -739,7 +891,7 @@ export default function TocItemPage() {
   }
 
   async function handleImportApply() {
-    if (!tocItemId || !importPreview) return;
+    if (!data?.item?.id || !importPreview) return;
     setImportApplying(true);
     setImportError(null);
     try {
@@ -747,7 +899,7 @@ export default function TocItemPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          toc_item_id: tocItemId,
+          toc_item_id: data.item.id,
           rootHtml: importPreview.rootHtml,
           subsections: importPreview.subsections,
           replaceExisting: replaceExistingSubs,
@@ -759,42 +911,33 @@ export default function TocItemPage() {
         return;
       }
 
-      // Reload lại dữ liệu từ server để đồng bộ UI
+      // Reload lại dữ liệu chương + cây TOC
       try {
-        // reload main item
-        const mainRes = await fetch(`/api/toc/item?toc_item_id=${tocItemId}`);
+        const mainRes = await fetch(
+          `/api/toc/item?toc_item_id=${data.item.id}`
+        );
         if (mainRes.ok) {
           const j2 = (await mainRes.json()) as TocItemResponse;
           setData(j2);
           const html = parseContentJson(j2.content?.content_json);
-          setRootHtml(html);
-          setActiveSectionId("root");
+          setSectionHtml({ [j2.item.id]: html });
+          setActiveSectionId(j2.item.id);
         }
 
-        // reload subsections
-        const subsRes = await fetch(
-          `/api/toc/subsections?parent_id=${tocItemId}`
-        );
-        const sj = await subsRes.json().catch(() => ({}));
-        if (subsRes.ok && !sj.error) {
-          const bareItems: SubItem[] = sj.items || [];
-          const withContent: SubItemWithContent[] = await Promise.all(
-            bareItems.map(async (s) => {
-              try {
-                const r = await fetch(`/api/toc/item?toc_item_id=${s.id}`);
-                if (!r.ok) {
-                  return { ...s, editorHtml: "<p></p>" };
-                }
-                const tj = (await r.json()) as TocItemResponse;
-                const html = parseContentJson(tj.content?.content_json);
-                return { ...s, editorHtml: html };
-              } catch {
-                return { ...s, editorHtml: "<p></p>" };
-              }
-            })
+        if (data.item.book_version_id) {
+          const treeRes = await fetch(
+            `/api/toc/tree?version_id=${encodeURIComponent(
+              data.item.book_version_id
+            )}`
           );
-          withContent.sort((a, b) => a.order_index - b.order_index);
-          setSubItems(withContent);
+          const tj = await treeRes.json().catch(() => ({}));
+          if (treeRes.ok && !tj.error) {
+            const items: TocTreeItem[] = Array.isArray(tj.items)
+              ? tj.items
+              : [];
+            const root = buildSubtree(items, data.item.id, 0);
+            setTreeRoot(root);
+          }
         }
       } catch (reloadErr) {
         console.error("reload after import-docx apply failed:", reloadErr);
@@ -808,6 +951,151 @@ export default function TocItemPage() {
     } finally {
       setImportApplying(false);
     }
+  }
+
+  // ========================
+  // Render tree sidebar
+  // ========================
+  function renderTree(node: TocTreeNode): JSX.Element {
+    const isActive = node.id === activeSectionId;
+    const isRoot = node.parent_id === null || node.id === data?.item.id;
+    const canRenameHere = canManageSubsections && !isRoot;
+    const canDeleteHere = canManageSubsections && !isRoot;
+    const canAddChildHere = canManageSubsections;
+
+    const paddingLeft = 8 + node.depth * 12;
+
+    return (
+      <div key={node.id} className="space-y-1">
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            className={`flex-1 text-left px-2 py-1.5 rounded-md border text-sm ${
+              isActive
+                ? "border-blue-500 bg-blue-50 text-blue-800"
+                : "border-transparent hover:bg-gray-50 text-gray-700"
+            }`}
+            style={{ paddingLeft }}
+            onClick={() => handleSelectSection(node.id)}
+          >
+            <div className="text-[11px] text-gray-400">
+              {node.depth === 0 ? "Chương" : `Mục #${node.order_index}`}
+            </div>
+            <div className="font-medium truncate">{node.title}</div>
+          </button>
+          {canAddChildHere && (
+            <button
+              type="button"
+              className="px-1.5 py-1 text-[11px] border rounded-md bg-gray-50 hover:bg-gray-100 text-gray-700"
+              title="Thêm mục con"
+              onClick={() => {
+                setNewChildParentId(node.id);
+                setNewChildTitle("");
+              }}
+            >
+              +
+            </button>
+          )}
+          {canRenameHere && (
+            <button
+              type="button"
+              className="px-1.5 py-1 text-[11px] border rounded-md bg-gray-50 hover:bg-gray-100 text-gray-700"
+              title="Đổi tên mục"
+              onClick={() => startRename(node)}
+            >
+              ✎
+            </button>
+          )}
+          {canDeleteHere && (
+            <button
+              type="button"
+              className="px-1.5 py-1 text-[11px] border rounded-md bg-red-50 hover:bg-red-100 text-red-600"
+              title="Xoá mục"
+              onClick={() => handleDeleteNode(node.id, node.title)}
+            >
+              🗑
+            </button>
+          )}
+        </div>
+
+        {/* Form đổi tên inline */}
+        {renamingId === node.id && (
+          <form
+            className="flex items-center gap-2 text-xs"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!renamingTitle.trim() || renamingSaving) return;
+              handleRenameNode(node.id, renamingTitle);
+            }}
+          >
+            <input
+              className={`${INPUT} h-7 text-xs`}
+              value={renamingTitle}
+              onChange={(e) => setRenamingTitle(e.target.value)}
+            />
+            <button
+              type="submit"
+              className="px-2 py-1 rounded-md bg-blue-600 text-white text-[11px] hover:bg-blue-700 disabled:opacity-50"
+              disabled={renamingSaving || !renamingTitle.trim()}
+            >
+              Lưu
+            </button>
+            <button
+              type="button"
+              className="px-2 py-1 rounded-md border text-[11px] hover:bg-gray-50"
+              onClick={() => {
+                setRenamingId(null);
+                setRenamingTitle("");
+              }}
+            >
+              Hủy
+            </button>
+          </form>
+        )}
+
+        {/* Form thêm mục con inline */}
+        {newChildParentId === node.id && (
+          <form
+            className="flex items-center gap-2 text-xs"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!newChildTitle.trim() || creatingChild) return;
+              handleCreateChild(node.id, newChildTitle);
+            }}
+          >
+            <input
+              className={`${INPUT} h-7 text-xs`}
+              placeholder="Tiêu đề mục con..."
+              value={newChildTitle}
+              onChange={(e) => setNewChildTitle(e.target.value)}
+            />
+            <button
+              type="submit"
+              className="px-2 py-1 rounded-md bg-blue-600 text-white text-[11px] hover:bg-blue-700 disabled:opacity-50"
+              disabled={creatingChild || !newChildTitle.trim()}
+            >
+              {creatingChild ? "Đang tạo..." : "Thêm"}
+            </button>
+            <button
+              type="button"
+              className="px-2 py-1 rounded-md border text-[11px] hover:bg-gray-50"
+              onClick={() => {
+                setNewChildParentId(null);
+                setNewChildTitle("");
+              }}
+            >
+              Hủy
+            </button>
+          </form>
+        )}
+
+        {node.children.length > 0 && (
+          <div className="space-y-1">
+            {node.children.map((child) => renderTree(child))}
+          </div>
+        )}
+      </div>
+    );
   }
 
   // ========================
@@ -829,7 +1117,9 @@ export default function TocItemPage() {
             {errorMsg}
           </div>
         ) : null}
-        <p className="text-gray-600">Không tìm thấy nội dung cho mục này.</p>
+        <p className="text-gray-600">
+          Không tìm thấy nội dung cho mục này.
+        </p>
         <div className="mt-4">
           <button className={BTN} onClick={() => router.back()}>
             ← Quay lại
@@ -849,13 +1139,20 @@ export default function TocItemPage() {
               Sách của tôi
             </Link>
             <span className="mx-1">/</span>
-            <Link href={`/books/${bookId}`} className="hover:underline">
+            <Link
+              href={`/books/${bookId}`}
+              className="hover:underline"
+            >
               {data.book_title || "Sách"}
             </Link>
             <span className="mx-1">/</span>
-            <span className="text-gray-700">{data.item.title}</span>
+            <span className="text-gray-700">
+              {data.item.title}
+            </span>
           </div>
-          <h1 className="text-2xl font-bold">{data.item.title}</h1>
+          <h1 className="text-2xl font-bold">
+            {data.item.title}
+          </h1>
 
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <span className={statusChipClass(contentStatus)}>
@@ -881,7 +1178,10 @@ export default function TocItemPage() {
               <ul className="space-y-1 text-sm">
                 {data.assignments.map((a) => {
                   const isMe = user && a.user_id === user.id;
-                  const label = a.profile?.name || a.profile?.email || a.user_id;
+                  const label =
+                    a.profile?.name ||
+                    a.profile?.email ||
+                    a.user_id;
                   return (
                     <li
                       key={a.id}
@@ -892,7 +1192,9 @@ export default function TocItemPage() {
                         {isMe ? " (Bạn)" : ""}
                       </span>
                       <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">
-                        {a.role_in_item === "author" ? "Author" : "Editor"}
+                        {a.role_in_item === "author"
+                          ? "Author"
+                          : "Editor"}
                       </span>
                     </li>
                   );
@@ -906,7 +1208,9 @@ export default function TocItemPage() {
           {data.content?.updated_at && (
             <div>
               Cập nhật lần cuối:{" "}
-              {new Date(data.content.updated_at).toLocaleString()}
+              {new Date(
+                data.content.updated_at
+              ).toLocaleString()}
             </div>
           )}
           <button className={BTN} onClick={() => router.back()}>
@@ -988,80 +1292,41 @@ export default function TocItemPage() {
         )}
       </section>
 
-      {/* Khu vực soạn thảo: sidebar mục con + editor */}
+      {/* Khu vực soạn thảo: sidebar tree + editor */}
       <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 md:p-6">
-        <div className="grid grid-cols-1 md:grid-cols-[260px,1fr] gap-6 md:h-[520px]">
-          {/* Sidebar: danh sách mục trong chương */}
-          <aside className="flex flex-col h-full border-b md:border-b-0 md:border-r border-gray-100 pb-4 md:pb-0 md:pr-4">
-            <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="grid grid-cols-1 md:grid-cols-[280px,1fr] gap-6">
+          {/* Sidebar: cây mục */}
+          <aside className="flex flex-col border-b md:border-b-0 md:border-r border-gray-100 pb-4 md:pb-0 md:pr-4 md:max-h-[560px] md:overflow-y-auto">
+            <div className="flex items-center justify-between gap-2">
               <h3 className="text-sm font-semibold text-gray-800">
-                Mục trong chương này
+                Cấu trúc chương này
               </h3>
-              {subLoading && (
-                <span className="text-[11px] text-gray-400">Đang tải...</span>
+              {treeLoading && (
+                <span className="text-[11px] text-gray-400">
+                  Đang tải cây mục lục...
+                </span>
               )}
             </div>
 
-            <div className="flex-1 space-y-1 text-sm overflow-y-auto pr-1">
-              <button
-                type="button"
-                className={`w-full text-left px-3 py-2 rounded-md border ${
-                  activeSectionId === "root"
-                    ? "border-blue-500 bg-blue-50 text-blue-800"
-                    : "border-transparent hover:bg-gray-50 text-gray-700"
-                }`}
-                onClick={() => setActiveSectionId("root")}
-              >
-                <div className="text-xs uppercase tracking-wide text-gray-400">
-                  Chương
-                </div>
-                <div className="font-medium">{data.item.title}</div>
-              </button>
+            <p className="text-[11px] text-gray-500 mt-1">
+              Bấm vào từng mục để chỉnh nội dung. Dùng nút{" "}
+              <span className="font-semibold">+</span> để thêm
+              mục con, ✎ để đổi tên, 🗑 để xoá.
+            </p>
 
-              {subItems.map((s) => (
-                <div key={s.id} className="flex items-stretch gap-2">
-                  <button
-                    type="button"
-                    className={`flex-1 text-left px-3 py-2 rounded-md border ${
-                      activeSectionId === s.id
-                        ? "border-blue-500 bg-blue-50 text-blue-800"
-                        : "border-transparent hover:bg-gray-50 text-gray-700"
-                    }`}
-                    onClick={() => setActiveSectionId(s.id)}
-                  >
-                    <div className="text-xs text-gray-400">#{s.order_index}</div>
-                    <div className="font-medium">{s.title}</div>
-                  </button>
-                  {canManageSubsections && (
-                    <div className="flex flex-col justify-center gap-1 text-[11px]">
-                      <button
-                        type="button"
-                        className="px-2 py-0.5 text-blue-600 hover:text-blue-700"
-                        onClick={() => handleRenameSub(s.id, s.title)}
-                      >
-                        Sửa
-                      </button>
-                      <button
-                        type="button"
-                        className="px-2 py-0.5 text-red-500 hover:text-red-600"
-                        onClick={() => handleDeleteSub(s.id)}
-                      >
-                        Xoá
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
+            <div className="mt-3 text-sm flex-1 overflow-y-auto space-y-1">
+              {treeRoot ? (
+                renderTree(treeRoot)
+              ) : (
+                <p className="text-xs text-gray-500">
+                  Chưa có mục con nào trong chương này.
+                </p>
+              )}
             </div>
-
-            {/* Thêm mục con mới */}
-            {canManageSubsections && (
-              <AddSubSectionForm onCreate={handleCreateSub} />
-            )}
           </aside>
 
           {/* Editor cho section đang chọn */}
-          <div className="flex flex-col md:h-full space-y-4">
+          <div className="flex flex-col gap-4 md:max-h-[560px] md:overflow-y-auto">
             <div className="flex items-center justify-between gap-2">
               <div>
                 <h2 className="font-semibold text-lg">
@@ -1069,7 +1334,10 @@ export default function TocItemPage() {
                 </h2>
                 <p className="text-xs text-gray-500">
                   Bạn đang chỉnh sửa phần{" "}
-                  {activeSectionId === "root" ? "chương chính" : "mục con"}.
+                  {activeSectionId === data.item.id
+                    ? "chương chính"
+                    : "một mục con trong chương"}
+                  .
                 </p>
               </div>
               {canEditContent ? (
@@ -1083,7 +1351,7 @@ export default function TocItemPage() {
               )}
             </div>
 
-            {/* Toolbar đơn giản */}
+            {/* Toolbar */}
             <div className="flex flex-wrap gap-2 text-sm border rounded-lg px-3 py-2 bg-gray-50">
               <button
                 type="button"
@@ -1148,16 +1416,12 @@ export default function TocItemPage() {
             {/* contentEditable */}
             <div
               ref={editorRef}
-              className={`${INPUT} min-h-[260px] max-h-[420px] leading-relaxed text-sm whitespace-pre-wrap overflow-y-auto`}
+              className={`${INPUT} min-h-[260px] max-h-[360px] leading-relaxed text-sm whitespace-pre-wrap overflow-y-auto`}
               contentEditable={canEditContent}
               suppressContentEditableWarning
-              onInput={(e) => {
-                updateActiveHtml(e.currentTarget.innerHTML);
-                saveSelection();
-              }}
-              onMouseUp={saveSelection}
-              onKeyUp={saveSelection}
-              onBlur={saveSelection}
+              onInput={(e) =>
+                updateActiveHtml(e.currentTarget.innerHTML)
+              }
             />
 
             {/* Nút lưu phần hiện tại */}
@@ -1173,7 +1437,7 @@ export default function TocItemPage() {
               </button>
               <button
                 className={BTN}
-                onClick={() => setActiveSectionId("root")}
+                onClick={() => setActiveSectionId(data.item.id)}
               >
                 Về chương chính
               </button>
@@ -1188,8 +1452,9 @@ export default function TocItemPage() {
           Hành động cho cả chương
         </h3>
         <p className="text-xs text-slate-600">
-          Các nút bên dưới áp dụng cho chương hiện tại và tất cả mục con bên
-          trong chương này.
+          Các nút bên dưới áp dụng cho chương hiện tại và
+          tất cả mục con bên trong chương này (cho những mục
+          mà bạn đã mở / chỉnh sửa nội dung).
         </p>
 
         <div className="flex flex-wrap items-center gap-3">
@@ -1198,7 +1463,9 @@ export default function TocItemPage() {
             onClick={handleSaveAll}
             disabled={!canEditContent || savingAll}
           >
-            {savingAll ? "Đang lưu cả chương..." : "Lưu bản nháp chương"}
+            {savingAll
+              ? "Đang lưu cả chương..."
+              : "Lưu bản nháp chương"}
           </button>
 
           <button
@@ -1206,7 +1473,9 @@ export default function TocItemPage() {
             onClick={handleSubmitChapter}
             disabled={!canSubmit || submitting}
           >
-            {submitting ? "Đang nộp chương..." : "Nộp chương cho editor"}
+            {submitting
+              ? "Đang nộp chương..."
+              : "Nộp chương cho editor"}
           </button>
 
           <button
@@ -1242,9 +1511,9 @@ export default function TocItemPage() {
               Import nội dung từ file Word (.docx)
             </h4>
             <p className="text-xs text-slate-600">
-              Dùng khi bạn đã có bản thảo chương trong Word với heading chuẩn.
-              Hệ thống sẽ đọc nội dung, tách thành chương + mục con theo
-              heading, cho xem trước, sau đó mới ghi vào DB.
+              Dùng khi bạn đã có bản thảo chương trong Word với heading
+              chuẩn. Hệ thống sẽ đọc nội dung, tách thành chương + mục con
+              theo heading, cho xem trước, sau đó mới ghi vào DB.
             </p>
 
             <div className="flex flex-col md:flex-row gap-3 md:items-center">
@@ -1284,7 +1553,9 @@ export default function TocItemPage() {
                     type="checkbox"
                     className="rounded border-slate-300"
                     checked={replaceExistingSubs}
-                    onChange={(e) => setReplaceExistingSubs(e.target.checked)}
+                    onChange={(e) =>
+                      setReplaceExistingSubs(e.target.checked)
+                    }
                   />
                   Xoá toàn bộ mục con hiện tại và tạo lại từ file Word
                 </label>
@@ -1352,9 +1623,9 @@ export default function TocItemPage() {
             Hành động của Editor (cho cả chương)
           </h3>
           <p className="text-xs text-slate-600">
-            Chỉ editor mới thấy phần này. Bạn có thể duyệt hoặc yêu cầu tác giả
-            chỉnh sửa khi trạng thái chương đang là{" "}
-            <strong>Đã nộp</strong>.
+            Chỉ editor mới thấy phần này. Bạn có thể duyệt hoặc
+            yêu cầu tác giả chỉnh sửa khi trạng thái chương đang
+            là <strong>Đã nộp</strong>.
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -1369,52 +1640,13 @@ export default function TocItemPage() {
               onClick={handleRequestChangeChapter}
               disabled={!canRequestChange || requestingChange}
             >
-              {requestingChange ? "Đang gửi yêu cầu..." : "Yêu cầu chỉnh sửa chương"}
+              {requestingChange
+                ? "Đang gửi yêu cầu..."
+                : "Yêu cầu chỉnh sửa chương"}
             </button>
           </div>
         </section>
       )}
     </main>
-  );
-}
-
-/** Form nhỏ để thêm mục con mới trong sidebar – gọn trên 1 dòng */
-function AddSubSectionForm(props: { onCreate: (title: string) => void }) {
-  const [title, setTitle] = useState("");
-  const [creating, setCreating] = useState(false);
-
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!title.trim() || creating) return;
-    setCreating(true);
-    try {
-      await props.onCreate(title.trim());
-      setTitle("");
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  return (
-    <form
-      onSubmit={handleSubmit}
-      className="border-t border-gray-100 pt-2 mt-2"
-    >
-      <div className="flex items-center gap-2">
-        <input
-          className={`${INPUT} text-xs py-1.5`}
-          placeholder="Tiêu đề mục con mới..."
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-        />
-        <button
-          type="submit"
-          className="inline-flex items-center justify-center px-3 py-1.5 rounded-md bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          disabled={creating || !title.trim()}
-        >
-          {creating ? "Đang tạo..." : "Thêm"}
-        </button>
-      </div>
-    </form>
   );
 }
