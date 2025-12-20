@@ -10,6 +10,8 @@ type Body = {
   profile_id?: string;
 };
 
+const DEFAULT_PASSWORD = "12345678@";
+
 export async function POST(req: NextRequest) {
   const supabase = getRouteClient(); // client dùng cookie (session user)
   const admin = getAdminClient();    // service-role client
@@ -58,7 +60,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 4) Lấy email của user đó
+  // 4) Kiểm tra user có tồn tại không (profiles)
   const { data: targetProfile, error: tpErr } = await admin
     .from("profiles")
     .select("id,email")
@@ -68,30 +70,31 @@ export async function POST(req: NextRequest) {
   if (tpErr) {
     return NextResponse.json({ error: tpErr.message }, { status: 500 });
   }
-  if (!targetProfile || !targetProfile.email) {
+  if (!targetProfile) {
     return NextResponse.json(
-      { error: "Không tìm thấy user hoặc user chưa có email" },
+      { error: "Không tìm thấy user trong bảng profiles" },
       { status: 404 }
     );
   }
 
-  // 5) Gửi email reset password
-  // redirectTo: trang mà anh sẽ làm để người dùng đặt mật khẩu mới
-  const base =
-    process.env.NEXT_PUBLIC_SITE_URL || new URL("/", req.url).origin;
-  const redirectTo = new URL("/reset-password", base).toString();
+  // 5) Đặt lại mật khẩu mặc định qua Supabase Admin API
+  const { error: upErr } = await admin.auth.admin.updateUserById(targetId, {
+    password: DEFAULT_PASSWORD,
+  });
 
-  const { error: rErr } = await admin.auth.resetPasswordForEmail(
-    targetProfile.email,
-    { redirectTo }
-  );
-
-  if (rErr) {
+  if (upErr) {
     return NextResponse.json(
-      { error: "Gửi email reset mật khẩu thất bại", detail: rErr.message },
+      {
+        error: "Đặt lại mật khẩu mặc định thất bại",
+        detail: upErr.message,
+      },
       { status: 500 }
     );
   }
 
-  return NextResponse.json({ ok: true });
+  // tuỳ bạn: có thể không trả password về JSON, hoặc chỉ log trên UI admin
+  return NextResponse.json({
+    ok: true,
+    new_password: DEFAULT_PASSWORD,
+  });
 }
