@@ -81,32 +81,44 @@ export default function HomePage() {
         rightBadge: "My Books",
       },
       {
-        title: "Biên soạn",
-        desc: "Chưa triển khai (sẽ bổ sung sau)",
-        icon: "✍️",
-        iconBg: "linear-gradient(135deg,#E8F8EF,#FFFFFF)",
-        bg: "radial-gradient(600px 300px at 110% -20%, rgba(43,174,114,.10), transparent 50%), linear-gradient(180deg,#ffffff,#f6fdf9)",
-        ring: "#A5D6A7",
-        badgeBorder: "#81C784",
-        badgeText: "#2BAE72",
-        disabled: true,
-        rightBadge: "Sắp có",
-      },
-      {
+        href: "/publish",
         title: "Xuất bản",
-        desc: "Chưa triển khai (sẽ bổ sung sau)",
+        desc: "Chuẩn bị bản phát hành EPUB/PDF, duyệt nội dung và công bố",
         icon: "🚀",
         iconBg: "linear-gradient(135deg,#FFF4E0,#FFFFFF)",
         bg: "radial-gradient(600px 300px at -10% -20%, rgba(245,159,0,.10), transparent 50%), linear-gradient(180deg,#ffffff,#fffaf0)",
         ring: "#FFCC80",
         badgeBorder: "#FFB74D",
         badgeText: "#F59F00",
-        disabled: true,
-        rightBadge: "Sắp có",
+        rightBadge: "Publish",
+      },
+      {
+        href: "/viewer",
+        title: "Xem tài liệu",
+        desc: "Truy cập kho tài liệu số đã được xuất bản để đọc trực tuyến",
+        icon: "📖",
+        iconBg: "linear-gradient(135deg,#EEF7FF,#FFFFFF)",
+        bg: "radial-gradient(600px 300px at 110% -20%, rgba(14,123,208,.06), transparent 50%), linear-gradient(180deg,#ffffff,#f6f8ff)",
+        ring: "#9FA8DA",
+        badgeBorder: "#9FA8DA",
+        badgeText: "#3949AB",
+        rightBadge: "Viewer",
+      },
+      {
+        href: "/admin",
+        title: "Quản trị",
+        desc: "Quản lý người dùng, phân quyền, đơn vị và cấu hình hệ thống",
+        icon: "⚙️",
+        iconBg: "linear-gradient(135deg,#F2F2F2,#FFFFFF)",
+        bg: "radial-gradient(600px 300px at 110% -20%, rgba(0,0,0,.06), transparent 50%), linear-gradient(180deg,#ffffff,#f8f9fb)",
+        ring: "#B0BEC5",
+        badgeBorder: "#B0BEC5",
+        badgeText: "#37474F",
+        rightBadge: "Admin",
       },
     ];
 
-    // Card đăng nhập / user
+    // Card đăng nhập (chỉ hiện khi chưa đăng nhập)
     if (!loading && !user) {
       items.push({
         href: "/login",
@@ -120,20 +132,9 @@ export default function HomePage() {
         badgeText: "#0E7BD0",
         rightBadge: "Login",
       });
-    } else if (!loading && user) {
-      items.push({
-        href: "/books",
-        title: displayName ? `Xin chào, ${displayName}` : "Tài khoản",
-        desc: "Vào My Books để biên tập sách/chuyên đề",
-        icon: "👤",
-        iconBg: "linear-gradient(135deg,#F2F2F2,#FFFFFF)",
-        bg: "radial-gradient(600px 300px at 110% -20%, rgba(0,0,0,.06), transparent 50%), linear-gradient(180deg,#ffffff,#f8f9fb)",
-        ring: "#B0BEC5",
-        badgeBorder: "#B0BEC5",
-        badgeText: "#37474F",
-        rightBadge: "Tài khoản",
-      });
     }
+
+    // ❌ Không còn card “Xin chào, user / Tài khoản” nữa
 
     return items;
   }, [user, profile, loading, displayName]);
@@ -194,7 +195,10 @@ export default function HomePage() {
                 </Link>
 
                 {!loading && !user ? (
-                  <Link className="inline-flex items-center justify-center rounded-lg px-4 py-2 font-bold gap-2 border bg-white hover:bg-gray-50" href="/login">
+                  <Link
+                    className="inline-flex items-center justify-center rounded-lg px-4 py-2 font-bold gap-2 border bg-white hover:bg-gray-50"
+                    href="/login"
+                  >
                     Đăng nhập
                   </Link>
                 ) : (
@@ -270,7 +274,10 @@ export default function HomePage() {
                   color: panel.colors.text,
                 }}
               >
-                <div className="absolute left-0 top-0 bottom-0 w-1.5 opacity-90" style={{ background: panel.colors.accent }} />
+                <div
+                  className="absolute left-0 top-0 bottom-0 w-1.5 opacity-90"
+                  style={{ background: panel.colors.accent }}
+                />
                 <h3 className="text-sm uppercase tracking-wider font-extrabold">{panel.title}</h3>
                 <p className="mt-2 leading-7 text-[.95rem]">{panel.text}</p>
                 <div
@@ -294,7 +301,11 @@ export default function HomePage() {
             {CARD_ITEMS.map((it) => {
               const CardInner = (
                 <>
-                  <div aria-hidden className="absolute inset-0 opacity-[.9] transition-opacity" style={{ background: it.bg }} />
+                  <div
+                    aria-hidden
+                    className="absolute inset-0 opacity-[.9] transition-opacity"
+                    style={{ background: it.bg }}
+                  />
                   <div
                     className="absolute -inset-1 rounded-2xl opacity-0 group-hover:opacity-100 transition ring-1 ring-[var(--ring)]"
                     style={{ ["--ring" as any]: it.ring }}
@@ -302,7 +313,10 @@ export default function HomePage() {
                   <div className="relative p-5">
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-center gap-3">
-                        <div className="w-11 h-11 rounded-xl grid place-items-center shadow ring-1 ring-black/5" style={{ background: it.iconBg }}>
+                        <div
+                          className="w-11 h-11 rounded-xl grid place-items-center shadow ring-1 ring-black/5"
+                          style={{ background: it.iconBg }}
+                        >
                           <span className="text-xl">{it.icon}</span>
                         </div>
                         <h3 className="font-semibold text-gray-900">{it.title}</h3>
