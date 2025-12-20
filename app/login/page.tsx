@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, FormEvent } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 /* Inline icons (không phụ thuộc lib ngoài) */
@@ -30,7 +30,6 @@ const Mail = (p: any) => (
 
 export default function LoginPage() {
   const router = useRouter();
-  const search = useSearchParams();
 
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
@@ -39,10 +38,21 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [nextUrl, setNextUrl] = useState("/books");
 
-  // Lấy & "khử độc" next URL (chỉ cho phép path nội bộ)
-  const rawNext = search?.get("next") || "/books";
-  const nextUrl = rawNext.startsWith("/") ? rawNext : "/books";
+  // Lấy & "khử độc" next URL từ query (chỉ cho phép path nội bộ)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const url = new URL(window.location.href);
+      const rawNext = url.searchParams.get("next");
+      if (rawNext && rawNext.startsWith("/")) {
+        setNextUrl(rawNext);
+      }
+    } catch {
+      // nếu parse lỗi thì giữ nguyên /books
+    }
+  }, []);
 
   // Nếu đã có session -> đi thẳng tới next (tránh kẹt /login)
   useEffect(() => {
