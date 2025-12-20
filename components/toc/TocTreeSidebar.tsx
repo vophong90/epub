@@ -305,16 +305,7 @@ export function TocTreeSidebar({
       </button>
 
       {/* Tree */}
-      <div className="space-y-1">
-        {treeReady.children?.length ? (
-      treeReady.children
-      .slice()
-      .sort((a, b) => a.order_index - b.order_index)
-      .map((c) => renderNode(c, [c.order_index]))
-    ) : (
-      <div className="text-xs text-gray-500">Chưa có mục con.</div>
-    )}
-      </div>
+     <div className="space-y-1">{renderNode(treeReady, [])}</div>
     </aside>
   );
 }
