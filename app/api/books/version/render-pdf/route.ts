@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getRouteClient } from "@/lib/supabaseServer";
 import { getAdminClient } from "@/lib/supabase-admin";
 
-import chromium from "@sparticuz/chromium";
+import chromium from "@sparticuz/chromium-min";
 import puppeteer from "puppeteer-core";
 
 export const runtime = "nodejs";
@@ -142,14 +142,9 @@ async function buildNodesFromDB(
 
 /** Launch browser dùng puppeteer-core + @sparticuz/chromium (serverless-friendly) */
 async function launchBrowser() {
-  const isProd =
-    process.env.VERCEL === "1" || process.env.NODE_ENV === "production";
-
-  let executablePath: string | undefined = undefined;
-  if (isProd) {
-    // Trên Vercel / Lambda: chromium.executablePath() sẽ trả về /tmp/chromium
-    executablePath = await chromium.executablePath();
-  }
+  const executablePath = await chromium.executablePath(
+    "https://github.com/Sparticuz/chromium/releases/download/v141.0.0/chromium-v141.0.0-pack.x64.tar"
+  );
 
   const browser = await puppeteer.launch({
     args: chromium.args,
