@@ -1,3 +1,4 @@
+// app/books/[id]/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -79,12 +80,6 @@ type TocItemDetailResponse = {
   assignments: { user_id: string; role_in_item: "author" | "editor" }[];
 };
 
-type VersionsApiResponse = {
-  ok: boolean;
-  is_admin: boolean;
-  versions: BookVersion[];
-};
-
 function formatDateTime(dt: string | null | undefined) {
   if (!dt) return "";
   const d = new Date(dt);
@@ -124,14 +119,6 @@ export default function BookDetailPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [creatingVersion, setCreatingVersion] = useState(false);
 
-  /** Quản lý nhiều phiên bản + publish (admin) */
-  const [versions, setVersions] = useState<BookVersion[]>([]);
-  const [versionsLoading, setVersionsLoading] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [publishingId, setPublishingId] = useState<string | null>(null);
-  /** trạng thái clone bản nháp mới từ bản publish */
-  const [cloningDraft, setCloningDraft] = useState(false);
-
   /** Modal state cho tạo / sửa TOC */
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<"create" | "edit">("create");
@@ -141,13 +128,20 @@ export default function BookDetailPage() {
   const [modalSaving, setModalSaving] = useState(false);
   const [modalDeleting, setModalDeleting] = useState(false);
 
-  const [modalSelectedAuthors, setModalSelectedAuthors] = useState<string[]>([]);
-  const [modalOriginalAuthors, setModalOriginalAuthors] = useState<string[]>([]);
-  const [modalLoadingAssignments, setModalLoadingAssignments] = useState(false);
+  const [modalSelectedAuthors, setModalSelectedAuthors] = useState<string[]>(
+    []
+  );
+  const [modalOriginalAuthors, setModalOriginalAuthors] = useState<string[]>(
+    []
+  );
+  const [modalLoadingAssignments, setModalLoadingAssignments] =
+    useState(false);
 
   /** Search user để phân công (theo email) */
   const [userSearchQuery, setUserSearchQuery] = useState("");
-  const [userSearchResults, setUserSearchResults] = useState<MemberProfile[]>([]);
+  const [userSearchResults, setUserSearchResults] = useState<MemberProfile[]>(
+    []
+  );
   const [userSearchLoading, setUserSearchLoading] = useState(false);
   const [userSearchError, setUserSearchError] = useState<string | null>(null);
 
@@ -215,38 +209,6 @@ export default function BookDetailPage() {
     }
 
     loadAll();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [bookId]);
-
-  /** Load danh sách version + flag admin qua API */
-  useEffect(() => {
-    if (!bookId) return;
-
-    let cancelled = false;
-
-    const loadVersions = async () => {
-      setVersionsLoading(true);
-      try {
-        const res = await fetch(`/api/books/versions?book_id=${bookId}`);
-        const j = (await res.json().catch(() => ({}))) as VersionsApiResponse;
-        if (!res.ok || !j.ok) {
-          console.error("load versions error:", (j as any).error || res.status);
-          return;
-        }
-        if (cancelled) return;
-        setVersions(j.versions || []);
-        setIsAdmin(!!j.is_admin);
-      } catch (e) {
-        console.error("load versions error:", e);
-      } finally {
-        if (!cancelled) setVersionsLoading(false);
-      }
-    };
-
-    loadVersions();
 
     return () => {
       cancelled = true;
@@ -329,127 +291,8 @@ export default function BookDetailPage() {
       // reload TOC & members cho version mới
       await loadTocTree(v.id);
       await loadMembers(v.id);
-
-      // reload danh sách versions (panel admin)
-      try {
-        const res = await fetch(`/api/books/versions?book_id=${bookId}`);
-        const j = (await res.json().catch(() => ({}))) as VersionsApiResponse;
-        if (res.ok && j.ok) {
-          setVersions(j.versions || []);
-          setIsAdmin(!!j.is_admin);
-        }
-      } catch (e) {
-        console.error("reload versions after create error:", e);
-      }
     } finally {
       setCreatingVersion(false);
-    }
-  }
-
-  /** Publish version (admin) */
-  async function handlePublish(versionId: string) {
-    if (
-      !window.confirm(
-        "Bạn chắc chắn muốn publish phiên bản này? Sau khi publish sẽ khoá sửa nội dung."
-      )
-    ) {
-      return;
-    }
-    setPublishingId(versionId);
-    try {
-      const res = await fetch("/api/books/version/publish", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ version_id: versionId }),
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok || (j as any).error) {
-        alert((j as any).error || "Publish phiên bản thất bại");
-      } else {
-        // reload danh sách phiên bản
-        try {
-          const again = await fetch(`/api/books/versions?book_id=${bookId}`);
-          const jj = (await again
-            .json()
-            .catch(() => ({}))) as VersionsApiResponse;
-          if (again.ok && jj.ok) {
-            setVersions(jj.versions || []);
-            setIsAdmin(!!jj.is_admin);
-          }
-        } catch (e) {
-          console.error("reload versions after publish error:", e);
-        }
-
-        // cập nhật status version hiện tại (nếu trùng id)
-        setVersion((prev) =>
-          prev && prev.id === versionId ? { ...prev, status: "published" } : prev
-        );
-      }
-    } catch (e: any) {
-      alert(e?.message || "Lỗi khi publish phiên bản");
-    } finally {
-      setPublishingId(null);
-    }
-  }
-
-  /** Tạo bản nháp mới từ phiên bản published mới nhất */
-  async function handleCloneDraftFromPublished() {
-    if (!bookId) return;
-
-    if (
-      !window.confirm(
-        "Tạo bản nháp mới từ phiên bản đã publish mới nhất? Phiên bản nháp mới sẽ được dùng để tiếp tục biên tập."
-      )
-    ) {
-      return;
-    }
-
-    setCloningDraft(true);
-    try {
-      const res = await fetch("/api/books/version/clone", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ book_id: bookId }),
-      });
-
-      const j = (await res.json().catch(() => ({}))) as {
-        ok?: boolean;
-        error?: string;
-        new_version?: BookVersion;
-      };
-
-      if (!res.ok || !j.ok || !j.new_version) {
-        alert(j.error || "Không tạo được bản nháp mới.");
-        return;
-      }
-
-      const newVer = j.new_version;
-
-      // Cập nhật version hiện tại sang bản nháp mới
-      setVersion(newVer);
-
-      // Reload TOC + members cho bản nháp mới
-      await loadTocTree(newVer.id);
-      await loadMembers(newVer.id);
-
-      // Reload danh sách versions (panel admin)
-      try {
-        const again = await fetch(`/api/books/versions?book_id=${bookId}`);
-        const jj = (await again
-          .json()
-          .catch(() => ({}))) as VersionsApiResponse;
-        if (again.ok && jj.ok) {
-          setVersions(jj.versions || []);
-          setIsAdmin(!!jj.is_admin);
-        }
-      } catch (e) {
-        console.error("reload versions after clone error:", e);
-      }
-    } catch (e: any) {
-      console.error("handleCloneDraftFromPublished error:", e);
-      alert(e?.message || "Lỗi khi tạo bản nháp mới");
-    } finally {
-      setCloningDraft(false);
     }
   }
 
@@ -690,7 +533,7 @@ export default function BookDetailPage() {
 
   if (!bookId) {
     return (
-      <div className="p-6">
+      <div className="max-w-6xl mx-auto px-4 py-6">
         <p>Thiếu ID sách.</p>
       </div>
     );
@@ -698,7 +541,7 @@ export default function BookDetailPage() {
 
   if (loading) {
     return (
-      <div className="p-6">
+      <div className="max-w-6xl mx-auto px-4 py-6">
         <p>Đang tải dữ liệu…</p>
       </div>
     );
@@ -706,7 +549,7 @@ export default function BookDetailPage() {
 
   if (errorMsg) {
     return (
-      <div className="p-6 space-y-4">
+      <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
         <p className="text-red-600">{errorMsg}</p>
         <Link href="/books" className={BTN}>
           ← Quay lại danh sách
@@ -717,7 +560,7 @@ export default function BookDetailPage() {
 
   if (!book) {
     return (
-      <div className="p-6 space-y-4">
+      <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
         <p>Không tìm thấy sách.</p>
         <Link href="/books" className={BTN}>
           ← Quay lại danh sách
@@ -727,7 +570,7 @@ export default function BookDetailPage() {
   }
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
       {/* Breadcrumb */}
       <div className="text-sm text-gray-500">
         <Link href="/books" className="hover:underline">
@@ -777,300 +620,100 @@ export default function BookDetailPage() {
               {creatingVersion ? "Đang tạo phiên bản…" : "Tạo phiên bản đầu tiên"}
             </button>
           </div>
-
-          {/* Panel phiên bản cho admin, trong trường hợp sau này có sẵn version qua API */}
-          {isAdmin && (
-            <section className="rounded-lg border bg-white p-4 shadow-sm">
-              <h2 className="text-lg font-semibold">Phiên bản của sách này</h2>
-              {versionsLoading ? (
-                <p className="mt-2 text-sm text-gray-500">
-                  Đang tải danh sách phiên bản...
-                </p>
-              ) : versions.length === 0 ? (
-                <p className="mt-2 text-sm text-gray-500">
-                  Chưa có phiên bản nào được ghi nhận.
-                </p>
-              ) : (
-                <ul className="mt-3 space-y-2 text-sm">
-                  {versions.map((v) => (
-                    <li
-                      key={v.id}
-                      className="flex items-center justify-between gap-3 rounded border px-3 py-2"
-                    >
-                      <div className="space-y-0.5">
-                        <div className="font-medium">
-                          Phiên bản {v.version_no}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          Trạng thái:{" "}
-                          <span
-                            className={
-                              v.status === "published"
-                                ? "font-semibold text-green-700"
-                                : "text-gray-700"
-                            }
-                          >
-                            {v.status}
-                          </span>
-                          {v.created_at && (
-                            <>
-                              {" · Tạo lúc "}
-                              {formatDateTime(v.created_at)}
-                            </>
-                          )}
-                        </div>
-                      </div>
-                      <button
-                        className={BTN}
-                        onClick={() => handlePublish(v.id)}
-                        disabled={
-                          v.status === "published" || publishingId === v.id
-                        }
-                      >
-                        {v.status === "published"
-                          ? "Đã publish"
-                          : publishingId === v.id
-                          ? "Đang publish..."
-                          : "Publish phiên bản"}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <p className="mt-2 text-xs text-gray-400">
-                Chỉ admin thấy panel này. Publish sẽ đặt trạng thái phiên bản
-                thành <strong>published</strong> và khoá sửa nội dung.
-              </p>
-            </section>
-          )}
         </div>
       )}
 
       {/* Khi đã có version */}
       {version && (
-        <div className="grid gap-6 md:grid-cols-[2fr,1fr]">
-          {/* LEFT: TOC + actions */}
-          <div className="space-y-4">
-            <div className="rounded-lg border bg-white p-4 shadow-sm">
-              <div className="mb-3 flex items-center justify-between">
-                <div>
-                  <h2 className="text-lg font-semibold">
-                    Mục lục (TOC) của phiên bản này
-                  </h2>
-                  <p className="text-xs text-gray-500">
-                    Vai trò của bạn: {tocData?.role || "—"}
-                  </p>
-                </div>
-                {isEditor && (
-                  <button
-                    className={BTN_PRIMARY}
-                    onClick={() => openCreateModal(null)}
-                  >
-                    + Tạo chương mới
-                  </button>
-                )}
-              </div>
-
-              {rootItems.length === 0 && (
-                <p className="text-sm text-gray-500">
-                  Chưa có chương nào. Nhấn “Tạo chương mới” để bắt đầu.
+        <div className="space-y-4">
+          <div className="rounded-lg border bg-white p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold">
+                  Mục lục (TOC) của phiên bản này
+                </h2>
+                <p className="text-xs text-gray-500">
+                  Vai trò của bạn: {tocData?.role || "—"}
                 </p>
+              </div>
+              {isEditor && (
+                <button
+                  className={BTN_PRIMARY}
+                  onClick={() => openCreateModal(null)}
+                >
+                  + Tạo chương mới
+                </button>
               )}
+            </div>
 
-              <div className="space-y-2">
-                {rootItems.map((it, idx) => (
-                  <div
-                    key={it.id}
-                    className="rounded-md border border-gray-200 bg-white px-3 py-2 transition hover:bg-gray-50"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1">
-                        <button
-                          type="button"
-                          className="text-left text-sm font-semibold text-gray-900 hover:underline"
-                          onClick={() => openEditModal(it)}
-                        >
-                          {idx + 1}. {it.title}
-                        </button>
-                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                          <span>ID: {it.id.slice(0, 8)}…</span>
-                          <span>· Thứ tự: {it.order_index}</span>
-                          {childrenMap.get(it.id)?.length ? (
-                            <span>
-                              · {childrenMap.get(it.id)?.length} mục con
-                            </span>
-                          ) : null}
-                        </div>
+            {rootItems.length === 0 && (
+              <p className="text-sm text-gray-500">
+                Chưa có chương nào. Nhấn “Tạo chương mới” để bắt đầu.
+              </p>
+            )}
+
+            <div className="space-y-2">
+              {rootItems.map((it, idx) => (
+                <div
+                  key={it.id}
+                  className="rounded-md border border-gray-200 bg-white px-3 py-2 transition hover:bg-gray-50"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1">
+                      <button
+                        type="button"
+                        className="text-left text-sm font-semibold text-gray-900 hover:underline"
+                        onClick={() => openEditModal(it)}
+                      >
+                        {idx + 1}. {it.title}
+                      </button>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                        <span>ID: {it.id.slice(0, 8)}…</span>
+                        <span>· Thứ tự: {it.order_index}</span>
+                        {childrenMap.get(it.id)?.length ? (
+                          <span>
+                            · {childrenMap.get(it.id)?.length} mục con
+                          </span>
+                        ) : null}
                       </div>
+                    </div>
 
-                      {isEditor && (
-                        <div className="flex flex-col items-end gap-1 text-xs">
-                          <div className="flex gap-1">
-                            <button
-                              className={BTN}
-                              onClick={() => handleMoveItem(it.id, "up")}
-                              title="Đưa lên trên"
-                            >
-                              ↑
-                            </button>
-                            <button
-                              className={BTN}
-                              onClick={() => handleMoveItem(it.id, "down")}
-                              title="Đưa xuống dưới"
-                            >
-                              ↓
-                            </button>
-                          </div>
+                    {isEditor && (
+                      <div className="flex flex-col items-end gap-1 text-xs">
+                        <div className="flex gap-1">
                           <button
                             className={BTN}
-                            onClick={() => openCreateModal(it.id)}
+                            onClick={() => handleMoveItem(it.id, "up")}
+                            title="Đưa lên trên"
                           >
-                            + Mục con
+                            ↑
                           </button>
-                          <Link
-                            href={`/books/${book.id}/toc/${it.id}`}
-                            className="mt-1 text-xs text-blue-600 hover:underline"
+                          <button
+                            className={BTN}
+                            onClick={() => handleMoveItem(it.id, "down")}
+                            title="Đưa xuống dưới"
                           >
-                            Mở trang biên soạn →
-                          </Link>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* RIGHT: Members + Version panel cho admin */}
-          <div className="space-y-4">
-            <div className="rounded-lg border bg-white p-4 shadow-sm">
-              <h2 className="text-lg font-semibold">
-                Thành viên & phân quyền (cấp sách)
-              </h2>
-              <p className="mb-2 text-xs text-gray-500">
-                Danh sách này tổng hợp từ quyền ở cấp sách (
-                <code>book_permissions</code>). Khi bạn phân công chương cho một
-                user chưa có trong sách, backend sẽ tự thêm họ với vai trò{" "}
-                <strong>author</strong>.
-              </p>
-              {members.length === 0 ? (
-                <p className="text-sm text-gray-500">
-                  Chưa có thành viên nào. Bạn có thể phân công tác giả ở từng
-                  chương, hệ thống sẽ tự thêm họ vào đây.
-                </p>
-              ) : (
-                <ul className="mt-2 space-y-2 text-sm">
-                  {members.map((m) => (
-                    <li
-                      key={m.user_id}
-                      className="flex items-center justify-between rounded border px-2 py-1"
-                    >
-                      <div>
-                        <div className="font-medium">
-                          {m.profile?.name || "(Không tên)"}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {m.profile?.email}
-                        </div>
-                      </div>
-                      <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
-                        {m.role}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-
-            {isAdmin && (
-              <section className="rounded-lg border bg-white p-4 shadow-sm">
-                <h2 className="text-lg font-semibold">
-                  Phiên bản của sách này
-                </h2>
-
-                {/* Khối tạo bản nháp mới từ bản publish */}
-                {!versionsLoading &&
-                  versions.length > 0 &&
-                  versions.some((v) => v.status === "published") &&
-                  !versions.some((v) => v.status === "draft") && (
-                    <div className="mt-2 mb-3 flex items-center justify-between gap-2 rounded bg-blue-50 px-3 py-2 text-xs text-blue-800">
-                      <span>
-                        Hiện không có phiên bản nháp. Bạn có thể tạo bản nháp
-                        mới từ phiên bản đã publish mới nhất để tiếp tục biên
-                        tập.
-                      </span>
-                      <button
-                        className={`${BTN_PRIMARY} !px-3 !py-1 text-xs`}
-                        onClick={handleCloneDraftFromPublished}
-                        disabled={cloningDraft}
-                      >
-                        {cloningDraft ? "Đang tạo…" : "Tạo bản nháp mới"}
-                      </button>
-                    </div>
-                  )}
-
-                {versionsLoading ? (
-                  <p className="mt-2 text-sm text-gray-500">
-                    Đang tải danh sách phiên bản...
-                  </p>
-                ) : versions.length === 0 ? (
-                  <p className="mt-2 text-sm text-gray-500">
-                    Chưa có phiên bản nào được ghi nhận.
-                  </p>
-                ) : (
-                  <ul className="mt-3 space-y-2 text-sm">
-                    {versions.map((v) => (
-                      <li
-                        key={v.id}
-                        className="flex items-center justify-between gap-3 rounded border px-3 py-2"
-                      >
-                        <div className="space-y-0.5">
-                          <div className="font-medium">
-                            Phiên bản {v.version_no}
-                          </div>
-                          <div className="text-xs text-gray-500">
-                            Trạng thái:{" "}
-                            <span
-                              className={
-                                v.status === "published"
-                                  ? "font-semibold text-green-700"
-                                  : "text-gray-700"
-                              }
-                            >
-                              {v.status}
-                            </span>
-                            {v.created_at && (
-                              <>
-                                {" · Tạo lúc "}
-                                {formatDateTime(v.created_at)}
-                              </>
-                            )}
-                          </div>
+                            ↓
+                          </button>
                         </div>
                         <button
                           className={BTN}
-                          onClick={() => handlePublish(v.id)}
-                          disabled={
-                            v.status === "published" || publishingId === v.id
-                          }
+                          onClick={() => openCreateModal(it.id)}
                         >
-                          {v.status === "published"
-                            ? "Đã publish"
-                            : publishingId === v.id
-                            ? "Đang publish..."
-                            : "Publish phiên bản"}
+                          + Mục con
                         </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                <p className="mt-2 text-xs text-gray-400">
-                  Chỉ admin thấy panel này. Publish sẽ đặt trạng thái phiên bản
-                  thành <strong>published</strong> và khoá sửa nội dung.
-                </p>
-              </section>
-            )}
+                        <Link
+                          href={`/books/${book.id}/toc/${it.id}`}
+                          className="mt-1 text-xs text-blue-600 hover:underline"
+                        >
+                          Mở trang biên soạn →
+                        </Link>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
