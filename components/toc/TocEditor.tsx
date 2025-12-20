@@ -1,8 +1,6 @@
 // components/toc/TocEditor.tsx
 "use client";
 
-import React from "react";
-import { useEffect, useMemo, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Underline from "@tiptap/extension-underline";
@@ -417,50 +415,51 @@ export function TocEditor({
   </div>
 </div>
 
-{/* ✅ Preview Modal */}
-{previewOpen && (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-    <div className="w-full max-w-5xl h-[85vh] bg-white rounded-lg shadow-lg border flex flex-col">
-      <div className="px-4 py-3 border-b flex items-center justify-between">
-        <div className="font-semibold">Preview PDF (toàn chương)</div>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            className="px-3 py-1.5 rounded-md border hover:bg-gray-50"
-            onClick={() => {
-              // refresh: bỏ cache url để gọi lại
-              setPreviewUrl(null);
-              openPreview();
-            }}
-          >
-            Render lại
-          </button>
-          <button
-            type="button"
-            className="px-3 py-1.5 rounded-md border hover:bg-gray-50"
-            onClick={() => setPreviewOpen(false)}
-          >
-            Đóng
-          </button>
+      {/* ✅ Preview Modal */}
+      {previewOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="w-full max-w-5xl h-[85vh] bg-white rounded-lg shadow-lg border flex flex-col">
+            <div className="px-4 py-3 border-b flex items-center justify-between">
+              <div className="font-semibold">Preview PDF (toàn chương)</div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="px-3 py-1.5 rounded-md border hover:bg-gray-50"
+                  onClick={() => {
+                    setPreviewUrl(null);
+                    openPreview();
+                  }}
+                >
+                  Render lại
+                </button>
+                <button
+                  type="button"
+                  className="px-3 py-1.5 rounded-md border hover:bg-gray-50"
+                  onClick={() => setPreviewOpen(false)}
+                >
+                  Đóng
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 p-3">
+              {previewErr ? (
+                <div className="text-sm text-red-600">{previewErr}</div>
+              ) : previewLoading && !previewUrl ? (
+                <div className="text-sm text-gray-600">Đang render preview…</div>
+              ) : previewUrl ? (
+                <iframe
+                  title="preview"
+                  src={previewUrl}
+                  className="w-full h-full rounded-md border"
+                />
+              ) : (
+                <div className="text-sm text-gray-600">Chưa có preview.</div>
+              )}
+            </div>
+          </div>
         </div>
-      </div>
-
-      <div className="flex-1 p-3">
-        {previewErr ? (
-          <div className="text-sm text-red-600">{previewErr}</div>
-        ) : previewLoading && !previewUrl ? (
-          <div className="text-sm text-gray-600">Đang render preview…</div>
-        ) : previewUrl ? (
-          <iframe
-            title="preview"
-            src={previewUrl}
-            className="w-full h-full rounded-md border"
-          />
-        ) : (
-          <div className="text-sm text-gray-600">Chưa có preview.</div>
-        )}
-      </div>
+      )}
     </div>
-  </div>
-)}
-
+  );
+}
