@@ -14,7 +14,8 @@ export const maxDuration = 300;
 const BUCKET_PREVIEW = "pdf_previews";
 const SIGNED_EXPIRES_SEC = 60 * 10;
 
-type Body = { version_id?: string; template_id?: string };
+// ❗ Body mới: chỉ cần version_id
+type Body = { version_id?: string };
 
 function esc(s: string) {
   return s
@@ -49,6 +50,13 @@ type RenderNode = {
   html: string;
 };
 
+type VersionRow = {
+  id: string;
+  book_id: string;
+  version_no: number | string;
+  template_id: string | null;
+};
+
 function makeAnchor(tocItemId: string, slug: string) {
   const safeSlug = (slug || "")
     .toLowerCase()
@@ -73,6 +81,11 @@ async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNo
 
   if (itErr) throw new Error("Load toc_items failed: " + itErr.message);
   const tocItems = (items || []) as TocItemRow[];
+
+  if (!tocItems.length) {
+    // Không có TOC thì trả về rỗng, tránh gọi .in([]) bị lỗi
+    return [];
+  }
 
   // 2) load all contents (1-1 with toc_item_id)
   const { data: contents, error: ctErr } = await admin
@@ -161,7 +174,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // body (đọc sớm để có versionId/templateId)
+  // body
   let body: Body = {};
   try {
     body = await req.json();
@@ -169,28 +182,37 @@ export async function POST(req: NextRequest) {
     body = {};
   }
 
-  const versionId = (body.version_id || "").toString();
-  const templateId = (body.template_id || "").toString();
-  if (!versionId || !templateId) {
+  const versionId = (body.version_id || "").toString().trim();
+  if (!versionId) {
     return NextResponse.json(
-      { error: "version_id và template_id là bắt buộc" },
+      { error: "version_id là bắt buộc" },
       { status: 400 }
     );
   }
 
-  // load version + book_id (phải có trước để check quyền)
+  // 1) load version + book_id + template_id (phải có trước để check quyền & template)
   const { data: version, error: vErr } = await admin
     .from("book_versions")
-    .select("id,book_id,version_no")
+    .select("id,book_id,version_no,template_id")
     .eq("id", versionId)
-    .maybeSingle();
+    .maybeSingle<VersionRow>();
 
-  if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 });
+  if (vErr) {
+    return NextResponse.json({ error: vErr.message }, { status: 500 });
+  }
   if (!version) {
     return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
   }
+  if (!version.template_id) {
+    return NextResponse.json(
+      { error: "Phiên bản sách chưa được gán template" },
+      { status: 400 }
+    );
+  }
 
-  // ✅ quyền: admin OR (author/editor trên book)
+  const templateId = version.template_id;
+
+  // 2) quyền: admin OR (author/editor trên book)
   const { data: profile, error: pErr } = await supabase
     .from("profiles")
     .select("id,system_role")
@@ -203,11 +225,10 @@ export async function POST(req: NextRequest) {
   let canRender = isAdmin;
 
   if (!canRender) {
-    // book_permissions: user_id + book_id + role ('author' | 'editor' | 'viewer')
     const { data: perm, error: permErr } = await supabase
       .from("book_permissions")
       .select("role")
-      .eq("book_id", version.book_id) // ✅ FIX: version đã có ở đây
+      .eq("book_id", version.book_id)
       .eq("user_id", user.id)
       .in("role", ["author", "editor"])
       .maybeSingle();
@@ -223,7 +244,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Bạn không có quyền render PDF" }, { status: 403 });
   }
 
-  // load book
+  // 3) load book
   const { data: book, error: bErr } = await admin
     .from("books")
     .select("id,title,unit_name")
@@ -233,7 +254,7 @@ export async function POST(req: NextRequest) {
   if (bErr) return NextResponse.json({ error: bErr.message }, { status: 500 });
   if (!book) return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
 
-  // load template
+  // 4) load template (từ version.template_id)
   const { data: tpl, error: tErr } = await admin
     .from("book_templates")
     .select(
@@ -246,7 +267,7 @@ export async function POST(req: NextRequest) {
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
   if (!tpl) return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
 
-  // create render job
+  // 5) create render job
   const { data: render, error: rInsErr } = await admin
     .from("book_renders")
     .insert({
@@ -408,10 +429,12 @@ export async function POST(req: NextRequest) {
     // 7) Upload preview
     const pdf_path = `book/${book.id}/version/${version.id}/render/${renderId}.pdf`;
 
-    const { error: upErr } = await admin.storage.from(BUCKET_PREVIEW).upload(pdf_path, pdfBuffer, {
-      contentType: "application/pdf",
-      upsert: true,
-    });
+    const { error: upErr } = await admin.storage
+      .from(BUCKET_PREVIEW)
+      .upload(pdf_path, pdfBuffer, {
+        contentType: "application/pdf",
+        upsert: true,
+      });
 
     if (upErr) throw new Error("Upload preview PDF failed: " + upErr.message);
 
