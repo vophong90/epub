@@ -96,8 +96,7 @@ export function TocTreeSidebar({
     const hasChildren = (node.children?.length || 0) > 0;
 
     // label số kiểu 1.1.1...
-    const label =
-      node.depth === 0 ? "Chương" : numberPath.join(".");
+    const label = node.depth === 0 ? "" : numberPath.join(".");
 
     const activeId = activeSectionId === "root" ? node.id : activeSectionId;
     const isActive = nodeKey === activeId;
@@ -132,7 +131,7 @@ export function TocTreeSidebar({
             style={{ paddingLeft: pad }}
             onClick={() => onSelectSection(nodeKey)}
           >
-            <div className="text-[11px] text-gray-400">{label}</div>
+            {label ? <div className="text-[11px] text-gray-400">{label}</div> : null}
             <div className="font-medium truncate">{node.title}</div>
           </button>
 
