@@ -3,11 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getRouteClient } from "@/lib/supabaseServer";
 import { getAdminClient } from "@/lib/supabase-admin";
 
-import { createRequire } from "module";
-import nodePath from "node:path";
 import chromium from "@sparticuz/chromium";
 import { chromium as pwChromium } from "playwright-core";
-import fs from "node:fs/promises";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,6 +22,7 @@ function esc(s: string) {
     .replaceAll('"', "&quot;");
 }
 
+/** DB row types tối giản */
 type TocItemRow = {
   id: string;
   parent_id: string | null;
@@ -40,17 +38,16 @@ type TocContentRow = {
 };
 
 type RenderNode = {
-  id: string;         // anchor id in HTML
+  id: string; // anchor id
   toc_item_id: string;
   title: string;
   slug: string;
-  depth: number;      // 1 = chapter
-  chapterTitle: string; // nearest depth=1 title
-  html: string;       // raw html (already trusted from your editor)
+  depth: number; // 1 = chapter
+  chapterTitle: string;
+  html: string;
 };
 
 function makeAnchor(tocItemId: string, slug: string) {
-  // anchor must be stable + safe
   const safeSlug = (slug || "")
     .toLowerCase()
     .replace(/[^a-z0-9\-_.]+/g, "-")
@@ -87,12 +84,11 @@ async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNo
   const contentByItem = new Map<string, TocContentRow>();
   for (const c of tocContents) contentByItem.set(c.toc_item_id, c);
 
-  // OPTIONAL: nếu anh muốn chỉ in content đã approved:
-  // (chỉ cần uncomment 2 dòng dưới)
+  // 👉 Nếu sau này muốn chỉ in chương đã duyệt:
   // const APPROVED_ONLY = true;
-  // if (APPROVED_ONLY) { ... filter status ... }
+  // if (APPROVED_ONLY) { ... filter theo status ... }
 
-  // 3) build children map and sort by order_index
+  // 3) build children map & sort
   const children = new Map<string | null, TocItemRow[]>();
   for (const it of tocItems) {
     const key = it.parent_id ?? null;
@@ -124,7 +120,7 @@ async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNo
         slug: it.slug,
         depth,
         chapterTitle,
-        html: html || "", // empty is allowed
+        html: html || "",
       });
 
       walk(it.id, depth + 1, chapterTitle);
@@ -134,40 +130,6 @@ async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNo
   walk(null, 1, "");
 
   return nodes;
-}
-
-const require = createRequire(import.meta.url);
-
-async function loadPagedPolyfillCode() {
-  // Resolve entrypoint hợp lệ theo exports
-  const entry = require.resolve("pagedjs");
-
-  // Tìm root của package pagedjs bằng cách dò lên đến khi thấy package.json
-  let dir = nodePath.dirname(entry);
-  for (let i = 0; i < 8; i++) {
-    const pkg = nodePath.join(dir, "package.json");
-    try {
-      await fs.access(pkg);
-      // root = dir
-      // thử các tên file thường gặp
-      const candidates = [
-        nodePath.join(dir, "dist", "paged.polyfill.js"),
-        nodePath.join(dir, "dist", "paged.polyfill.cjs"),
-        nodePath.join(dir, "dist", "pagedjs.polyfill.js"),
-      ];
-      for (const f of candidates) {
-        try {
-          return await fs.readFile(f, "utf8");
-        } catch {}
-      }
-      throw new Error(
-        "Found pagedjs package.json but cannot find dist/paged.polyfill.js"
-      );
-    } catch {
-      dir = nodePath.dirname(dir);
-    }
-  }
-  throw new Error("Cannot locate pagedjs package root");
 }
 
 export async function POST(req: NextRequest) {
@@ -235,7 +197,9 @@ export async function POST(req: NextRequest) {
   // load template
   const { data: tpl, error: tErr } = await admin
     .from("book_templates")
-    .select("id,name,css,cover_html,front_matter_html,toc_html,header_html,footer_html,page_size,page_margin_mm")
+    .select(
+      "id,name,css,cover_html,front_matter_html,toc_html,header_html,footer_html,page_size,page_margin_mm"
+    )
     .eq("id", templateId)
     .eq("is_active", true)
     .maybeSingle();
@@ -266,16 +230,16 @@ export async function POST(req: NextRequest) {
   const renderId = render.id;
 
   try {
-    // ✅ Build nodes from your real tables
+    // 1) Build nodes từ DB
     const nodes = await buildNodesFromDB(admin, versionId);
 
-    // tokens
+    // 2) Token replace cho template
     const year = new Date().getFullYear().toString();
     const token = (s?: string) =>
       (s || "")
         .replaceAll("{{BOOK_TITLE}}", esc(book.title))
         .replaceAll("{{YEAR}}", esc(year))
-        .replaceAll("{{CHAPTER_TITLE}}", ""); // set by running elements inside main
+        .replaceAll("{{CHAPTER_TITLE}}", "");
 
     const cover = token(tpl.cover_html);
     const front = token(tpl.front_matter_html);
@@ -283,16 +247,12 @@ export async function POST(req: NextRequest) {
     const header = token(tpl.header_html);
     const footer = token(tpl.footer_html);
 
-    // MAIN HTML: depth mapping
-    // depth 1 -> h1 + page break (chapter)
-    // depth 2 -> h2
-    // depth 3+ -> h3 (keep CSS simple)
+    // 3) MAIN HTML
     const main = nodes
       .map((n) => {
         const isChapter = n.depth === 1;
         const tag = n.depth === 1 ? "h1" : n.depth === 2 ? "h2" : "h3";
 
-        // If chapter: set running header right to chapter title
         const runningChapter = isChapter
           ? `<div class="runningHeaderRight" style="position: running(runningHeaderRight);">${esc(
               n.title
@@ -315,10 +275,10 @@ export async function POST(req: NextRequest) {
       })
       .join("\n");
 
-    // TOC list: indent by depth
+    // 4) TOC list
     const tocList = nodes
       .map((n) => {
-        const pad = Math.max(0, (n.depth - 1) * 14); // px
+        const pad = Math.max(0, (n.depth - 1) * 14);
         return `
 <li style="padding-left:${pad}px">
   <a href="#${esc(n.id)}">${esc(n.title)}</a>
@@ -328,9 +288,7 @@ export async function POST(req: NextRequest) {
       })
       .join("\n");
 
-    // Inline paged.js (no CDN)
-    const pagedCode = await loadPagedPolyfillCode();
-
+    // 5) HTML tổng
     const html = `<!doctype html>
 <html>
 <head>
@@ -356,16 +314,14 @@ export async function POST(req: NextRequest) {
     ${main}
   </main>
 
-  <script>${pagedCode}</script>
+  <!-- Định nghĩa PagedConfig.before/after trước khi load pagedjs -->
   <script>
-    // After Paged.js paginates, compute page numbers for TOC
     window.PagedConfig = window.PagedConfig || {};
     window.PagedConfig.after = function(flow){
       try{
-        var map = {}; // anchor id -> page number
+        var map = {};
         flow.pages.forEach(function(page, idx){
-          var pn = (idx+1).toString();
-          // pick anchors on this page
+          var pn = (idx + 1).toString();
           var elts = page.element.querySelectorAll("[id]");
           elts.forEach(function(el){
             if (!map[el.id]) map[el.id] = pn;
@@ -379,24 +335,27 @@ export async function POST(req: NextRequest) {
           span.setAttribute("data-page-number", map[id] || "");
           span.textContent = map[id] || "";
         });
-      }catch(e){}
+      } catch(e){}
       window.__PAGED_DONE__ = true;
     };
   </script>
+
+  <!-- Load pagedjs từ CDN để tránh phải đọc file bằng fs -->
+  <script src="https://unpkg.com/pagedjs/dist/paged.polyfill.js"></script>
 </body>
 </html>`;
 
-    // Launch Chromium (serverless)
+    // 6) Launch Chromium (serverless-friendly)
     const browser = await pwChromium.launch({
       args: chromium.args,
-      executablePath: await chromium.executablePath(),
-      headless: true, // ✅ fix type + chạy ổn trên serverless
-      });
+      executablePath: await chromium.executablePath(), // trên Vercel sẽ ra string path
+      headless: true,
+    });
 
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "load" });
 
-    // wait paginate done
+    // chờ Paged.js paginate xong
     await page.waitForFunction(
       () => (window as any).__PAGED_DONE__ === true,
       null,
@@ -407,17 +366,20 @@ export async function POST(req: NextRequest) {
       format: "A4",
       printBackground: true,
       preferCSSPageSize: true,
-      margin: undefined, // dùng @page margin trong template
+      margin: undefined,
     });
 
     await browser.close();
 
-    // upload preview
+    // 7) Upload preview
     const pdf_path = `book/${book.id}/version/${version.id}/render/${renderId}.pdf`;
 
     const { error: upErr } = await admin.storage
       .from(BUCKET_PREVIEW)
-      .upload(pdf_path, pdfBuffer, { contentType: "application/pdf", upsert: true });
+      .upload(pdf_path, pdfBuffer, {
+        contentType: "application/pdf",
+        upsert: true,
+      });
 
     if (upErr) throw new Error("Upload preview PDF failed: " + upErr.message);
 
@@ -455,7 +417,11 @@ export async function POST(req: NextRequest) {
       .eq("id", renderId);
 
     return NextResponse.json(
-      { error: "Render PDF failed", detail: e?.message || String(e), render_id: renderId },
+      {
+        error: "Render PDF failed",
+        detail: e?.message || String(e),
+        render_id: renderId,
+      },
       { status: 500 }
     );
   }
