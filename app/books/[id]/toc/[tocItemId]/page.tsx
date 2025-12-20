@@ -261,6 +261,23 @@ export default function TocItemPage() {
     load();
   }, [tocItemId]);
 
+  useEffect(() => {
+    if (authLoading || loading) return;
+    if (!data) return;
+    if (!editorRef.current) return;
+
+    const html = getActiveHtml();
+    editorRef.current.innerHTML = html || "<p></p>";
+  }, [
+    authLoading,
+    loading,
+    data,
+    activeSectionId,
+    rootHtml,
+    subItems,
+    importPreview,
+  ]);
+
   // ========================
   // Load mục con + nội dung
   // ========================
@@ -768,16 +785,6 @@ export default function TocItemPage() {
       </main>
     );
   }
-
-  const activeHtml = getActiveHtml();
-   useEffect(() => {
-    if (authLoading || loading) return;
-    if (!data) return;
-    if (!editorRef.current) return;
-
-    const html = getActiveHtml();
-    editorRef.current.innerHTML = html || "<p></p>";
-   }, [authLoading, loading, activeSectionId, tocItemId, importPreview]);
 
   return (
     <main className="max-w-6xl mx-auto px-4 py-8 space-y-6">
