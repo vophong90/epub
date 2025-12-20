@@ -9,7 +9,7 @@ import { useAuth } from "@/components/AuthProvider";
 import { TocEditor } from "@/components/toc/TocEditor";
 import { TocImportPanel } from "@/components/toc/TocImportPanel";
 import { TocEditorActions } from "@/components/toc/TocEditorActions";
-import { TocTreeSidebar } from "@/components/toc/TocTreeSidebar";
+import { TocTreeSidebar, TocTreeNode } from "@/components/toc/TocTreeSidebar";
 
 /** COMMON UI CLASSES */
 const INPUT =
@@ -64,18 +64,6 @@ type TocItemResponse = {
   assignments: Assignment[];
 };
 
-type SubItem = {
-  id: string;
-  parent_id: string | null;
-  title: string;
-  slug: string;
-  order_index: number;
-};
-
-type SubItemWithContent = SubItem & {
-  editorHtml: string;
-};
-
 export default function TocItemPage() {
   const params = useParams<{ id: string; tocItemId: string }>();
   const router = useRouter();
@@ -97,9 +85,9 @@ export default function TocItemPage() {
 
   const [data, setData] = useState<TocItemResponse | null>(null);
 
-  // Editor state
-  const [rootHtml, setRootHtml] = useState("<p></p>");
-  const [subItems, setSubItems] = useState<SubItemWithContent[]>([]);
+  // Editor content per node
+  const [htmlById, setHtmlById] = useState<Record<string, string>>({});
+  const [tocTreeRoot, setTocTreeRoot] = useState<TocTreeNode | null>(null);
   const [activeSectionId, setActiveSectionId] =
     useState<"root" | string>("root");
 
@@ -202,12 +190,35 @@ export default function TocItemPage() {
     return html || "<p></p>";
   }
 
+  function flattenIds(root: TocTreeNode | null): string[] {
+    if (!root) return [];
+    const out: string[] = [];
+    const stack: TocTreeNode[] = [root];
+    while (stack.length) {
+      const n = stack.shift()!;
+      out.push(n.id);
+      for (const c of n.children || []) stack.push(c);
+    }
+    return out;
+  }
+
+  function findNodeTitle(root: TocTreeNode | null, id: string): string | null {
+    if (!root) return null;
+    const stack: TocTreeNode[] = [root];
+    while (stack.length) {
+      const n = stack.shift()!;
+      if (n.id === id) return n.title;
+      for (const c of n.children || []) stack.push(c);
+    }
+    return null;
+  }
+
   // sync editorNote
   useEffect(() => {
     setEditorNote(data?.content?.editor_note ?? "");
   }, [data?.content?.editor_note]);
 
-  /** LOAD MAIN ITEM */
+  /** LOAD MAIN ITEM (root title + status + assignments + root content) */
   async function loadMain(tid: string) {
     setLoading(true);
     setErrorMsg(null);
@@ -222,8 +233,11 @@ export default function TocItemPage() {
       const j = (await res.json()) as TocItemResponse;
       setData(j);
 
+      // root html
       const html = parseContentJson(j.content?.content_json);
-      setRootHtml(html);
+      setHtmlById((prev) => ({ ...prev, [tid]: html }));
+
+      // reset selection
       setActiveSectionId("root");
     } catch (e: any) {
       setErrorMsg(e?.message || "Lỗi không xác định khi tải dữ liệu");
@@ -233,40 +247,48 @@ export default function TocItemPage() {
     }
   }
 
-  /** LOAD SUB-ITEMS */
-  async function loadSubs(tid: string) {
+  /** LOAD TREE (multi-level) */
+  async function loadTree(rootId: string) {
     setSubLoading(true);
     try {
-      const res = await fetch(`/api/toc/subsections?parent_id=${tid}`);
+      const res = await fetch(`/api/toc/subsections?root_id=${rootId}`);
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j.error) {
-        console.error("load subsections error:", j.error || res.status);
-        setSubItems([]);
+        console.error("load toc tree error:", j.error || res.status);
+        setTocTreeRoot(null);
         return;
       }
-      const bareItems: SubItem[] = j.items || [];
+      const root = (j.root || null) as TocTreeNode | null;
+      setTocTreeRoot(root);
 
-      const withContent: SubItemWithContent[] = await Promise.all(
-        bareItems.map(async (s) => {
-          try {
-            const r = await fetch(`/api/toc/item?toc_item_id=${s.id}`);
-            if (!r.ok) {
-              return { ...s, editorHtml: "<p></p>" };
-            }
-            const tj = (await r.json()) as TocItemResponse;
-            const html = parseContentJson(tj.content?.content_json);
-            return { ...s, editorHtml: html };
-          } catch {
-            return { ...s, editorHtml: "<p></p>" };
-          }
-        })
-      );
+      // preload contents for every node in tree (including root)
+      const ids = flattenIds(root);
+      if (!ids.length) return;
 
-      withContent.sort((a, b) => a.order_index - b.order_index);
-      setSubItems(withContent);
+      // fetch all contents (parallel)
+      const tasks = ids.map(async (id) => {
+        try {
+          const r = await fetch(`/api/toc/item?toc_item_id=${id}`);
+          if (!r.ok) return [id, "<p></p>"] as const;
+          const tj = (await r.json()) as TocItemResponse;
+          return [id, parseContentJson(tj.content?.content_json)] as const;
+        } catch {
+          return [id, "<p></p>"] as const;
+        }
+      });
+
+      const pairs = await Promise.all(tasks);
+      setHtmlById((prev) => {
+        const next = { ...prev };
+        for (const [id, html] of pairs) {
+          // không overwrite nếu đã có (tránh giật khi user đang gõ)
+          if (typeof next[id] !== "string") next[id] = html;
+        }
+        return next;
+      });
     } catch (e) {
-      console.error("load subsections failed:", e);
-      setSubItems([]);
+      console.error("load toc tree failed:", e);
+      setTocTreeRoot(null);
     } finally {
       setSubLoading(false);
     }
@@ -274,42 +296,35 @@ export default function TocItemPage() {
 
   async function reloadAll() {
     if (!tocItemId) return;
-    await Promise.all([loadMain(tocItemId), loadSubs(tocItemId)]);
+    await Promise.all([loadMain(tocItemId), loadTree(tocItemId)]);
   }
 
   // init load
   useEffect(() => {
     if (!tocItemId) return;
     loadMain(tocItemId);
-    loadSubs(tocItemId);
+    loadTree(tocItemId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tocItemId]);
 
   /** HTML helpers */
   function updateActiveHtml(newHtml: string) {
-    if (activeSectionId === "root") {
-      setRootHtml(newHtml);
-    } else {
-      setSubItems((prev) =>
-        prev.map((s) =>
-          s.id === activeSectionId ? { ...s, editorHtml: newHtml } : s
-        )
-      );
-    }
+    const targetId = activeSectionId === "root" ? tocItemId : activeSectionId;
+    setHtmlById((prev) => ({ ...prev, [targetId]: newHtml }));
   }
 
   function getActiveHtml(): string {
-    if (activeSectionId === "root") return rootHtml;
-    const sub = subItems.find((s) => s.id === activeSectionId);
-    return sub?.editorHtml ?? "<p></p>";
+    const targetId = activeSectionId === "root" ? tocItemId : activeSectionId;
+    return htmlById[targetId] ?? "<p></p>";
   }
 
   function getActiveTitle(): string {
     if (!data) return "";
-    if (activeSectionId === "root") {
-      return data.item.title;
-    }
-    const sub = subItems.find((s) => s.id === activeSectionId);
-    return sub?.title ?? data.item.title;
+    if (activeSectionId === "root") return data.item.title;
+    return (
+      findNodeTitle(tocTreeRoot, activeSectionId) ??
+      data.item.title
+    );
   }
 
   /** SAVE CONTENT */
@@ -351,10 +366,10 @@ export default function TocItemPage() {
     setSavingAll(true);
     setErrorMsg(null);
     try {
+      const ids = flattenIds(tocTreeRoot);
       const tasks: Promise<void>[] = [];
-      tasks.push(saveOne(tocItemId, rootHtml));
-      for (const s of subItems) {
-        tasks.push(saveOne(s.id, s.editorHtml));
+      for (const id of ids) {
+        tasks.push(saveOne(id, htmlById[id] ?? "<p></p>"));
       }
       await Promise.all(tasks);
     } catch (e: any) {
@@ -475,11 +490,8 @@ export default function TocItemPage() {
     setGptError(null);
     setGptResult(null);
     try {
-      const pieces: string[] = [];
-      pieces.push(stripHtml(rootHtml));
-      for (const s of subItems) {
-        pieces.push(stripHtml(s.editorHtml));
-      }
+      const ids = flattenIds(tocTreeRoot);
+      const pieces = ids.map((id) => stripHtml(htmlById[id] ?? ""));
       const text = pieces.filter(Boolean).join("\n\n");
       if (!text) {
         setGptError("Không có nội dung để kiểm tra.");
@@ -504,9 +516,9 @@ export default function TocItemPage() {
     }
   }
 
-  /** SUB-ITEM: CREATE / DELETE / RENAME */
-  async function handleCreateSub(title: string) {
-    if (!tocItemId || !title.trim()) return;
+  /** TREE: CREATE / DELETE / RENAME (node bất kỳ) */
+  async function handleCreateChild(parentId: string, title: string) {
+    if (!tocItemId || !parentId || !title.trim()) return;
     setSubLoading(true);
     setErrorMsg(null);
     try {
@@ -514,22 +526,17 @@ export default function TocItemPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          parent_id: tocItemId,
+          parent_id: parentId,
           title: title.trim(),
         }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j.error) {
         setErrorMsg(j.error || "Tạo mục con thất bại");
-      } else if (j.item) {
-        const s: SubItemWithContent = {
-          ...j.item,
-          editorHtml: "<p></p>",
-        };
-        setSubItems((prev) =>
-          [...prev, s].sort((a, b) => a.order_index - b.order_index)
-        );
+        return;
       }
+      // reload tree để có node mới + numbering đúng
+      await loadTree(tocItemId);
     } catch (e: any) {
       setErrorMsg(e?.message || "Lỗi khi tạo mục con");
     } finally {
@@ -537,14 +544,8 @@ export default function TocItemPage() {
     }
   }
 
-  async function handleDeleteSub(id: string) {
-    if (
-      !window.confirm(
-        "Xoá mục con này? Các mục con sâu hơn (nếu có) cũng sẽ bị xoá."
-      )
-    ) {
-      return;
-    }
+  async function handleDeleteNode(id: string) {
+    if (!tocItemId) return;
     try {
       const res = await fetch(
         `/api/toc/subsections?id=${encodeURIComponent(id)}`,
@@ -552,22 +553,30 @@ export default function TocItemPage() {
       );
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j.error) {
-        setErrorMsg(j.error || "Xoá mục con thất bại");
-      } else {
-        setSubItems((prev) => prev.filter((s) => s.id !== id));
-        if (activeSectionId === id) {
-          setActiveSectionId("root");
-        }
+        setErrorMsg(j.error || "Xoá mục thất bại");
+        return;
       }
+
+      // nếu đang edit node bị xoá -> về root
+      if (activeSectionId === id) setActiveSectionId("root");
+
+      await loadTree(tocItemId);
+
+      // dọn cache content
+      setHtmlById((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
     } catch (e: any) {
-      setErrorMsg(e?.message || "Lỗi khi xoá mục con");
+      setErrorMsg(e?.message || "Lỗi khi xoá mục");
     }
   }
 
-  async function handleRenameSub(id: string, newTitle: string) {
+  async function handleRenameNode(id: string, newTitle: string) {
     const title = newTitle.trim();
     if (!title) {
-      setErrorMsg("Tiêu đề mục con không được để trống.");
+      setErrorMsg("Tiêu đề không được để trống.");
       return;
     }
     setErrorMsg(null);
@@ -579,17 +588,13 @@ export default function TocItemPage() {
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j.error) {
-        setErrorMsg(j.error || "Sửa tiêu đề mục con thất bại");
+        setErrorMsg(j.error || "Sửa tiêu đề thất bại");
         return;
       }
-      const updated = j.item as SubItem;
-      setSubItems((prev) =>
-        prev.map((s) =>
-          s.id === id ? { ...s, title: updated.title } : s
-        )
-      );
+      // reload tree để title cập nhật ở sidebar
+      await loadTree(tocItemId);
     } catch (e: any) {
-      setErrorMsg(e?.message || "Lỗi khi sửa mục con");
+      setErrorMsg(e?.message || "Lỗi khi sửa mục");
     }
   }
 
@@ -622,6 +627,8 @@ export default function TocItemPage() {
 
   const canImport = canEditContent && canManageSubsections;
 
+  // sidebar expects: activeSectionId = "root" hoặc nodeId
+  // editor uses: root as tocItemId when activeSectionId === "root"
   return (
     <main className="max-w-6xl mx-auto px-4 py-8 space-y-6">
       {/* Breadcrumb + Header */}
@@ -666,10 +673,7 @@ export default function TocItemPage() {
                   const isMe = user && a.user_id === user.id;
                   const label = a.profile?.name || a.profile?.email || a.user_id;
                   return (
-                    <li
-                      key={a.id}
-                      className="flex flex-wrap items-center gap-2"
-                    >
+                    <li key={a.id} className="flex flex-wrap items-center gap-2">
                       <span className="font-medium">
                         {label}
                         {isMe ? " (Bạn)" : ""}
@@ -770,33 +774,35 @@ export default function TocItemPage() {
 
       {/* Khu vực soạn thảo: Sidebar + Editor */}
       <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 md:p-6">
-        <div className="grid grid-cols-1 md:grid-cols-[260px,1fr] gap-6">
-          {/* Sidebar dùng TocTreeSidebar */}
+        <div className="grid grid-cols-1 md:grid-cols-[300px,1fr] gap-6">
+          {/* Sidebar TREE */}
           <TocTreeSidebar
-            chapterTitle={data.item.title}
-            items={subItems.map((s) => ({
-              id: s.id,
-              title: s.title,
-              order_index: s.order_index,
-            }))}
+            root={tocTreeRoot}
             activeSectionId={activeSectionId}
             canManageSubsections={canManageSubsections}
             loading={subLoading}
-            onSelectSection={setActiveSectionId}
-            onCreateSub={handleCreateSub}
-            onDeleteSub={handleDeleteSub}
-            onRenameSub={handleRenameSub}
+            onSelectSection={(id) => setActiveSectionId(id)}
+            onCreateChild={handleCreateChild}
+            onRenameNode={handleRenameNode}
+            onDeleteNode={async (id, title) => {
+              if (
+                !window.confirm(
+                  `Xoá "${title}"? Các mục con sâu hơn (nếu có) cũng sẽ bị xoá.`
+                )
+              ) {
+                return;
+              }
+              await handleDeleteNode(id);
+            }}
           />
 
           {/* Editor section */}
-          <div className="space-y-4">
+          <div className="space-y-4 min-w-0">
             <TocEditor
               value={getActiveHtml()}
               canEdit={canEditContent}
               sectionTitle={getActiveTitle()}
-              sectionKindLabel={
-                activeSectionId === "root" ? "chương chính" : "mục con"
-              }
+              sectionKindLabel={activeSectionId === "root" ? "chương" : "mục"}
               onChange={updateActiveHtml}
             />
 
@@ -810,10 +816,7 @@ export default function TocItemPage() {
                   ? "Đang lưu phần này..."
                   : "Lưu nội dung phần đang chọn"}
               </button>
-              <button
-                className={BTN}
-                onClick={() => setActiveSectionId("root")}
-              >
+              <button className={BTN} onClick={() => setActiveSectionId("root")}>
                 Về chương chính
               </button>
             </div>
@@ -853,9 +856,7 @@ export default function TocItemPage() {
             onClick={handleGPTCheckChapter}
             disabled={checkingGPT}
           >
-            {checkingGPT
-              ? "GPT đang kiểm tra chương..."
-              : "GPT kiểm tra chương"}
+            {checkingGPT ? "GPT đang kiểm tra chương..." : "GPT kiểm tra chương"}
           </button>
         </div>
 
