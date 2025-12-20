@@ -73,8 +73,7 @@ export function TocEditor({
     editable: canEdit,
     editorProps: {
       attributes: {
-        class:
-          `${PANEL} min-h-[280px] max-h-[520px] overflow-y-auto leading-relaxed text-sm ProseMirror`,
+        class: `${PANEL} leading-relaxed text-sm ProseMirror`,
       },
       // “làm sạch” paste (Word/Docs)
       transformPastedHTML(html) {
@@ -351,7 +350,13 @@ export function TocEditor({
         </button>
       </div>
 
-      <EditorContent editor={editor} />
+      <div className="rounded-lg border">
+        <div className="sticky top-0 z-10 bg-gray-50 border-b rounded-t-lg px-3 py-2">
+        </div>
+        <div className="max-h-[520px] overflow-y-auto px-3 py-2">
+          <EditorContent editor={editor} />
+        </div>
+      </div>
     </div>
   );
 }
