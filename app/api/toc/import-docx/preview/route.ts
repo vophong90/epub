@@ -1,130 +1,222 @@
 // app/api/toc/import-docx/preview/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "../../_helpers";
-import * as mammoth from "mammoth";
+import mammoth from "mammoth";
 import { parse } from "node-html-parser";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type PreviewSection = {
+type SectionPreview = {
   title: string;
   html: string;
+  order_index: number;
 };
 
-function normalizeHtml(html: string) {
-  // Dọn khoảng trắng & nbsp đơn giản
-  return (html || "").replace(/\u00a0/g, " ").trim();
+function cleanHtml(html: string): string {
+  const trimmed = (html || "").trim();
+  return trimmed || "<p></p>";
 }
 
-/**
- * Rule import:
- * - H1 (nếu có) coi như tiêu đề tài liệu, bỏ qua (không tạo mục con).
- * - H2 = mục con trực tiếp của chương.
- * - Nội dung của 1 H2 = tất cả node sau nó cho đến H2 kế tiếp.
- * - RootHtml = tất cả node trước H2 đầu tiên.
- */
+function getNodeText(node: any): string {
+  const raw = (node.text ?? node.rawText ?? "") as string;
+  return raw.replace(/\s+/g, " ").trim();
+}
+
+/** Tách theo H2 – ưu tiên nếu file có Heading 2 */
+function buildFromH2(body: any): { rootHtml: string; sections: SectionPreview[] } {
+  const children = body.childNodes || [];
+  const sections: { title: string; nodes: any[] }[] = [];
+  const rootNodes: any[] = [];
+
+  let currentSection: { title: string; nodes: any[] } | null = null;
+
+  for (const node of children) {
+    // bỏ text node trống
+    const txt = getNodeText(node);
+    if (!txt) continue;
+
+    const tag = (node.tagName || "").toLowerCase();
+    if (tag === "h2") {
+      const title = txt || "Mục không có tiêu đề";
+
+      // bắt đầu section mới
+      currentSection = { title, nodes: [] };
+      sections.push(currentSection);
+    } else {
+      if (!currentSection) {
+        rootNodes.push(node);
+      } else {
+        currentSection.nodes.push(node);
+      }
+    }
+  }
+
+  const rootHtml = cleanHtml(rootNodes.map((n) => n.toString()).join(""));
+
+  const mapped: SectionPreview[] = sections.map((s, idx) => ({
+    title: s.title,
+    html: cleanHtml(s.nodes.map((n) => n.toString()).join("")),
+    order_index: idx + 1,
+  }));
+
+  return { rootHtml, sections: mapped };
+}
+
+/** Heuristic: đoán heading khi không có H2 */
+function looksLikeHeadingText(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  if (t.length > 120) return false; // heading thường không quá dài
+
+  // 1) Dạng đánh số: 1., 1.1., 2.3.4 ...
+  if (/^\d+(\.\d+)*\s+/.test(t)) return true;
+
+  // 2) Dạng số La Mã: I., II., III.
+  if (/^[IVXLCDM]+\.\s+/.test(t)) return true;
+
+  // 3) Chủ yếu là CHỮ HOA
+  const letters = t.replace(/[^A-Za-zÀ-ỹ]/g, "");
+  if (!letters) return false;
+  const upperLetters = letters.replace(/[^A-ZÀ-Ỹ]/g, "");
+  const ratio = upperLetters.length / letters.length;
+  if (ratio >= 0.6) return true;
+
+  return false;
+}
+
+function buildFromHeuristic(body: any): { rootHtml: string; sections: SectionPreview[] } {
+  const children = body.childNodes || [];
+  const sections: { title: string; nodes: any[] }[] = [];
+  const rootNodes: any[] = [];
+
+  let currentSection: { title: string; nodes: any[] } | null = null;
+
+  for (const node of children) {
+    const txt = getNodeText(node);
+    if (!txt) continue;
+
+    const tag = (node.tagName || "").toLowerCase();
+
+    const isCandidateHeading =
+      tag === "h1" ||
+      tag === "h3" ||
+      tag === "p" ||
+      tag === "div";
+
+    const isHeading = isCandidateHeading && looksLikeHeadingText(txt);
+
+    if (isHeading) {
+      const title = txt || "Mục không có tiêu đề";
+      // bắt đầu section mới
+      currentSection = { title, nodes: [] };
+      sections.push(currentSection);
+    } else {
+      if (!currentSection) {
+        rootNodes.push(node);
+      } else {
+        currentSection.nodes.push(node);
+      }
+    }
+  }
+
+  const rootHtml = cleanHtml(rootNodes.map((n) => n.toString()).join(""));
+
+  const mapped: SectionPreview[] = sections.map((s, idx) => ({
+    title: s.title,
+    html: cleanHtml(s.nodes.map((n) => n.toString()).join("")),
+    order_index: idx + 1,
+  }));
+
+  return { rootHtml, sections: mapped };
+}
+
 export async function POST(req: NextRequest) {
-  // Chỉ cho user đã đăng nhập dùng, cho chắc
-  const { error } = await requireUser();
+  const { user, error } = await requireUser();
   if (error) return error;
+  if (!user) {
+    return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
+  }
 
+  let formData: FormData;
   try {
-    const form = await req.formData();
-    const file = form.get("file");
-
-    if (!file || !(file instanceof File)) {
-      return NextResponse.json({ error: "Thiếu file .docx" }, { status: 400 });
-    }
-
-    if (!file.name.toLowerCase().endsWith(".docx")) {
-      return NextResponse.json({ error: "Chỉ hỗ trợ file .docx" }, { status: 400 });
-    }
-
-    const buf = Buffer.from(await file.arrayBuffer());
-
-    // 1) Chuyển docx -> HTML
-    const { value: htmlRaw } = await mammoth.convertToHtml({ buffer: buf });
-    const html = normalizeHtml(htmlRaw);
-
-    if (!html) {
-      return NextResponse.json(
-        { error: "Không đọc được nội dung từ file Word" },
-        { status: 400 }
-      );
-    }
-
-    // 2) Parse HTML, tách root / các H2
-    const root = parse(`<div id="__root__">${html}</div>`);
-    const container = root.querySelector("#__root__");
-    const children = container ? container.childNodes : [];
-
-    let rootParts: string[] = [];
-    let current: { title: string; parts: string[] } | null = null;
-    const subsections: PreviewSection[] = [];
-
-    const pushCurrent = () => {
-      if (!current) return;
-      const body = current.parts.join("").trim();
-      subsections.push({
-        title: current.title.trim() || "Mục không tên",
-        html: body || "<p></p>",
-      });
-      current = null;
-    };
-
-    for (const n of children) {
-      const el: any = n as any;
-      const tag = el.tagName ? String(el.tagName).toUpperCase() : "";
-
-      if (tag === "H2") {
-        // Bắt đầu mục con mới
-        pushCurrent();
-        const title = (el.text || "").toString().trim() || "Mục không tên";
-        current = { title, parts: [] };
-        continue;
-      }
-
-      if (tag === "H1") {
-        // H1 coi là tiêu đề tài liệu, không đẩy vào nội dung
-        continue;
-      }
-
-      const nodeHtml = el.toString ? String(el.toString()) : "";
-      if (!nodeHtml) continue;
-
-      if (!current) rootParts.push(nodeHtml);
-      else current.parts.push(nodeHtml);
-    }
-
-    pushCurrent();
-
-    const rootHtml = rootParts.join("").trim() || "<p></p>";
-
-    if (!subsections.length) {
-      return NextResponse.json(
-        {
-          error:
-            "Không tìm thấy Heading 2 (H2). File có thể chưa dùng Heading styles. " +
-            "Vui lòng chỉnh lại Heading trong Word trước khi import.",
-        },
-        { status: 400 }
-      );
-    }
-
-    return NextResponse.json({
-      ok: true,
-      rootHtml,
-      subsections,
-      meta: {
-        filename: file.name,
-        count: subsections.length,
-      },
-    });
-  } catch (e: any) {
+    formData = await req.formData();
+  } catch {
     return NextResponse.json(
-      { error: e?.message || "Lỗi khi đọc file Word" },
-      { status: 500 }
+      { error: "Không đọc được dữ liệu form" },
+      { status: 400 }
     );
   }
+
+  const file = formData.get("file") as unknown as File | null;
+  if (!file) {
+    return NextResponse.json(
+      { error: "Thiếu file .docx (field name: file)" },
+      { status: 400 }
+    );
+  }
+
+  const name = (file.name || "").toLowerCase();
+  if (!name.endsWith(".docx")) {
+    return NextResponse.json(
+      { error: "Chỉ hỗ trợ file .docx" },
+      { status: 400 }
+    );
+  }
+
+  // Đọc file vào buffer
+  const arrayBuffer = await file.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+
+  // Chuyển sang HTML bằng mammoth
+  const result = await mammoth.convertToHtml({ buffer });
+  const html = result.value || "";
+
+  const root = parse(html);
+  const body = root.querySelector("body") ?? root;
+
+  // 1) ƯU TIÊN: tách theo Heading 2
+  const hasH2 = !!body.querySelector("h2");
+  if (hasH2) {
+    const built = buildFromH2(body);
+
+    // Nếu vì lý do gì đó mà không ra section, fallback heuristic
+    if (built.sections.length > 0) {
+      return NextResponse.json({
+        ok: true,
+        rootHtml: built.rootHtml,
+        subsections: built.sections,
+        info: {
+          mode: "h2",
+          fromHeadingStyles: true,
+          sectionCount: built.sections.length,
+        },
+      });
+    }
+  }
+
+  // 2) FALLBACK: heuristic khi không có H2
+  const builtHeuristic = buildFromHeuristic(body);
+  if (builtHeuristic.sections.length > 0) {
+    return NextResponse.json({
+      ok: true,
+      rootHtml: builtHeuristic.rootHtml,
+      subsections: builtHeuristic.sections,
+      info: {
+        mode: "heuristic",
+        fromHeadingStyles: false,
+        sectionCount: builtHeuristic.sections.length,
+      },
+    });
+  }
+
+  // 3) Không tách được gì: báo lỗi như cũ
+  return NextResponse.json(
+    {
+      error:
+        "Không tìm thấy cấu trúc heading phù hợp. File có thể không dùng Heading 2 hoặc tiêu đề không đủ rõ để nhận diện tự động.",
+      noHeading2: true,
+    },
+    { status: 400 }
+  );
 }
