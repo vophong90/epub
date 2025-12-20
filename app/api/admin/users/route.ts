@@ -8,6 +8,25 @@ export const dynamic = "force-dynamic";
 
 const PAGE_SIZE = 10;
 
+type CreateBody = {
+  email?: string;
+  full_name?: string;
+  system_role?: string;
+};
+
+type BookRoleInput = {
+  book_id?: string;
+  role?: string | null;
+};
+
+type UpdateBody = {
+  id?: string;
+  email?: string;
+  full_name?: string;
+  system_role?: string;
+  book_roles?: BookRoleInput[];
+};
+
 async function ensureAdmin() {
   const supabase = getRouteClient();
   const {
@@ -29,10 +48,7 @@ async function ensureAdmin() {
 
   if (pErr) {
     return {
-      errorRes: NextResponse.json(
-        { error: pErr.message },
-        { status: 500 }
-      ),
+      errorRes: NextResponse.json({ error: pErr.message }, { status: 500 }),
     };
   }
 
@@ -74,9 +90,7 @@ export async function GET(req: NextRequest) {
     .range(from, to);
 
   if (q) {
-    query = query.or(
-      `email.ilike.%${q}%,name.ilike.%${q}%`
-    );
+    query = query.or(`email.ilike.%${q}%,name.ilike.%${q}%`);
   }
 
   const { data, error, count } = await query;
@@ -94,12 +108,6 @@ export async function GET(req: NextRequest) {
 }
 
 // POST /api/admin/users  (tạo user)
-type CreateBody = {
-  email?: string;
-  full_name?: string;
-  system_role?: string;
-};
-
 export async function POST(req: NextRequest) {
   const check = await ensureAdmin();
   if ("errorRes" in check) return check.errorRes;
@@ -166,14 +174,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true, user: profile });
 }
 
-// PATCH /api/admin/users  (update tên/email/role)
-type UpdateBody = {
-  id?: string;
-  email?: string;
-  full_name?: string;
-  system_role?: string;
-};
-
+// PATCH /api/admin/users  (update tên/email/role + quyền sách)
 export async function PATCH(req: NextRequest) {
   const check = await ensureAdmin();
   if ("errorRes" in check) return check.errorRes;
@@ -188,17 +189,18 @@ export async function PATCH(req: NextRequest) {
 
   const id = (body.id || "").trim();
   if (!id) {
-    return NextResponse.json(
-      { error: "id là bắt buộc" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "id là bắt buộc" }, { status: 400 });
   }
 
   const email = body.email?.trim();
   const full_name = body.full_name?.trim();
   const system_role = body.system_role?.trim();
+  const rawBookRoles = Array.isArray(body.book_roles) ? body.book_roles : [];
 
-  if (!email && !full_name && !system_role) {
+  const hasAuthProfileChange = !!(email || full_name || system_role);
+  const hasBookRolesChange = rawBookRoles.length > 0;
+
+  if (!hasAuthProfileChange && !hasBookRolesChange) {
     return NextResponse.json(
       { error: "Không có gì để cập nhật" },
       { status: 400 }
@@ -207,10 +209,14 @@ export async function PATCH(req: NextRequest) {
 
   // 1) Cập nhật auth.users (email + full_name)
   if (email || full_name) {
-    const { error: aErr } = await admin.auth.admin.updateUserById(id, {
-      ...(email ? { email } : {}),
-      ...(full_name ? { user_metadata: { full_name } } : {}),
-    });
+    const updatePayload: any = {};
+    if (email) updatePayload.email = email;
+    if (full_name) updatePayload.user_metadata = { full_name };
+
+    const { error: aErr } = await admin.auth.admin.updateUserById(
+      id,
+      updatePayload
+    );
     if (aErr) {
       return NextResponse.json(
         { error: "update auth.users failed: " + aErr.message },
@@ -219,7 +225,8 @@ export async function PATCH(req: NextRequest) {
     }
   }
 
-  // 2) Cập nhật profiles
+  // 2) Cập nhật profiles (nếu có field hợp lệ)
+  let updatedProfile: any = null;
   const upd: Record<string, unknown> = {};
   if (email) upd.email = email;
   if (full_name) upd.name = full_name;
@@ -227,26 +234,67 @@ export async function PATCH(req: NextRequest) {
     upd.system_role = system_role;
   }
 
-  if (Object.keys(upd).length === 0) {
-    return NextResponse.json(
-      { error: "Không có field hợp lệ để update" },
-      { status: 400 }
-    );
+  if (Object.keys(upd).length > 0) {
+    const { data, error: pErr } = await admin
+      .from("profiles")
+      .update(upd)
+      .eq("id", id)
+      .select("id,email,name,system_role,created_at")
+      .maybeSingle();
+
+    if (pErr) {
+      return NextResponse.json(
+        { error: "update profiles failed: " + pErr.message },
+        { status: 500 }
+      );
+    }
+    updatedProfile = data;
   }
 
-  const { data, error: pErr } = await admin
-    .from("profiles")
-    .update(upd)
-    .eq("id", id)
-    .select("id,email,name,system_role,created_at")
-    .maybeSingle();
+  // 3) Cập nhật quyền sách (book_permissions)
+  if (hasBookRolesChange) {
+    // Xoá hết quyền cũ của user
+    const { error: delErr } = await admin
+      .from("book_permissions")
+      .delete()
+      .eq("user_id", id);
 
-  if (pErr) {
-    return NextResponse.json(
-      { error: "update profiles failed: " + pErr.message },
-      { status: 500 }
-    );
+    if (delErr) {
+      return NextResponse.json(
+        { error: "Không xoá được quyền sách cũ: " + delErr.message },
+        { status: 500 }
+      );
+    }
+
+    // Lọc những dòng hợp lệ (có book_id + role hợp lệ)
+    const cleanedRoles = rawBookRoles
+      .filter((r) => r.book_id && r.role)
+      .filter((r) =>
+        ["viewer", "author", "editor"].includes((r.role || "") as string)
+      ) as { book_id: string; role: string }[];
+
+    if (cleanedRoles.length > 0) {
+      const insertPayload = cleanedRoles.map((r) => ({
+        user_id: id,
+        book_id: r.book_id,
+        role: r.role, // enum public.book_role: 'viewer' | 'author' | 'editor'
+      }));
+
+      const { error: insErr } = await admin
+        .from("book_permissions")
+        .insert(insertPayload);
+
+      if (insErr) {
+        return NextResponse.json(
+          { error: "Không ghi được quyền sách mới: " + insErr.message },
+          { status: 500 }
+        );
+      }
+    }
   }
 
-  return NextResponse.json({ ok: true, user: data });
+  return NextResponse.json({
+    ok: true,
+    user: updatedProfile, // UI hiện tại không dùng, nhưng để sẵn
+  });
 }
