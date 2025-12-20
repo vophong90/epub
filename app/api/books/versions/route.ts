@@ -147,9 +147,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // (tuỳ bạn) Nếu muốn chỉ cho author/editor được tạo version:
-  // if (!isAdmin && perm.role === "viewer") { ... }
-
   // Tìm version_no lớn nhất hiện tại để +1
   const { data: latest, error: vErr } = await supabase
     .from("book_versions")
@@ -163,10 +160,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: vErr.message }, { status: 500 });
   }
 
-  const nextVersionNo =
-    (latest?.version_no && Number(latest.version_no)) > 0
-      ? Number(latest.version_no) + 1
-      : 1;
+  // ✅ Fix: tách giá trị ra trước, xử lý khi latest = null
+  const latestVersionNo =
+    latest && latest.version_no != null ? Number(latest.version_no) : 0;
+
+  const nextVersionNo = latestVersionNo > 0 ? latestVersionNo + 1 : 1;
 
   const { data: inserted, error: insErr } = await supabase
     .from("book_versions")
@@ -259,7 +257,9 @@ export async function PATCH(req: NextRequest) {
   // Lấy version để biết book_id
   const { data: version, error: vErr } = await supabase
     .from("book_versions")
-    .select("id,book_id,version_no,status,template_id,created_at,created_by,approved_by,approved_at,locked_by,locked_at")
+    .select(
+      "id,book_id,version_no,status,template_id,created_at,created_by,approved_by,approved_at,locked_by,locked_at"
+    )
     .eq("id", versionId)
     .maybeSingle();
 
@@ -291,9 +291,6 @@ export async function PATCH(req: NextRequest) {
       { status: 403 }
     );
   }
-
-  // (tuỳ bạn) có thể siết chặt: chỉ admin / editor được đổi template:
-  // if (!isAdmin && perm.role !== "editor") { ... }
 
   const patch: Record<string, any> = {};
   if (typeof templateId !== "undefined") {
