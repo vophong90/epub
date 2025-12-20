@@ -54,15 +54,13 @@ async function ensureAdmin() {
   return { supabase, admin, user };
 }
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: { userId: string } } // 👈 phải destructure như vầy
-) {
+// ⚠️ Ở đây KHÔNG annotate kiểu tham số 2 chi tiết nữa, để any cho Next vui
+export async function GET(req: NextRequest, context: any) {
   const check = await ensureAdmin();
   if ("errorRes" in check) return check.errorRes;
   const { admin } = check;
 
-  const userId = params.userId;
+  const userId = context?.params?.userId as string | undefined;
 
   if (!userId) {
     return NextResponse.json(
