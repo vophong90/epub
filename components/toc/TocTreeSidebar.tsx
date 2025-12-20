@@ -2,6 +2,7 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
+import type { Dispatch, SetStateAction } from "react";
 
 const INPUT =
   "w-full border rounded-lg px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-200";
@@ -15,11 +16,11 @@ export type TocSidebarItem = {
 type Props = {
   chapterTitle: string;
   items: TocSidebarItem[];
-  activeSectionId: string; // "root" | string (page.tsx đang set "root")
+  activeSectionId: string; // "root" | string
   canManageSubsections: boolean;
   loading: boolean;
 
-  onSelectSection: React.Dispatch<React.SetStateAction<string>>;
+  onSelectSection: Dispatch<SetStateAction<string>>;
 
   onCreateSub: (title: string) => Promise<void> | void;
   onRenameSub: (id: string, newTitle: string) => Promise<void> | void;
@@ -80,7 +81,7 @@ export function TocTreeSidebar({
   }
 
   return (
-    <aside className="space-y-3">
+    <aside className="space-y-3 min-w-0">
       {/* Header */}
       <div className="space-y-1">
         <div className="text-xs text-gray-500">Chương</div>
@@ -89,7 +90,7 @@ export function TocTreeSidebar({
         </div>
       </div>
 
-      {/* Root selector */}
+      {/* Root selector (đã bỏ “Chương chính” để không bị lặp ý) */}
       <button
         type="button"
         className={`w-full text-left px-2 py-2 rounded-md border text-sm ${
@@ -99,7 +100,7 @@ export function TocTreeSidebar({
         }`}
         onClick={() => onSelectSection("root")}
       >
-        <div className="text-[11px] text-gray-400">Chương chính</div>
+        <div className="text-[11px] text-gray-400">Nội dung chương</div>
         <div className="font-medium truncate">{chapterTitle}</div>
       </button>
 
@@ -140,11 +141,11 @@ export function TocTreeSidebar({
               const canEdit = canManageSubsections;
 
               return (
-                <div key={it.id} className="space-y-1">
-                  <div className="flex items-center gap-1">
+                <div key={it.id} className="space-y-1 min-w-0">
+                  <div className="flex items-center gap-1 min-w-0">
                     <button
                       type="button"
-                      className={`flex-1 text-left px-2 py-1.5 rounded-md border text-sm ${
+                      className={`flex-1 min-w-0 text-left px-2 py-1.5 rounded-md border text-sm ${
                         isActive
                           ? "border-blue-500 bg-blue-50 text-blue-800"
                           : "border-transparent hover:bg-gray-50 text-gray-700"
@@ -161,7 +162,7 @@ export function TocTreeSidebar({
                       <>
                         <button
                           type="button"
-                          className="px-1.5 py-1 text-[11px] border rounded-md bg-gray-50 hover:bg-gray-100 text-gray-700"
+                          className="shrink-0 px-1.5 py-1 text-[11px] border rounded-md bg-gray-50 hover:bg-gray-100 text-gray-700"
                           title="Đổi tên mục"
                           onClick={() => {
                             setRenamingId(it.id);
@@ -173,7 +174,7 @@ export function TocTreeSidebar({
 
                         <button
                           type="button"
-                          className="px-1.5 py-1 text-[11px] border rounded-md bg-red-50 hover:bg-red-100 text-red-600"
+                          className="shrink-0 px-1.5 py-1 text-[11px] border rounded-md bg-red-50 hover:bg-red-100 text-red-600"
                           title="Xoá mục"
                           onClick={() => onDeleteSub(it.id)}
                         >
@@ -186,25 +187,25 @@ export function TocTreeSidebar({
                   {/* Rename inline */}
                   {renamingId === it.id && (
                     <form
-                      className="flex items-center gap-2 text-xs"
+                      className="flex items-center gap-2 text-xs min-w-0"
                       onSubmit={(e) => submitRename(e, it.id)}
                     >
                       <input
-                        className={`${INPUT} h-7 text-xs`}
+                        className={`${INPUT} h-7 text-xs min-w-0`}
                         value={renamingTitle}
                         onChange={(e) => setRenamingTitle(e.target.value)}
                         disabled={renamingSaving}
                       />
                       <button
                         type="submit"
-                        className="px-2 py-1 rounded-md bg-blue-600 text-white text-[11px] hover:bg-blue-700 disabled:opacity-50"
+                        className="shrink-0 px-2 py-1 rounded-md bg-blue-600 text-white text-[11px] hover:bg-blue-700 disabled:opacity-50"
                         disabled={renamingSaving || !renamingTitle.trim()}
                       >
                         Lưu
                       </button>
                       <button
                         type="button"
-                        className="px-2 py-1 rounded-md border text-[11px] hover:bg-gray-50"
+                        className="shrink-0 px-2 py-1 rounded-md border text-[11px] hover:bg-gray-50"
                         onClick={() => {
                           setRenamingId(null);
                           setRenamingTitle("");
