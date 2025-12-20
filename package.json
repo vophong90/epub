@@ -21,7 +21,9 @@
     "@types/node": "^20.17.10",
     "pagedjs": "^0.4.3",
     "@sparticuz/chromium-min": "^141.0.0",
-    "puppeteer-core": "^24.23.1"
+    "puppeteer-core": "^24.23.1",
+    "mammoth": "^1.7.0",
+    "node-html-parser": "^6.1.13"
   },
   "devDependencies": {
     "typescript": "^5.5.4",
