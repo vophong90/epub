@@ -23,6 +23,45 @@ function getNodeText(node: any): string {
   return raw.replace(/\s+/g, " ").trim();
 }
 
+/** Heuristic: đoán heading khi không có H2 */
+function looksLikeHeadingText(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  if (t.length > 120) return false; // heading thường không quá dài
+
+  // 1) Dạng đánh số: 1., 1.1., 2.3.4 ...
+  if (/^\d+(\.\d+)*\s+/.test(t)) return true;
+
+  // 2) Dạng số La Mã: I., II., III.
+  if (/^[IVXLCDM]+\.\s+/.test(t)) return true;
+
+  // 3) Chủ yếu là CHỮ HOA
+  const letters = t.replace(/[^A-Za-zÀ-ỹ]/g, "");
+  if (!letters) return false;
+  const upperLetters = letters.replace(/[^A-ZÀ-Ỹ]/g, "");
+  const ratio = upperLetters.length / letters.length;
+  if (ratio >= 0.9) return true;
+
+  return false;
+}
+
+/** Bỏ phần đánh số đầu heading, trả về tiêu đề sạch */
+function stripHeadingNumber(text: string): string {
+  let t = text.trim();
+
+  // 1) Dạng 1., 1.1., 2.3.4 ...
+  t = t.replace(/^\d+(\.\d+)*\s+/, "");
+
+  // 2) Dạng (1) hoặc 1) + khoảng trắng
+  t = t.replace(/^\(?\d+\)\s+/, "");
+
+  // 3) Dạng số La Mã: I., II., III. ...
+  t = t.replace(/^[IVXLCDM]+\.\s+/, "");
+
+  t = t.trim();
+  return t || text.trim();
+}
+
 /** Tách theo H2 – ưu tiên nếu file có Heading 2 */
 function buildFromH2(body: any): { rootHtml: string; sections: SectionPreview[] } {
   const children = body.childNodes || [];
@@ -38,7 +77,8 @@ function buildFromH2(body: any): { rootHtml: string; sections: SectionPreview[] 
 
     const tag = (node.tagName || "").toLowerCase();
     if (tag === "h2") {
-      const title = txt || "Mục không có tiêu đề";
+      const rawTitle = txt || "Mục không có tiêu đề";
+      const title = stripHeadingNumber(rawTitle) || "Mục không có tiêu đề";
 
       // bắt đầu section mới
       currentSection = { title, nodes: [] };
@@ -63,28 +103,6 @@ function buildFromH2(body: any): { rootHtml: string; sections: SectionPreview[] 
   return { rootHtml, sections: mapped };
 }
 
-/** Heuristic: đoán heading khi không có H2 */
-function looksLikeHeadingText(text: string): boolean {
-  const t = text.trim();
-  if (!t) return false;
-  if (t.length > 120) return false; // heading thường không quá dài
-
-  // 1) Dạng đánh số: 1., 1.1., 2.3.4 ...
-  if (/^\d+(\.\d+)*\s+/.test(t)) return true;
-
-  // 2) Dạng số La Mã: I., II., III.
-  if (/^[IVXLCDM]+\.\s+/.test(t)) return true;
-
-  // 3) Chủ yếu là CHỮ HOA
-  const letters = t.replace(/[^A-Za-zÀ-ỹ]/g, "");
-  if (!letters) return false;
-  const upperLetters = letters.replace(/[^A-ZÀ-Ỹ]/g, "");
-  const ratio = upperLetters.length / letters.length;
-  if (ratio >= 0.9) return true;
-
-  return false;
-}
-
 function buildFromHeuristic(body: any): { rootHtml: string; sections: SectionPreview[] } {
   const children = body.childNodes || [];
   const sections: { title: string; nodes: any[] }[] = [];
@@ -107,7 +125,9 @@ function buildFromHeuristic(body: any): { rootHtml: string; sections: SectionPre
     const isHeading = isCandidateHeading && looksLikeHeadingText(txt);
 
     if (isHeading) {
-      const title = txt || "Mục không có tiêu đề";
+      const rawTitle = txt || "Mục không có tiêu đề";
+      const title = stripHeadingNumber(rawTitle) || "Mục không có tiêu đề";
+
       // bắt đầu section mới
       currentSection = { title, nodes: [] };
       sections.push(currentSection);
