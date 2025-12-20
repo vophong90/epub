@@ -23,7 +23,19 @@
     "@sparticuz/chromium-min": "^141.0.0",
     "puppeteer-core": "^24.23.1",
     "mammoth": "^1.7.0",
-    "node-html-parser": "^6.1.13"
+    "node-html-parser": "^6.1.13",
+    "@tiptap/react": "^2.11.5",
+    "@tiptap/pm": "^2.11.5",
+    "@tiptap/starter-kit": "^2.11.5",
+    "@tiptap/extension-underline": "^2.11.5",
+    "@tiptap/extension-link": "^2.11.5",
+    "@tiptap/extension-placeholder": "^2.11.5",
+    "@tiptap/extension-text-align": "^2.11.5",
+    "@tiptap/extension-image": "^2.11.5",
+    "@tiptap/extension-table": "^2.11.5",
+    "@tiptap/extension-table-row": "^2.11.5",
+    "@tiptap/extension-table-header": "^2.11.5",
+    "@tiptap/extension-table-cell": "^2.11.5"
   },
   "devDependencies": {
     "typescript": "^5.5.4",
