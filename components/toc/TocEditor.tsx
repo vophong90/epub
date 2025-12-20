@@ -1,6 +1,7 @@
 // components/toc/TocEditor.tsx
 "use client";
 
+import React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -23,6 +24,8 @@ type TocEditorProps = {
   canEdit: boolean;
   sectionTitle: string;
   sectionKindLabel: string;
+  versionId: string;
+  templateId: string;
   onChange: (html: string) => void;
 };
 
@@ -36,9 +39,16 @@ export function TocEditor({
   sectionTitle,
   sectionKindLabel,
   onChange,
+  versionId,
+  templateId,
 }: TocEditorProps) {
   // debounce output để tránh onChange spam quá nhiều
   const [tick, setTick] = useState(0);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewErr, setPreviewErr] = useState<string | null>(null);
+
 
   const editor = useEditor({
     extensions: [
@@ -137,6 +147,38 @@ export function TocEditor({
     editor.chain().focus().setImage({ src: url.trim() }).run();
   };
 
+  async function openPreview() {
+  if (!canEdit) return; // hoặc cho view cũng preview tùy bạn
+  setPreviewErr(null);
+  setPreviewOpen(true);
+
+  // nếu đã có previewUrl còn hạn thì khỏi gọi lại
+  if (previewUrl) return;
+
+  setPreviewLoading(true);
+  try {
+    // TODO: bạn truyền version_id và template_id từ page xuống TocEditor
+    // Hiện TocEditorProps chưa có 2 cái này => phải thêm props (mục 1.4)
+    const res = await fetch("/api/books/version/render-pdf", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version_id: versionId, template_id: templateId }),
+    });
+
+    const j = await res.json().catch(() => ({}));
+
+    if (!res.ok || !j?.ok) {
+      throw new Error(j?.error || j?.detail || `HTTP ${res.status}`);
+    }
+
+    setPreviewUrl(j.preview_url || null);
+  } catch (e: any) {
+    setPreviewErr(e?.message || "Preview lỗi");
+  } finally {
+    setPreviewLoading(false);
+  }
+}
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
@@ -153,210 +195,272 @@ export function TocEditor({
         )}
       </div>
 
-      {/* Toolbar nâng cấp */}
-      <div className="flex flex-wrap gap-2 text-sm border rounded-lg px-3 py-2 bg-gray-50">
-        {/* Undo/Redo */}
-        <button
-          type="button"
-          className="px-2 py-1 rounded border hover:bg-gray-100 disabled:opacity-50"
-          disabled={!canUse || !editor?.can().undo()}
-          onClick={() => editor?.chain().focus().undo().run()}
-        >
-          ↶
-        </button>
-        <button
-          type="button"
-          className="px-2 py-1 rounded border hover:bg-gray-100 disabled:opacity-50"
-          disabled={!canUse || !editor?.can().redo()}
-          onClick={() => editor?.chain().focus().redo().run()}
-        >
-          ↷
-        </button>
+      {/* Khung editor: toolbar sticky + body scroll */}
+<div className="rounded-lg border bg-white">
+  {/* Toolbar */}
+  <div className="sticky top-0 z-10 bg-gray-50 border-b rounded-t-lg px-3 py-2">
+    <div className="flex flex-wrap gap-2 text-sm">
+      {/* ✅ Preview */}
+      <button
+        type="button"
+        className="px-2 py-1 rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+        disabled={previewLoading}
+        onClick={openPreview}
+        title="Xem thử khi in PDF theo template"
+      >
+        {previewLoading ? "Đang preview..." : "Preview PDF"}
+      </button>
 
-        <span className="h-6 w-px bg-gray-300 mx-1" />
+      <span className="h-6 w-px bg-gray-300 mx-1" />
 
-        {/* Inline marks */}
-        <button
-          type="button"
-          className={`px-2 py-1 rounded border hover:bg-gray-100 ${clsActive(!!editor?.isActive("bold"))}`}
-          disabled={!canUse}
-          onClick={() => editor?.chain().focus().toggleBold().run()}
-        >
-          B
-        </button>
-        <button
-          type="button"
-          className={`px-2 py-1 rounded border hover:bg-gray-100 italic ${clsActive(
-            !!editor?.isActive("italic")
-          )}`}
-          disabled={!canUse}
-          onClick={() => editor?.chain().focus().toggleItalic().run()}
-        >
-          I
-        </button>
-        <button
-          type="button"
-          className={`px-2 py-1 rounded border hover:bg-gray-100 underline ${clsActive(
-            !!editor?.isActive("underline")
-          )}`}
-          disabled={!canUse}
-          onClick={() => editor?.chain().focus().toggleUnderline().run()}
-        >
-          U
-        </button>
+      {/* Undo/Redo */}
+      <button
+        type="button"
+        className="px-2 py-1 rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+        disabled={!canUse || !editor?.can().undo()}
+        onClick={() => editor?.chain().focus().undo().run()}
+      >
+        ↶
+      </button>
+      <button
+        type="button"
+        className="px-2 py-1 rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+        disabled={!canUse || !editor?.can().redo()}
+        onClick={() => editor?.chain().focus().redo().run()}
+      >
+        ↷
+      </button>
 
-        <span className="h-6 w-px bg-gray-300 mx-1" />
+      <span className="h-6 w-px bg-gray-300 mx-1" />
 
-        {/* Lists */}
-        <button
-          type="button"
-          className={`px-2 py-1 rounded border hover:bg-gray-100 ${clsActive(
-            !!editor?.isActive("bulletList")
-          )}`}
-          disabled={!canUse}
-          onClick={() => editor?.chain().focus().toggleBulletList().run()}
-        >
-          •
-        </button>
-        <button
-          type="button"
-          className={`px-2 py-1 rounded border hover:bg-gray-100 ${clsActive(
-            !!editor?.isActive("orderedList")
-          )}`}
-          disabled={!canUse}
-          onClick={() => editor?.chain().focus().toggleOrderedList().run()}
-        >
-          1.
-        </button>
+      {/* Inline marks */}
+      <button
+        type="button"
+        className={`px-2 py-1 rounded border bg-white hover:bg-gray-100 ${clsActive(
+          !!editor?.isActive("bold")
+        )}`}
+        disabled={!canUse}
+        onClick={() => editor?.chain().focus().toggleBold().run()}
+      >
+        B
+      </button>
+      <button
+        type="button"
+        className={`px-2 py-1 rounded border bg-white hover:bg-gray-100 italic ${clsActive(
+          !!editor?.isActive("italic")
+        )}`}
+        disabled={!canUse}
+        onClick={() => editor?.chain().focus().toggleItalic().run()}
+      >
+        I
+      </button>
+      <button
+        type="button"
+        className={`px-2 py-1 rounded border bg-white hover:bg-gray-100 underline ${clsActive(
+          !!editor?.isActive("underline")
+        )}`}
+        disabled={!canUse}
+        onClick={() => editor?.chain().focus().toggleUnderline().run()}
+      >
+        U
+      </button>
 
-        <span className="h-6 w-px bg-gray-300 mx-1" />
+      <span className="h-6 w-px bg-gray-300 mx-1" />
 
-        {/* Headings */}
-        <button
-          type="button"
-          className={`px-2 py-1 rounded border hover:bg-gray-100 ${clsActive(
-            !!editor?.isActive("heading", { level: 2 })
-          )}`}
-          disabled={!canUse}
-          onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}
-        >
-          H2
-        </button>
-        <button
-          type="button"
-          className={`px-2 py-1 rounded border hover:bg-gray-100 ${clsActive(
-            !!editor?.isActive("heading", { level: 3 })
-          )}`}
-          disabled={!canUse}
-          onClick={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()}
-        >
-          H3
-        </button>
-        <button
-          type="button"
-          className={`px-2 py-1 rounded border hover:bg-gray-100 ${clsActive(
-            !!editor?.isActive("heading", { level: 4 })
-          )}`}
-          disabled={!canUse}
-          onClick={() => editor?.chain().focus().toggleHeading({ level: 4 }).run()}
-        >
-          H4
-        </button>
+      {/* Lists */}
+      <button
+        type="button"
+        className={`px-2 py-1 rounded border bg-white hover:bg-gray-100 ${clsActive(
+          !!editor?.isActive("bulletList")
+        )}`}
+        disabled={!canUse}
+        onClick={() => editor?.chain().focus().toggleBulletList().run()}
+      >
+        •
+      </button>
+      <button
+        type="button"
+        className={`px-2 py-1 rounded border bg-white hover:bg-gray-100 ${clsActive(
+          !!editor?.isActive("orderedList")
+        )}`}
+        disabled={!canUse}
+        onClick={() => editor?.chain().focus().toggleOrderedList().run()}
+      >
+        1.
+      </button>
 
-        <span className="h-6 w-px bg-gray-300 mx-1" />
+      <span className="h-6 w-px bg-gray-300 mx-1" />
 
-        {/* Align */}
-        <button
-          type="button"
-          className="px-2 py-1 rounded border hover:bg-gray-100 disabled:opacity-50"
-          disabled={!canUse}
-          onClick={() => editor?.chain().focus().setTextAlign("left").run()}
-        >
-          ⬅
-        </button>
-        <button
-          type="button"
-          className="px-2 py-1 rounded border hover:bg-gray-100 disabled:opacity-50"
-          disabled={!canUse}
-          onClick={() => editor?.chain().focus().setTextAlign("center").run()}
-        >
-          ⬌
-        </button>
-        <button
-          type="button"
-          className="px-2 py-1 rounded border hover:bg-gray-100 disabled:opacity-50"
-          disabled={!canUse}
-          onClick={() => editor?.chain().focus().setTextAlign("right").run()}
-        >
-          ➡
-        </button>
+      {/* Headings */}
+      <button
+        type="button"
+        className={`px-2 py-1 rounded border bg-white hover:bg-gray-100 ${clsActive(
+          !!editor?.isActive("heading", { level: 2 })
+        )}`}
+        disabled={!canUse}
+        onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}
+      >
+        H2
+      </button>
+      <button
+        type="button"
+        className={`px-2 py-1 rounded border bg-white hover:bg-gray-100 ${clsActive(
+          !!editor?.isActive("heading", { level: 3 })
+        )}`}
+        disabled={!canUse}
+        onClick={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()}
+      >
+        H3
+      </button>
+      <button
+        type="button"
+        className={`px-2 py-1 rounded border bg-white hover:bg-gray-100 ${clsActive(
+          !!editor?.isActive("heading", { level: 4 })
+        )}`}
+        disabled={!canUse}
+        onClick={() => editor?.chain().focus().toggleHeading({ level: 4 }).run()}
+      >
+        H4
+      </button>
 
-        <span className="h-6 w-px bg-gray-300 mx-1" />
+      <span className="h-6 w-px bg-gray-300 mx-1" />
 
-        {/* Link / Quote / Code */}
-        <button
-          type="button"
-          className={`px-2 py-1 rounded border hover:bg-gray-100 ${clsActive(
-            !!editor?.isActive("link")
-          )}`}
-          disabled={!canUse}
-          onClick={askLink}
-        >
-          🔗
-        </button>
-        <button
-          type="button"
-          className={`px-2 py-1 rounded border hover:bg-gray-100 ${clsActive(
-            !!editor?.isActive("blockquote")
-          )}`}
-          disabled={!canUse}
-          onClick={() => editor?.chain().focus().toggleBlockquote().run()}
-        >
-          ❝
-        </button>
-        <button
-          type="button"
-          className={`px-2 py-1 rounded border hover:bg-gray-100 ${clsActive(
-            !!editor?.isActive("codeBlock")
-          )}`}
-          disabled={!canUse}
-          onClick={() => editor?.chain().focus().toggleCodeBlock().run()}
-        >
-          {"</>"}
-        </button>
+      {/* Align */}
+      <button
+        type="button"
+        className="px-2 py-1 rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+        disabled={!canUse}
+        onClick={() => editor?.chain().focus().setTextAlign("left").run()}
+      >
+        ⬅
+      </button>
+      <button
+        type="button"
+        className="px-2 py-1 rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+        disabled={!canUse}
+        onClick={() => editor?.chain().focus().setTextAlign("center").run()}
+      >
+        ⬌
+      </button>
+      <button
+        type="button"
+        className="px-2 py-1 rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+        disabled={!canUse}
+        onClick={() => editor?.chain().focus().setTextAlign("right").run()}
+      >
+        ➡
+      </button>
 
-        <span className="h-6 w-px bg-gray-300 mx-1" />
+      <span className="h-6 w-px bg-gray-300 mx-1" />
 
-        {/* Table */}
-        <button
-          type="button"
-          className="px-2 py-1 rounded border hover:bg-gray-100 disabled:opacity-50"
-          disabled={!canUse}
-          onClick={() =>
-            editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
-          }
-        >
-          ⊞
-        </button>
+      {/* Link / Quote / Code */}
+      <button
+        type="button"
+        className={`px-2 py-1 rounded border bg-white hover:bg-gray-100 ${clsActive(
+          !!editor?.isActive("link")
+        )}`}
+        disabled={!canUse}
+        onClick={askLink}
+      >
+        🔗
+      </button>
+      <button
+        type="button"
+        className={`px-2 py-1 rounded border bg-white hover:bg-gray-100 ${clsActive(
+          !!editor?.isActive("blockquote")
+        )}`}
+        disabled={!canUse}
+        onClick={() => editor?.chain().focus().toggleBlockquote().run()}
+      >
+        ❝
+      </button>
+      <button
+        type="button"
+        className={`px-2 py-1 rounded border bg-white hover:bg-gray-100 ${clsActive(
+          !!editor?.isActive("codeBlock")
+        )}`}
+        disabled={!canUse}
+        onClick={() => editor?.chain().focus().toggleCodeBlock().run()}
+      >
+        {"</>"}
+      </button>
 
-        {/* Image */}
-        <button
-          type="button"
-          className="px-2 py-1 rounded border hover:bg-gray-100 disabled:opacity-50"
-          disabled={!canUse}
-          onClick={askImage}
-        >
-          🖼
-        </button>
+      <span className="h-6 w-px bg-gray-300 mx-1" />
+
+      {/* Table */}
+      <button
+        type="button"
+        className="px-2 py-1 rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+        disabled={!canUse}
+        onClick={() =>
+          editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
+        }
+      >
+        ⊞
+      </button>
+
+      {/* Image */}
+      <button
+        type="button"
+        className="px-2 py-1 rounded border bg-white hover:bg-gray-100 disabled:opacity-50"
+        disabled={!canUse}
+        onClick={askImage}
+      >
+        🖼
+      </button>
+    </div>
+  </div>
+
+  {/* Body scroll */}
+  <div className="max-h-[520px] overflow-y-auto px-3 py-2">
+    <EditorContent editor={editor} />
+  </div>
+</div>
+
+{/* ✅ Preview Modal */}
+{previewOpen && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+    <div className="w-full max-w-5xl h-[85vh] bg-white rounded-lg shadow-lg border flex flex-col">
+      <div className="px-4 py-3 border-b flex items-center justify-between">
+        <div className="font-semibold">Preview PDF (toàn chương)</div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="px-3 py-1.5 rounded-md border hover:bg-gray-50"
+            onClick={() => {
+              // refresh: bỏ cache url để gọi lại
+              setPreviewUrl(null);
+              openPreview();
+            }}
+          >
+            Render lại
+          </button>
+          <button
+            type="button"
+            className="px-3 py-1.5 rounded-md border hover:bg-gray-50"
+            onClick={() => setPreviewOpen(false)}
+          >
+            Đóng
+          </button>
+        </div>
       </div>
 
-      <div className="rounded-lg border">
-        <div className="sticky top-0 z-10 bg-gray-50 border-b rounded-t-lg px-3 py-2">
-        </div>
-        <div className="max-h-[520px] overflow-y-auto px-3 py-2">
-          <EditorContent editor={editor} />
-        </div>
+      <div className="flex-1 p-3">
+        {previewErr ? (
+          <div className="text-sm text-red-600">{previewErr}</div>
+        ) : previewLoading && !previewUrl ? (
+          <div className="text-sm text-gray-600">Đang render preview…</div>
+        ) : previewUrl ? (
+          <iframe
+            title="preview"
+            src={previewUrl}
+            className="w-full h-full rounded-md border"
+          />
+        ) : (
+          <div className="text-sm text-gray-600">Chưa có preview.</div>
+        )}
       </div>
     </div>
-  );
-}
+  </div>
+)}
+
