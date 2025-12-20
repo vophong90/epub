@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/components/AuthProvider";
 
@@ -67,10 +67,15 @@ type TocItemResponse = {
 export default function TocItemPage() {
   const params = useParams<{ id: string; tocItemId: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
+
   const { user, loading: authLoading } = useAuth();
 
   const bookId = params.id;
   const tocItemId = params.tocItemId;
+
+  // template_id dùng cho render PDF (TocEditorProps yêu cầu)
+  const templateId = searchParams.get("template_id") || "";
 
   /** STATE */
   const [loading, setLoading] = useState(true);
@@ -88,8 +93,7 @@ export default function TocItemPage() {
   // Editor content per node
   const [htmlById, setHtmlById] = useState<Record<string, string>>({});
   const [tocTreeRoot, setTocTreeRoot] = useState<TocTreeNode | null>(null);
-  const [activeSectionId, setActiveSectionId] =
-    useState<"root" | string>("root");
+  const [activeSectionId, setActiveSectionId] = useState<"root" | string>("root");
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -109,9 +113,7 @@ export default function TocItemPage() {
   // author được phân công?
   const isAssignedAuthor = useMemo(() => {
     if (!user || !data) return false;
-    return data.assignments.some(
-      (a) => a.user_id === user.id && a.role_in_item === "author"
-    );
+    return data.assignments.some((a) => a.user_id === user.id && a.role_in_item === "author");
   }, [data, user]);
 
   const canEditContent = useMemo(() => {
@@ -124,9 +126,7 @@ export default function TocItemPage() {
   }, [data, isEditor, isAuthorRole, isAssignedAuthor, contentStatus]);
 
   const canSubmit =
-    isAuthorRole &&
-    isAssignedAuthor &&
-    (contentStatus === "draft" || contentStatus === "needs_revision");
+    isAuthorRole && isAssignedAuthor && (contentStatus === "draft" || contentStatus === "needs_revision");
 
   const canApprove = isEditor && contentStatus === "submitted";
   const canRequestChange = isEditor && contentStatus === "submitted";
@@ -321,10 +321,7 @@ export default function TocItemPage() {
   function getActiveTitle(): string {
     if (!data) return "";
     if (activeSectionId === "root") return data.item.title;
-    return (
-      findNodeTitle(tocTreeRoot, activeSectionId) ??
-      data.item.title
-    );
+    return findNodeTitle(tocTreeRoot, activeSectionId) ?? data.item.title;
   }
 
   /** SAVE CONTENT */
@@ -407,11 +404,7 @@ export default function TocItemPage() {
 
   async function handleApproveChapter() {
     if (!tocItemId) return;
-    if (
-      !window.confirm(
-        "Duyệt chương này? Sau khi duyệt, tác giả sẽ không thể chỉnh sửa."
-      )
-    ) {
+    if (!window.confirm("Duyệt chương này? Sau khi duyệt, tác giả sẽ không thể chỉnh sửa.")) {
       return;
     }
     setApproving(true);
@@ -535,7 +528,6 @@ export default function TocItemPage() {
         setErrorMsg(j.error || "Tạo mục con thất bại");
         return;
       }
-      // reload tree để có node mới + numbering đúng
       await loadTree(tocItemId);
     } catch (e: any) {
       setErrorMsg(e?.message || "Lỗi khi tạo mục con");
@@ -547,17 +539,15 @@ export default function TocItemPage() {
   async function handleDeleteNode(id: string) {
     if (!tocItemId) return;
     try {
-      const res = await fetch(
-        `/api/toc/subsections?id=${encodeURIComponent(id)}`,
-        { method: "DELETE" }
-      );
+      const res = await fetch(`/api/toc/subsections?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j.error) {
         setErrorMsg(j.error || "Xoá mục thất bại");
         return;
       }
 
-      // nếu đang edit node bị xoá -> về root
       if (activeSectionId === id) setActiveSectionId("root");
 
       await loadTree(tocItemId);
@@ -591,7 +581,6 @@ export default function TocItemPage() {
         setErrorMsg(j.error || "Sửa tiêu đề thất bại");
         return;
       }
-      // reload tree để title cập nhật ở sidebar
       await loadTree(tocItemId);
     } catch (e: any) {
       setErrorMsg(e?.message || "Lỗi khi sửa mục");
@@ -627,8 +616,6 @@ export default function TocItemPage() {
 
   const canImport = canEditContent && canManageSubsections;
 
-  // sidebar expects: activeSectionId = "root" hoặc nodeId
-  // editor uses: root as tocItemId when activeSectionId === "root"
   return (
     <main className="max-w-6xl mx-auto px-4 py-8 space-y-6">
       {/* Breadcrumb + Header */}
@@ -645,12 +632,11 @@ export default function TocItemPage() {
             <span className="mx-1">/</span>
             <span className="text-gray-700">{data.item.title}</span>
           </div>
+
           <h1 className="text-2xl font-bold">{data.item.title}</h1>
 
           <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className={statusChipClass(contentStatus)}>
-              {statusLabel(contentStatus)}
-            </span>
+            <span className={statusChipClass(contentStatus)}>{statusLabel(contentStatus)}</span>
             {data.role && (
               <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700">
                 Vai trò ở cấp sách: {data.role}
@@ -664,9 +650,7 @@ export default function TocItemPage() {
               Thành viên được phân công cho chương này
             </h2>
             {data.assignments.length === 0 ? (
-              <p className="text-xs text-gray-500">
-                Chưa có ai được phân công cho mục này.
-              </p>
+              <p className="text-xs text-gray-500">Chưa có ai được phân công cho mục này.</p>
             ) : (
               <ul className="space-y-1 text-sm">
                 {data.assignments.map((a) => {
@@ -691,10 +675,7 @@ export default function TocItemPage() {
 
         <div className="flex flex-col items-end gap-2 text-xs text-gray-500">
           {data.content?.updated_at && (
-            <div>
-              Cập nhật lần cuối:{" "}
-              {new Date(data.content.updated_at).toLocaleString()}
-            </div>
+            <div>Cập nhật lần cuối: {new Date(data.content.updated_at).toLocaleString()}</div>
           )}
           <button className={BTN} onClick={() => router.back()}>
             ← Quay lại sách
@@ -712,9 +693,7 @@ export default function TocItemPage() {
       {/* Ghi chú editor */}
       <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 space-y-3">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-gray-800">
-            Ghi chú của editor
-          </h3>
+          <h3 className="text-sm font-semibold text-gray-800">Ghi chú của editor</h3>
           {data.content?.editor_note && (
             <span
               className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${
@@ -733,8 +712,7 @@ export default function TocItemPage() {
         {isEditor ? (
           <div className="space-y-2">
             <p className="text-xs text-gray-500">
-              Ghi chú này sẽ gửi cho tác giả khi bạn bấm{" "}
-              <strong>“Yêu cầu chỉnh sửa chương”</strong>.
+              Ghi chú này sẽ gửi cho tác giả khi bạn bấm <strong>“Yêu cầu chỉnh sửa chương”</strong>.
             </p>
             <textarea
               className={`${INPUT} text-sm min-h-[100px]`}
@@ -746,27 +724,17 @@ export default function TocItemPage() {
         ) : (
           <div className="space-y-2 text-sm">
             {data.content?.editor_note ? (
-              <p className="whitespace-pre-wrap text-gray-800">
-                {data.content.editor_note}
-              </p>
+              <p className="whitespace-pre-wrap text-gray-800">{data.content.editor_note}</p>
             ) : (
-              <p className="text-xs text-gray-500">
-                Chưa có ghi chú nào từ editor cho chương này.
-              </p>
+              <p className="text-xs text-gray-500">Chưa có ghi chú nào từ editor cho chương này.</p>
             )}
           </div>
         )}
 
         {canResolveNote && (
           <div className="pt-2">
-            <button
-              className={BTN_PRIMARY}
-              onClick={handleResolveNote}
-              disabled={resolvingNote}
-            >
-              {resolvingNote
-                ? "Đang đánh dấu đã giải quyết..."
-                : "Đánh dấu đã giải quyết ghi chú"}
+            <button className={BTN_PRIMARY} onClick={handleResolveNote} disabled={resolvingNote}>
+              {resolvingNote ? "Đang đánh dấu đã giải quyết..." : "Đánh dấu đã giải quyết ghi chú"}
             </button>
           </div>
         )}
@@ -785,11 +753,7 @@ export default function TocItemPage() {
             onCreateChild={handleCreateChild}
             onRenameNode={handleRenameNode}
             onDeleteNode={async (id, title) => {
-              if (
-                !window.confirm(
-                  `Xoá "${title}"? Các mục con sâu hơn (nếu có) cũng sẽ bị xoá.`
-                )
-              ) {
+              if (!window.confirm(`Xoá "${title}"? Các mục con sâu hơn (nếu có) cũng sẽ bị xoá.`)) {
                 return;
               }
               await handleDeleteNode(id);
@@ -803,6 +767,8 @@ export default function TocItemPage() {
               canEdit={canEditContent}
               sectionTitle={getActiveTitle()}
               sectionKindLabel={activeSectionId === "root" ? "chương" : "mục"}
+              versionId={data.item.book_version_id}
+              templateId={templateId}
               onChange={updateActiveHtml}
             />
 
@@ -812,26 +778,29 @@ export default function TocItemPage() {
                 onClick={handleSaveCurrent}
                 disabled={!canEditContent || savingSection}
               >
-                {savingSection
-                  ? "Đang lưu phần này..."
-                  : "Lưu nội dung phần đang chọn"}
+                {savingSection ? "Đang lưu phần này..." : "Lưu nội dung phần đang chọn"}
               </button>
               <button className={BTN} onClick={() => setActiveSectionId("root")}>
                 Về chương chính
               </button>
             </div>
+
+            {/* Hint khi thiếu templateId (để khỏi bấm render bị lỗi 400) */}
+            {!templateId && (
+              <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+                Chưa có <b>template_id</b> trên URL. Nếu bạn muốn render PDF, hãy mở trang với{" "}
+                <code className="font-mono">?template_id=...</code>.
+              </div>
+            )}
           </div>
         </div>
       </section>
 
       {/* Hành động cho cả chương */}
       <section className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-4">
-        <h3 className="font-semibold text-sm text-slate-800">
-          Hành động cho cả chương
-        </h3>
+        <h3 className="font-semibold text-sm text-slate-800">Hành động cho cả chương</h3>
         <p className="text-xs text-slate-600">
-          Các nút bên dưới áp dụng cho chương hiện tại và tất cả mục con bên
-          trong chương này.
+          Các nút bên dưới áp dụng cho chương hiện tại và tất cả mục con bên trong chương này.
         </p>
 
         <div className="flex flex-wrap items-center gap-3">
@@ -843,19 +812,11 @@ export default function TocItemPage() {
             {savingAll ? "Đang lưu cả chương..." : "Lưu bản nháp chương"}
           </button>
 
-          <button
-            className={BTN}
-            onClick={handleSubmitChapter}
-            disabled={!canSubmit || submitting}
-          >
+          <button className={BTN} onClick={handleSubmitChapter} disabled={!canSubmit || submitting}>
             {submitting ? "Đang nộp chương..." : "Nộp chương cho editor"}
           </button>
 
-          <button
-            className={BTN}
-            onClick={handleGPTCheckChapter}
-            disabled={checkingGPT}
-          >
+          <button className={BTN} onClick={handleGPTCheckChapter} disabled={checkingGPT}>
             {checkingGPT ? "GPT đang kiểm tra chương..." : "GPT kiểm tra chương"}
           </button>
         </div>
@@ -876,11 +837,7 @@ export default function TocItemPage() {
         )}
 
         {/* Import từ Word */}
-        <TocImportPanel
-          tocItemId={tocItemId}
-          canImport={canImport}
-          onImportedSuccessfully={reloadAll}
-        />
+        <TocImportPanel tocItemId={tocItemId} canImport={canImport} onImportedSuccessfully={reloadAll} />
       </section>
 
       {/* Panel hành động của Editor */}
