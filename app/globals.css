@@ -78,13 +78,25 @@
 }
 
 /* Lists */
-.ProseMirror ul,
-.ProseMirror ol {
-  padding-left: 1.35rem;
-  margin: 0.5rem 0;
+.ProseMirror ul {
+  list-style: disc;
+  padding-left: 1.4rem;
+  margin: 0.35rem 0;
 }
+
+.ProseMirror ol {
+  list-style: decimal;
+  padding-left: 1.4rem;
+  margin: 0.35rem 0;
+}
+
 .ProseMirror li {
-  margin: 0.2rem 0;
+  margin: 0.15rem 0;
+}
+
+.ProseMirror ul li::marker,
+.ProseMirror ol li::marker {
+  color: #111827; /* gray-900 */
 }
 
 /* Blockquote */
