@@ -33,6 +33,14 @@ type BookVersion = {
   approved_at?: string | null;
   locked_by?: string | null;
   locked_at?: string | null;
+  template_id?: string | null;
+};
+
+type VersionsApiResponse = {
+  ok: boolean;
+  is_admin: boolean;
+  versions: BookVersion[];
+  error?: string;
 };
 
 type TocItem = {
@@ -128,20 +136,13 @@ export default function BookDetailPage() {
   const [modalSaving, setModalSaving] = useState(false);
   const [modalDeleting, setModalDeleting] = useState(false);
 
-  const [modalSelectedAuthors, setModalSelectedAuthors] = useState<string[]>(
-    []
-  );
-  const [modalOriginalAuthors, setModalOriginalAuthors] = useState<string[]>(
-    []
-  );
-  const [modalLoadingAssignments, setModalLoadingAssignments] =
-    useState(false);
+  const [modalSelectedAuthors, setModalSelectedAuthors] = useState<string[]>([]);
+  const [modalOriginalAuthors, setModalOriginalAuthors] = useState<string[]>([]);
+  const [modalLoadingAssignments, setModalLoadingAssignments] = useState(false);
 
   /** Search user để phân công (theo email) */
   const [userSearchQuery, setUserSearchQuery] = useState("");
-  const [userSearchResults, setUserSearchResults] = useState<MemberProfile[]>(
-    []
-  );
+  const [userSearchResults, setUserSearchResults] = useState<MemberProfile[]>([]);
   const [userSearchLoading, setUserSearchLoading] = useState(false);
   const [userSearchError, setUserSearchError] = useState<string | null>(null);
 
@@ -178,26 +179,29 @@ export default function BookDetailPage() {
         if (cancelled) return;
         setBook(bookRow as Book);
 
-        // 2) Load latest version (nếu có)
-        const { data: versionRow, error: vErr } = await supabase
-          .from("book_versions")
-          .select("id,version_no,status,created_at")
-          .eq("book_id", bookId)
-          .order("version_no", { ascending: false })
-          .limit(1)
-          .maybeSingle();
+        // 2) Load danh sách version qua API (đã kiểm tra quyền, RLS, v.v.)
+        const res = await fetch(`/api/books/versions?book_id=${bookId}`);
+        const json = (await res.json().catch(() => ({}))) as Partial<VersionsApiResponse>;
 
         if (cancelled) return;
 
-        if (!vErr && versionRow) {
-          const v = versionRow as BookVersion;
-          setVersion(v);
+        if (!res.ok || !json.ok) {
+          console.error("load versions error:", json.error || res.status);
+          setVersion(null);
+          return;
+        }
+
+        const versions = json.versions || [];
+        if (versions.length > 0) {
+          // API đang order version_no ascending, nên lấy phần tử cuối là mới nhất
+          const latest = versions[versions.length - 1];
+          setVersion(latest);
 
           // 3) Load TOC tree
-          await loadTocTree(v.id, cancelled);
+          await loadTocTree(latest.id, cancelled);
 
           // 4) Load members
-          await loadMembers(v.id, cancelled);
+          await loadMembers(latest.id, cancelled);
         } else {
           setVersion(null);
         }
@@ -255,42 +259,38 @@ export default function BookDetailPage() {
 
   const rootItems = useMemo(() => childrenMap.get(null) || [], [childrenMap]);
 
-  /** Tạo phiên bản đầu tiên */
+  /** Tạo phiên bản đầu tiên (đi qua API /api/books/versions) */
   async function handleCreateFirstVersion() {
     if (!bookId) return;
     setCreatingVersion(true);
     setErrorMsg(null);
     try {
-      const {
-        data: { user },
-        error: userErr,
-      } = await supabase.auth.getUser();
-      if (userErr || !user) {
-        setErrorMsg("Không xác định được người dùng.");
-        return;
-      }
-
-      const { data: newVersion, error: insErr } = await supabase
-        .from("book_versions")
-        .insert({
+      const res = await fetch("/api/books/versions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           book_id: bookId,
-          created_by: user.id,
-          status: "draft",
-        })
-        .select("id,version_no,status,created_at")
-        .maybeSingle();
+          // template_id: null, // có thể truyền sau nếu muốn chọn template ngay lúc tạo
+        }),
+      });
 
-      if (insErr || !newVersion) {
-        setErrorMsg(insErr?.message || "Không tạo được phiên bản mới.");
+      const json = await res.json().catch(() => ({} as any));
+
+      if (!res.ok || !json?.ok || !json?.version) {
+        console.error("create version error:", json);
+        setErrorMsg(json?.error || "Không tạo được phiên bản mới.");
         return;
       }
 
-      const v = newVersion as BookVersion;
+      const v = json.version as BookVersion;
       setVersion(v);
 
       // reload TOC & members cho version mới
       await loadTocTree(v.id);
       await loadMembers(v.id);
+    } catch (e: any) {
+      console.error("handleCreateFirstVersion error:", e);
+      setErrorMsg(e?.message || "Lỗi khi tạo phiên bản mới.");
     } finally {
       setCreatingVersion(false);
     }
@@ -835,7 +835,9 @@ export default function BookDetailPage() {
                                         ? prev
                                         : [...prev, u.id];
                                     } else {
-                                      return prev.filter((id) => id !== u.id);
+                                      return prev.filter(
+                                        (id) => id !== u.id
+                                      );
                                     }
                                   });
                                 }}
