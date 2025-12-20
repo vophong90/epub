@@ -44,9 +44,6 @@ export function TocEditor({
     extensions: [
       StarterKit.configure({
         heading: { levels: [2, 3, 4, 5] },
-        codeBlock: true,
-        blockquote: true,
-        history: true,
       }),
       Underline,
       Link.configure({
