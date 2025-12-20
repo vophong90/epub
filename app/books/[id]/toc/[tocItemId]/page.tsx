@@ -667,7 +667,7 @@ export default function TocItemPage() {
     setImportApplying(true);
     setImportError(null);
     try {
-      const res = await fetch("/api/import-docx/apply", {
+      const res = await fetch("/api/toc/import-docx/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
