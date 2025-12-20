@@ -21,6 +21,8 @@ type TocContentRow = {
   updated_at: string | null;
   updated_by: string | null;
   status: "draft" | "submitted" | "needs_revision" | "approved";
+  editor_note: string | null;
+  author_resolved: boolean;
 };
 
 type AssignmentRow = {
@@ -100,14 +102,15 @@ export async function GET(req: NextRequest) {
     .maybeSingle<{ id: string; title: string }>();
 
   if (bErr) {
-    // Không critical, chỉ log error
     console.error("books select error in /api/toc/item:", bErr);
   }
 
   // 5) Nội dung mục
   const { data: content, error: cErr } = await supabase
     .from("toc_contents")
-    .select("toc_item_id,content_json,updated_at,updated_by,status")
+    .select(
+      "toc_item_id,content_json,updated_at,updated_by,status,editor_note,author_resolved"
+    )
     .eq("toc_item_id", tocItemId)
     .maybeSingle<TocContentRow>();
 
@@ -118,11 +121,11 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // 6) Assignments ở mục này
-  const { data: assigns, error: aErr } = await supabase
+  // 6) Assignments
+  const { data: assigns, error: aErr } = (await supabase
     .from("toc_assignments")
     .select("id,toc_item_id,user_id,role_in_item")
-    .eq("toc_item_id", tocItemId) as {
+    .eq("toc_item_id", tocItemId)) as {
     data: AssignmentRow[] | null;
     error: any;
   };
@@ -138,7 +141,7 @@ export async function GET(req: NextRequest) {
     profile?: ProfileRow | null;
   })[] = assigns ?? [];
 
-  // 7) Gắn profile (name, email) cho từng assignment bằng admin client
+  // 7) Gắn profile bằng admin client
   if (assignmentsWithProfiles.length > 0) {
     try {
       const admin = getAdminClient();
@@ -146,10 +149,10 @@ export async function GET(req: NextRequest) {
         new Set(assignmentsWithProfiles.map((a) => a.user_id))
       );
 
-      const { data: profiles, error: prErr } = await admin
+      const { data: profiles, error: prErr } = (await admin
         .from("profiles")
         .select("id,name,email")
-        .in("id", userIds) as {
+        .in("id", userIds)) as {
         data: ProfileRow[] | null;
         error: any;
       };
@@ -176,7 +179,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     item,
-    role: perm.role, // "viewer" | "author" | "editor"
+    role: perm.role,
     book_id: version.book_id,
     book_title: book?.title ?? null,
     content: content ?? null,
