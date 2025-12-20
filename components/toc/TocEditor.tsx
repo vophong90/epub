@@ -28,6 +28,7 @@ type TocEditorProps = {
   sectionTitle: string;
   sectionKindLabel: string;
   versionId: string;
+  templateId?: string | null; // 👈 thêm để biết version đã có template chưa
   onChange: (html: string) => void;
 };
 
@@ -42,6 +43,7 @@ export function TocEditor({
   sectionKindLabel,
   onChange,
   versionId,
+  templateId,
 }: TocEditorProps) {
   // debounce output để tránh onChange spam quá nhiều
   const [tick, setTick] = useState(0);
@@ -149,9 +151,19 @@ export function TocEditor({
   };
 
   async function openPreview() {
-    // Nếu muốn cho cả viewer xem preview thì bỏ comment dòng dưới
-    // if (!canEdit) return;
     setPreviewErr(null);
+
+    // ❗ Guard: version chưa có template thì không cho gọi API
+    if (!templateId) {
+      setPreviewOpen(true);
+      setPreviewUrl(null);
+      setPreviewLoading(false);
+      setPreviewErr(
+        "Phiên bản này chưa được gán template dàn trang, nên không thể render PDF. Hãy vào trang xuất bản để chọn template trước."
+      );
+      return;
+    }
+
     setPreviewOpen(true);
 
     // nếu đã có previewUrl còn hạn thì khỏi gọi lại
@@ -165,7 +177,7 @@ export function TocEditor({
         body: JSON.stringify({ version_id: versionId }),
       });
 
-      const j = await res.json().catch(() => ({}));
+      const j = await res.json().catch(() => ({} as any));
 
       if (!res.ok || !j?.ok) {
         throw new Error(j?.error || j?.detail || `HTTP ${res.status}`);
@@ -189,9 +201,13 @@ export function TocEditor({
           </p>
         </div>
         {canEdit ? (
-          <span className="text-xs text-gray-500">Bạn có thể chỉnh sửa nội dung</span>
+          <span className="text-xs text-gray-500">
+            Bạn có thể chỉnh sửa nội dung
+          </span>
         ) : (
-          <span className="text-xs text-gray-500">Bạn chỉ có quyền xem nội dung</span>
+          <span className="text-xs text-gray-500">
+            Bạn chỉ có quyền xem nội dung
+          </span>
         )}
       </div>
 
@@ -211,9 +227,13 @@ export function TocEditor({
             <button
               type="button"
               className={BTN_TOOL}
-              disabled={previewLoading}
+              disabled={previewLoading || !templateId}
               onClick={openPreview}
-              title="Xem thử khi in PDF theo template"
+              title={
+                templateId
+                  ? "Xem thử khi in PDF theo template"
+                  : "Phiên bản chưa có template dàn trang – không thể preview PDF"
+              }
             >
               {previewLoading ? "Đang preview..." : "Preview PDF"}
             </button>
@@ -243,7 +263,9 @@ export function TocEditor({
             {/* Inline marks */}
             <button
               type="button"
-              className={`${BTN_TOOL} ${clsActive(!!editor?.isActive("bold"))}`}
+              className={`${BTN_TOOL} ${clsActive(
+                !!editor?.isActive("bold")
+              )}`}
               disabled={!canUse}
               onClick={() => editor?.chain().focus().toggleBold().run()}
             >
@@ -251,7 +273,9 @@ export function TocEditor({
             </button>
             <button
               type="button"
-              className={`${BTN_TOOL} italic ${clsActive(!!editor?.isActive("italic"))}`}
+              className={`${BTN_TOOL} italic ${clsActive(
+                !!editor?.isActive("italic")
+              )}`}
               disabled={!canUse}
               onClick={() => editor?.chain().focus().toggleItalic().run()}
             >
@@ -273,17 +297,25 @@ export function TocEditor({
             {/* Lists */}
             <button
               type="button"
-              className={`${BTN_TOOL} ${clsActive(!!editor?.isActive("bulletList"))}`}
+              className={`${BTN_TOOL} ${clsActive(
+                !!editor?.isActive("bulletList")
+              )}`}
               disabled={!canUse}
-              onClick={() => editor?.chain().focus().toggleBulletList().run()}
+              onClick={() =>
+                editor?.chain().focus().toggleBulletList().run()
+              }
             >
               •
             </button>
             <button
               type="button"
-              className={`${BTN_TOOL} ${clsActive(!!editor?.isActive("orderedList"))}`}
+              className={`${BTN_TOOL} ${clsActive(
+                !!editor?.isActive("orderedList")
+              )}`}
               disabled={!canUse}
-              onClick={() => editor?.chain().focus().toggleOrderedList().run()}
+              onClick={() =>
+                editor?.chain().focus().toggleOrderedList().run()
+              }
             >
               1.
             </button>
@@ -297,7 +329,9 @@ export function TocEditor({
                 !!editor?.isActive("heading", { level: 2 })
               )}`}
               disabled={!canUse}
-              onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}
+              onClick={() =>
+                editor?.chain().focus().toggleHeading({ level: 2 }).run()
+              }
             >
               H2
             </button>
@@ -307,7 +341,9 @@ export function TocEditor({
                 !!editor?.isActive("heading", { level: 3 })
               )}`}
               disabled={!canUse}
-              onClick={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()}
+              onClick={() =>
+                editor?.chain().focus().toggleHeading({ level: 3 }).run()
+              }
             >
               H3
             </button>
@@ -317,7 +353,9 @@ export function TocEditor({
                 !!editor?.isActive("heading", { level: 4 })
               )}`}
               disabled={!canUse}
-              onClick={() => editor?.chain().focus().toggleHeading({ level: 4 }).run()}
+              onClick={() =>
+                editor?.chain().focus().toggleHeading({ level: 4 }).run()
+              }
             >
               H4
             </button>
@@ -329,7 +367,9 @@ export function TocEditor({
               type="button"
               className={BTN_TOOL}
               disabled={!canUse}
-              onClick={() => editor?.chain().focus().setTextAlign("left").run()}
+              onClick={() =>
+                editor?.chain().focus().setTextAlign("left").run()
+              }
             >
               ⬅
             </button>
@@ -337,7 +377,9 @@ export function TocEditor({
               type="button"
               className={BTN_TOOL}
               disabled={!canUse}
-              onClick={() => editor?.chain().focus().setTextAlign("center").run()}
+              onClick={() =>
+                editor?.chain().focus().setTextAlign("center").run()
+              }
             >
               ⬌
             </button>
@@ -345,7 +387,9 @@ export function TocEditor({
               type="button"
               className={BTN_TOOL}
               disabled={!canUse}
-              onClick={() => editor?.chain().focus().setTextAlign("right").run()}
+              onClick={() =>
+                editor?.chain().focus().setTextAlign("right").run()
+              }
             >
               ➡
             </button>
@@ -355,7 +399,9 @@ export function TocEditor({
             {/* Link / Quote / Code */}
             <button
               type="button"
-              className={`${BTN_TOOL} ${clsActive(!!editor?.isActive("link"))}`}
+              className={`${BTN_TOOL} ${clsActive(
+                !!editor?.isActive("link")
+              )}`}
               disabled={!canUse}
               onClick={askLink}
             >
@@ -363,17 +409,25 @@ export function TocEditor({
             </button>
             <button
               type="button"
-              className={`${BTN_TOOL} ${clsActive(!!editor?.isActive("blockquote"))}`}
+              className={`${BTN_TOOL} ${clsActive(
+                !!editor?.isActive("blockquote")
+              )}`}
               disabled={!canUse}
-              onClick={() => editor?.chain().focus().toggleBlockquote().run()}
+              onClick={() =>
+                editor?.chain().focus().toggleBlockquote().run()
+              }
             >
               ❝
             </button>
             <button
               type="button"
-              className={`${BTN_TOOL} ${clsActive(!!editor?.isActive("codeBlock"))}`}
+              className={`${BTN_TOOL} ${clsActive(
+                !!editor?.isActive("codeBlock")
+              )}`}
               disabled={!canUse}
-              onClick={() => editor?.chain().focus().toggleCodeBlock().run()}
+              onClick={() =>
+                editor?.chain().focus().toggleCodeBlock().run()
+              }
             >
               {"</>"}
             </button>
@@ -419,7 +473,9 @@ export function TocEditor({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
           <div className="w-full max-w-5xl h-[85vh] bg-white rounded-lg shadow-lg border flex flex-col">
             <div className="px-4 py-3 border-b flex items-center justify-between">
-              <div className="font-semibold">Preview PDF (toàn chương/sách)</div>
+              <div className="font-semibold">
+                Preview PDF (toàn chương/sách)
+              </div>
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -428,6 +484,7 @@ export function TocEditor({
                     setPreviewUrl(null);
                     openPreview();
                   }}
+                  disabled={previewLoading || !templateId}
                 >
                   Render lại
                 </button>
@@ -445,7 +502,9 @@ export function TocEditor({
               {previewErr ? (
                 <div className="text-sm text-red-600">{previewErr}</div>
               ) : previewLoading && !previewUrl ? (
-                <div className="text-sm text-gray-600">Đang render preview…</div>
+                <div className="text-sm text-gray-600">
+                  Đang render preview…
+                </div>
               ) : previewUrl ? (
                 <iframe
                   title="preview"
