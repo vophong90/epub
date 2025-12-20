@@ -1,8 +1,167 @@
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* Base defaults */
+@layer base {
+  html,
+  body {
+    height: 100%;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+}
+
+/* Print styles */
 @media print {
-  body { font-family: "Times New Roman", serif; }
+  @page {
+    size: A4;
+    margin: 16mm;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  body {
+    font-family: "Times New Roman", Times, serif !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  nav,
+  header,
+  footer,
+  button,
+  .no-print {
+    display: none !important;
+  }
+}
+
+/* ===== TipTap / ProseMirror ===== */
+.ProseMirror {
+  outline: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Khoảng cách đoạn */
+.ProseMirror p {
+  margin: 0.5rem 0;
+}
+
+/* Headings */
+.ProseMirror h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0.9rem 0 0.4rem;
+}
+.ProseMirror h3 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin: 0.8rem 0 0.35rem;
+}
+.ProseMirror h4 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0.7rem 0 0.3rem;
+}
+.ProseMirror h5 {
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin: 0.65rem 0 0.25rem;
+}
+
+/* Lists */
+.ProseMirror ul,
+.ProseMirror ol {
+  padding-left: 1.35rem;
+  margin: 0.5rem 0;
+}
+.ProseMirror li {
+  margin: 0.2rem 0;
+}
+
+/* Blockquote */
+.ProseMirror blockquote {
+  border-left: 3px solid #e5e7eb;
+  padding-left: 0.75rem;
+  color: #374151;
+  margin: 0.75rem 0;
+}
+
+/* Inline code */
+.ProseMirror code {
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  padding: 0.1rem 0.25rem;
+  border-radius: 0.35rem;
+  font-size: 0.92em;
+}
+
+/* Code block */
+.ProseMirror pre {
+  background: #0b1020;
+  color: #e5e7eb;
+  padding: 0.85rem;
+  border-radius: 0.75rem;
+  overflow-x: auto;
+  margin: 0.75rem 0;
+}
+.ProseMirror pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-size: 0.92em;
+}
+
+/* Links */
+.ProseMirror a {
+  color: #2563eb;
+  text-decoration: underline;
+}
+
+/* Tables */
+.ProseMirror table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.8rem 0;
+}
+.ProseMirror th,
+.ProseMirror td {
+  border: 1px solid #e5e7eb;
+  padding: 0.45rem 0.55rem;
+  vertical-align: top;
+}
+.ProseMirror th {
+  background: #f9fafb;
+  font-weight: 600;
+}
+
+/* Images */
+.ProseMirror img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.75rem;
+}
+
+/* Selection + gap cursor */
+.ProseMirror ::selection {
+  background: rgba(59, 130, 246, 0.25);
+}
+.ProseMirror-gapcursor {
+  position: relative;
+}
+.ProseMirror-gapcursor:after {
+  content: "";
+  display: block;
+  position: absolute;
+  top: -2px;
+  width: 20px;
+  border-top: 2px solid #3b82f6;
 }
