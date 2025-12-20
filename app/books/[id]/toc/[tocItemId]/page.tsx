@@ -95,6 +95,7 @@ export default function TocItemPage() {
   const bookId = params.id;
   const tocItemId = params.tocItemId;
   const editorRef = useRef<HTMLDivElement | null>(null);
+  const selectionRef = useRef<Range | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [subLoading, setSubLoading] = useState(false);
@@ -155,8 +156,7 @@ export default function TocItemPage() {
   const canApprove = isEditor && contentStatus === "submitted";
   const canRequestChange = isEditor && contentStatus === "submitted";
 
-  const canManageSubsections =
-    isEditor || (isAuthorRole && isAssignedAuthor);
+  const canManageSubsections = isEditor || (isAuthorRole && isAssignedAuthor);
 
   const canResolveNote =
     isAuthorRole &&
@@ -261,6 +261,7 @@ export default function TocItemPage() {
     load();
   }, [tocItemId]);
 
+  // Đồng bộ HTML từ state → editorRef
   useEffect(() => {
     if (authLoading || loading) return;
     if (!data) return;
@@ -287,9 +288,7 @@ export default function TocItemPage() {
     const loadSubs = async () => {
       setSubLoading(true);
       try {
-        const res = await fetch(
-          `/api/toc/subsections?parent_id=${tocItemId}`
-        );
+        const res = await fetch(`/api/toc/subsections?parent_id=${tocItemId}`);
         const j = await res.json().catch(() => ({}));
         if (!res.ok || j.error) {
           console.error("load subsections error:", j.error || res.status);
@@ -306,9 +305,7 @@ export default function TocItemPage() {
                 return { ...s, editorHtml: "<p></p>" };
               }
               const tj = (await r.json()) as TocItemResponse;
-              const html = parseContentJson(
-                tj.content?.content_json
-              );
+              const html = parseContentJson(tj.content?.content_json);
               return { ...s, editorHtml: html };
             } catch {
               return { ...s, editorHtml: "<p></p>" };
@@ -357,6 +354,49 @@ export default function TocItemPage() {
     }
     const sub = subItems.find((s) => s.id === activeSectionId);
     return sub?.title ?? data.item.title;
+  }
+
+  // ========================
+  // Selection helpers cho toolbar
+  // ========================
+  function saveSelection() {
+    if (typeof window === "undefined") return;
+    if (!editorRef.current) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    // chỉ lưu selection nằm trong editor
+    if (!editorRef.current.contains(range.commonAncestorContainer)) return;
+    selectionRef.current = range;
+  }
+
+  function restoreSelection() {
+    if (typeof window === "undefined") return;
+    const range = selectionRef.current;
+    if (!range) return;
+    const sel = window.getSelection();
+    if (!sel) return;
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  function applyCommand(command: string, value?: string) {
+    if (!canEditContent) return;
+    if (!editorRef.current) return;
+    if (typeof document === "undefined") return;
+
+    editorRef.current.focus();
+    restoreSelection();
+
+    if (value !== undefined) {
+      document.execCommand(command, false, value);
+    } else {
+      document.execCommand(command, false);
+    }
+
+    // cập nhật HTML & lưu lại selection mới
+    updateActiveHtml(editorRef.current.innerHTML);
+    saveSelection();
   }
 
   // ========================
@@ -568,7 +608,7 @@ export default function TocItemPage() {
   }
 
   // ========================
-  // Mục con: thêm / xoá
+  // Mục con: thêm / xoá / sửa tên
   // ========================
   async function handleCreateSub(title: string) {
     if (!tocItemId || !title.trim()) return;
@@ -591,9 +631,7 @@ export default function TocItemPage() {
           editorHtml: "<p></p>",
         };
         setSubItems((prev) =>
-          [...prev, s].sort(
-            (a, b) => a.order_index - b.order_index
-          )
+          [...prev, s].sort((a, b) => a.order_index - b.order_index)
         );
       }
     } catch (e: any) {
@@ -620,15 +658,38 @@ export default function TocItemPage() {
       if (!res.ok || j.error) {
         setErrorMsg(j.error || "Xoá mục con thất bại");
       } else {
-        setSubItems((prev) =>
-          prev.filter((s) => s.id !== id)
-        );
+        setSubItems((prev) => prev.filter((s) => s.id !== id));
         if (activeSectionId === id) {
           setActiveSectionId("root");
         }
       }
     } catch (e: any) {
       setErrorMsg(e?.message || "Lỗi khi xoá mục con");
+    }
+  }
+
+  async function handleRenameSub(id: string, oldTitle: string) {
+    const newTitle = window.prompt("Nhập tên mới cho mục con", oldTitle);
+    if (!newTitle) return;
+    const trimmed = newTitle.trim();
+    if (!trimmed || trimmed === oldTitle) return;
+
+    try {
+      const res = await fetch("/api/toc/subsections", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, title: trimmed }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j.error) {
+        setErrorMsg(j.error || "Đổi tên mục con thất bại");
+        return;
+      }
+      setSubItems((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, title: trimmed } : s))
+      );
+    } catch (e: any) {
+      setErrorMsg(e?.message || "Lỗi khi đổi tên mục con");
     }
   }
 
@@ -656,8 +717,6 @@ export default function TocItemPage() {
       form.append("file", importFile);
       form.append("toc_item_id", tocItemId);
 
-      // Nếu bạn đặt API dưới /api/toc/import-docx/preview
-      // thì đổi URL lại cho khớp.
       const res = await fetch("/api/toc/import-docx/preview", {
         method: "POST",
         body: form,
@@ -668,9 +727,7 @@ export default function TocItemPage() {
       } else {
         const preview: ImportPreview = {
           rootHtml: j.rootHtml || "<p></p>",
-          subsections: Array.isArray(j.subsections)
-            ? j.subsections
-            : [],
+          subsections: Array.isArray(j.subsections) ? j.subsections : [],
         };
         setImportPreview(preview);
       }
@@ -729,9 +786,7 @@ export default function TocItemPage() {
                   return { ...s, editorHtml: "<p></p>" };
                 }
                 const tj = (await r.json()) as TocItemResponse;
-                const html = parseContentJson(
-                  tj.content?.content_json
-                );
+                const html = parseContentJson(tj.content?.content_json);
                 return { ...s, editorHtml: html };
               } catch {
                 return { ...s, editorHtml: "<p></p>" };
@@ -774,9 +829,7 @@ export default function TocItemPage() {
             {errorMsg}
           </div>
         ) : null}
-        <p className="text-gray-600">
-          Không tìm thấy nội dung cho mục này.
-        </p>
+        <p className="text-gray-600">Không tìm thấy nội dung cho mục này.</p>
         <div className="mt-4">
           <button className={BTN} onClick={() => router.back()}>
             ← Quay lại
@@ -796,20 +849,13 @@ export default function TocItemPage() {
               Sách của tôi
             </Link>
             <span className="mx-1">/</span>
-            <Link
-              href={`/books/${bookId}`}
-              className="hover:underline"
-            >
+            <Link href={`/books/${bookId}`} className="hover:underline">
               {data.book_title || "Sách"}
             </Link>
             <span className="mx-1">/</span>
-            <span className="text-gray-700">
-              {data.item.title}
-            </span>
+            <span className="text-gray-700">{data.item.title}</span>
           </div>
-          <h1 className="text-2xl font-bold">
-            {data.item.title}
-          </h1>
+          <h1 className="text-2xl font-bold">{data.item.title}</h1>
 
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <span className={statusChipClass(contentStatus)}>
@@ -835,10 +881,7 @@ export default function TocItemPage() {
               <ul className="space-y-1 text-sm">
                 {data.assignments.map((a) => {
                   const isMe = user && a.user_id === user.id;
-                  const label =
-                    a.profile?.name ||
-                    a.profile?.email ||
-                    a.user_id;
+                  const label = a.profile?.name || a.profile?.email || a.user_id;
                   return (
                     <li
                       key={a.id}
@@ -849,9 +892,7 @@ export default function TocItemPage() {
                         {isMe ? " (Bạn)" : ""}
                       </span>
                       <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">
-                        {a.role_in_item === "author"
-                          ? "Author"
-                          : "Editor"}
+                        {a.role_in_item === "author" ? "Author" : "Editor"}
                       </span>
                     </li>
                   );
@@ -865,9 +906,7 @@ export default function TocItemPage() {
           {data.content?.updated_at && (
             <div>
               Cập nhật lần cuối:{" "}
-              {new Date(
-                data.content.updated_at
-              ).toLocaleString()}
+              {new Date(data.content.updated_at).toLocaleString()}
             </div>
           )}
           <button className={BTN} onClick={() => router.back()}>
@@ -951,21 +990,19 @@ export default function TocItemPage() {
 
       {/* Khu vực soạn thảo: sidebar mục con + editor */}
       <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 md:p-6">
-        <div className="grid grid-cols-1 md:grid-cols-[260px,1fr] gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-[260px,1fr] gap-6 md:h-[520px]">
           {/* Sidebar: danh sách mục trong chương */}
-          <aside className="space-y-3 border-b md:border-b-0 md:border-r border-gray-100 pb-4 md:pb-0 md:pr-4">
-            <div className="flex items-center justify-between gap-2">
+          <aside className="flex flex-col h-full border-b md:border-b-0 md:border-r border-gray-100 pb-4 md:pb-0 md:pr-4">
+            <div className="flex items-center justify-between gap-2 mb-2">
               <h3 className="text-sm font-semibold text-gray-800">
                 Mục trong chương này
               </h3>
               {subLoading && (
-                <span className="text-[11px] text-gray-400">
-                  Đang tải...
-                </span>
+                <span className="text-[11px] text-gray-400">Đang tải...</span>
               )}
             </div>
 
-            <div className="space-y-1 text-sm">
+            <div className="flex-1 space-y-1 text-sm overflow-y-auto pr-1">
               <button
                 type="button"
                 className={`w-full text-left px-3 py-2 rounded-md border ${
@@ -978,16 +1015,11 @@ export default function TocItemPage() {
                 <div className="text-xs uppercase tracking-wide text-gray-400">
                   Chương
                 </div>
-                <div className="font-medium">
-                  {data.item.title}
-                </div>
+                <div className="font-medium">{data.item.title}</div>
               </button>
 
               {subItems.map((s) => (
-                <div
-                  key={s.id}
-                  className="flex items-center gap-2"
-                >
+                <div key={s.id} className="flex items-stretch gap-2">
                   <button
                     type="button"
                     className={`flex-1 text-left px-3 py-2 rounded-md border ${
@@ -997,20 +1029,26 @@ export default function TocItemPage() {
                     }`}
                     onClick={() => setActiveSectionId(s.id)}
                   >
-                    <div className="text-xs text-gray-400">
-                      #{s.order_index}
-                    </div>
-                    <div className="font-medium">
-                      {s.title}
-                    </div>
+                    <div className="text-xs text-gray-400">#{s.order_index}</div>
+                    <div className="font-medium">{s.title}</div>
                   </button>
                   {canManageSubsections && (
-                    <button
-                      className="text-[11px] text-red-500 hover:text-red-600 px-2 py-1"
-                      onClick={() => handleDeleteSub(s.id)}
-                    >
-                      Xoá
-                    </button>
+                    <div className="flex flex-col justify-center gap-1 text-[11px]">
+                      <button
+                        type="button"
+                        className="px-2 py-0.5 text-blue-600 hover:text-blue-700"
+                        onClick={() => handleRenameSub(s.id, s.title)}
+                      >
+                        Sửa
+                      </button>
+                      <button
+                        type="button"
+                        className="px-2 py-0.5 text-red-500 hover:text-red-600"
+                        onClick={() => handleDeleteSub(s.id)}
+                      >
+                        Xoá
+                      </button>
+                    </div>
                   )}
                 </div>
               ))}
@@ -1018,14 +1056,12 @@ export default function TocItemPage() {
 
             {/* Thêm mục con mới */}
             {canManageSubsections && (
-              <AddSubSectionForm
-                onCreate={handleCreateSub}
-              />
+              <AddSubSectionForm onCreate={handleCreateSub} />
             )}
           </aside>
 
           {/* Editor cho section đang chọn */}
-          <div className="space-y-4">
+          <div className="flex flex-col md:h-full space-y-4">
             <div className="flex items-center justify-between gap-2">
               <div>
                 <h2 className="font-semibold text-lg">
@@ -1033,10 +1069,7 @@ export default function TocItemPage() {
                 </h2>
                 <p className="text-xs text-gray-500">
                   Bạn đang chỉnh sửa phần{" "}
-                  {activeSectionId === "root"
-                    ? "chương chính"
-                    : "mục con"}
-                  .
+                  {activeSectionId === "root" ? "chương chính" : "mục con"}.
                 </p>
               </div>
               {canEditContent ? (
@@ -1055,9 +1088,7 @@ export default function TocItemPage() {
               <button
                 type="button"
                 className="px-2 py-1 rounded hover:bg-gray-200 font-semibold"
-                onClick={() =>
-                  document.execCommand("bold", false)
-                }
+                onClick={() => applyCommand("bold")}
                 disabled={!canEditContent}
               >
                 B
@@ -1065,9 +1096,7 @@ export default function TocItemPage() {
               <button
                 type="button"
                 className="px-2 py-1 rounded hover:bg-gray-200 italic"
-                onClick={() =>
-                  document.execCommand("italic", false)
-                }
+                onClick={() => applyCommand("italic")}
                 disabled={!canEditContent}
               >
                 I
@@ -1075,9 +1104,7 @@ export default function TocItemPage() {
               <button
                 type="button"
                 className="px-2 py-1 rounded hover:bg-gray-200 underline"
-                onClick={() =>
-                  document.execCommand("underline", false)
-                }
+                onClick={() => applyCommand("underline")}
                 disabled={!canEditContent}
               >
                 U
@@ -1086,12 +1113,7 @@ export default function TocItemPage() {
               <button
                 type="button"
                 className="px-2 py-1 rounded hover:bg-gray-200"
-                onClick={() =>
-                  document.execCommand(
-                    "insertUnorderedList",
-                    false
-                  )
-                }
+                onClick={() => applyCommand("insertUnorderedList")}
                 disabled={!canEditContent}
               >
                 • Bullet
@@ -1099,12 +1121,7 @@ export default function TocItemPage() {
               <button
                 type="button"
                 className="px-2 py-1 rounded hover:bg-gray-200"
-                onClick={() =>
-                  document.execCommand(
-                    "insertOrderedList",
-                    false
-                  )
-                }
+                onClick={() => applyCommand("insertOrderedList")}
                 disabled={!canEditContent}
               >
                 1.2.3
@@ -1113,13 +1130,7 @@ export default function TocItemPage() {
               <button
                 type="button"
                 className="px-2 py-1 rounded hover:bg-gray-200"
-                onClick={() =>
-                  document.execCommand(
-                    "formatBlock",
-                    false,
-                    "<h2>"
-                  )
-                }
+                onClick={() => applyCommand("formatBlock", "H2")}
                 disabled={!canEditContent}
               >
                 H2
@@ -1127,13 +1138,7 @@ export default function TocItemPage() {
               <button
                 type="button"
                 className="px-2 py-1 rounded hover:bg-gray-200"
-                onClick={() =>
-                  document.execCommand(
-                    "formatBlock",
-                    false,
-                    "<h3>"
-                  )
-                }
+                onClick={() => applyCommand("formatBlock", "H3")}
                 disabled={!canEditContent}
               >
                 H3
@@ -1142,13 +1147,17 @@ export default function TocItemPage() {
 
             {/* contentEditable */}
             <div
-              ref={editorRef}   // 👈 gắn ref
-              className={`${INPUT} min-h-[280px] leading-relaxed text-sm whitespace-pre-wrap`}
+              ref={editorRef}
+              className={`${INPUT} min-h-[260px] max-h-[420px] leading-relaxed text-sm whitespace-pre-wrap overflow-y-auto`}
               contentEditable={canEditContent}
               suppressContentEditableWarning
-              onInput={(e) =>
-                updateActiveHtml(e.currentTarget.innerHTML)
-              }
+              onInput={(e) => {
+                updateActiveHtml(e.currentTarget.innerHTML);
+                saveSelection();
+              }}
+              onMouseUp={saveSelection}
+              onKeyUp={saveSelection}
+              onBlur={saveSelection}
             />
 
             {/* Nút lưu phần hiện tại */}
@@ -1179,19 +1188,17 @@ export default function TocItemPage() {
           Hành động cho cả chương
         </h3>
         <p className="text-xs text-slate-600">
-          Các nút bên dưới áp dụng cho chương hiện tại và
-          tất cả mục con bên trong chương này.
+          Các nút bên dưới áp dụng cho chương hiện tại và tất cả mục con bên
+          trong chương này.
         </p>
 
         <div className="flex flex-wrap items-center gap-3">
           <button
             className={BTN_PRIMARY}
             onClick={handleSaveAll}
-            disabled={!canEditContent || savingAll}
+            disabled {!canEditContent || savingAll}
           >
-            {savingAll
-              ? "Đang lưu cả chương..."
-              : "Lưu bản nháp chương"}
+            {savingAll ? "Đang lưu cả chương..." : "Lưu bản nháp chương"}
           </button>
 
           <button
@@ -1199,9 +1206,7 @@ export default function TocItemPage() {
             onClick={handleSubmitChapter}
             disabled={!canSubmit || submitting}
           >
-            {submitting
-              ? "Đang nộp chương..."
-              : "Nộp chương cho editor"}
+            {submitting ? "Đang nộp chương..." : "Nộp chương cho editor"}
           </button>
 
           <button
@@ -1237,9 +1242,9 @@ export default function TocItemPage() {
               Import nội dung từ file Word (.docx)
             </h4>
             <p className="text-xs text-slate-600">
-              Dùng khi bạn đã có bản thảo chương trong Word với heading
-              chuẩn. Hệ thống sẽ đọc nội dung, tách thành chương + mục con
-              theo heading, cho xem trước, sau đó mới ghi vào DB.
+              Dùng khi bạn đã có bản thảo chương trong Word với heading chuẩn.
+              Hệ thống sẽ đọc nội dung, tách thành chương + mục con theo
+              heading, cho xem trước, sau đó mới ghi vào DB.
             </p>
 
             <div className="flex flex-col md:flex-row gap-3 md:items-center">
@@ -1279,9 +1284,7 @@ export default function TocItemPage() {
                     type="checkbox"
                     className="rounded border-slate-300"
                     checked={replaceExistingSubs}
-                    onChange={(e) =>
-                      setReplaceExistingSubs(e.target.checked)
-                    }
+                    onChange={(e) => setReplaceExistingSubs(e.target.checked)}
                   />
                   Xoá toàn bộ mục con hiện tại và tạo lại từ file Word
                 </label>
@@ -1349,9 +1352,9 @@ export default function TocItemPage() {
             Hành động của Editor (cho cả chương)
           </h3>
           <p className="text-xs text-slate-600">
-            Chỉ editor mới thấy phần này. Bạn có thể duyệt hoặc
-            yêu cầu tác giả chỉnh sửa khi trạng thái chương đang
-            là <strong>Đã nộp</strong>.
+            Chỉ editor mới thấy phần này. Bạn có thể duyệt hoặc yêu cầu tác giả
+            chỉnh sửa khi trạng thái chương đang là{" "}
+            <strong>Đã nộp</strong>.
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -1366,9 +1369,7 @@ export default function TocItemPage() {
               onClick={handleRequestChangeChapter}
               disabled={!canRequestChange || requestingChange}
             >
-              {requestingChange
-                ? "Đang gửi yêu cầu..."
-                : "Yêu cầu chỉnh sửa chương"}
+              {requestingChange ? "Đang gửi yêu cầu..." : "Yêu cầu chỉnh sửa chương"}
             </button>
           </div>
         </section>
@@ -1377,10 +1378,8 @@ export default function TocItemPage() {
   );
 }
 
-/** Form nhỏ để thêm mục con mới trong sidebar */
-function AddSubSectionForm(props: {
-  onCreate: (title: string) => void;
-}) {
+/** Form nhỏ để thêm mục con mới trong sidebar – gọn trên 1 dòng */
+function AddSubSectionForm(props: { onCreate: (title: string) => void }) {
   const [title, setTitle] = useState("");
   const [creating, setCreating] = useState(false);
 
@@ -1399,24 +1398,21 @@ function AddSubSectionForm(props: {
   return (
     <form
       onSubmit={handleSubmit}
-      className="border-t border-gray-100 pt-3 mt-2 space-y-2"
+      className="border-t border-gray-100 pt-2 mt-2"
     >
-      <label className="block text-xs font-medium text-gray-700">
-        Thêm mục con mới
-      </label>
-      <div className="flex flex-col sm:flex-row gap-2">
+      <div className="flex items-center gap-2">
         <input
-          className={INPUT}
-          placeholder="Tiêu đề mục con (ví dụ: 1.1. Đại cương...)"
+          className={`${INPUT} text-xs py-1.5`}
+          placeholder="Tiêu đề mục con mới..."
           value={title}
           onChange={(e) => setTitle(e.target.value)}
         />
         <button
           type="submit"
-          className={BTN_PRIMARY}
+          className="inline-flex items-center justify-center px-3 py-1.5 rounded-md bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
           disabled={creating || !title.trim()}
         >
-          {creating ? "Đang tạo..." : "Thêm mục con"}
+          {creating ? "Đang tạo..." : "Thêm"}
         </button>
       </div>
     </form>
