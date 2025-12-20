@@ -1,6 +1,6 @@
 // app/api/toc/import-docx/preview/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser } from "../toc/_helpers";
+import { requireUser } from "../_helpers";
 import * as mammoth from "mammoth";
 import { parse } from "node-html-parser";
 
