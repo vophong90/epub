@@ -64,10 +64,7 @@ function makeAnchor(tocItemId: string, slug: string) {
  * - depth 2 => section
  * - depth 3+ => sub-sections
  */
-async function buildNodesFromDB(
-  admin: any,
-  versionId: string
-): Promise<RenderNode[]> {
+async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNode[]> {
   // 1) load all toc items
   const { data: items, error: itErr } = await admin
     .from("toc_items")
@@ -91,10 +88,6 @@ async function buildNodesFromDB(
 
   const contentByItem = new Map<string, TocContentRow>();
   for (const c of tocContents) contentByItem.set(c.toc_item_id, c);
-
-  // 👉 Nếu sau này muốn chỉ in chương đã duyệt:
-  // const APPROVED_ONLY = true;
-  // if (APPROVED_ONLY) { ... filter theo status ... }
 
   // 3) build children map & sort
   const children = new Map<string | null, TocItemRow[]>();
@@ -168,44 +161,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
- // ✅ quyền: admin OR (author/editor trên book)
-const { data: profile, error: pErr } = await supabase
-  .from("profiles")
-  .select("id,system_role")
-  .eq("id", user.id)
-  .maybeSingle();
-
-if (pErr) return NextResponse.json({ error: pErr.message }, { status: 500 });
-
-const isAdmin = profile?.system_role === "admin";
-
-let canRender = isAdmin;
-
-if (!canRender) {
-  // book_permissions: user_id + book_id + role ('author' | 'editor' | 'viewer')
-  const { data: perm, error: permErr } = await supabase
-    .from("book_permissions")
-    .select("role")
-    .eq("book_id", version.book_id)
-    .eq("user_id", user.id)
-    .in("role", ["author", "editor"])
-    .maybeSingle();
-
-  if (permErr) {
-    return NextResponse.json({ error: permErr.message }, { status: 500 });
-  }
-
-  canRender = !!perm;
-}
-
-if (!canRender) {
-  return NextResponse.json(
-    { error: "Bạn không có quyền render PDF" },
-    { status: 403 }
-  );
-}
-
-  // body
+  // body (đọc sớm để có versionId/templateId)
   let body: Body = {};
   try {
     body = await req.json();
@@ -222,7 +178,7 @@ if (!canRender) {
     );
   }
 
-  // load version + book
+  // load version + book_id (phải có trước để check quyền)
   const { data: version, error: vErr } = await admin
     .from("book_versions")
     .select("id,book_id,version_no")
@@ -230,12 +186,44 @@ if (!canRender) {
     .maybeSingle();
 
   if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 });
-  if (!version)
-    return NextResponse.json(
-      { error: "Không tìm thấy version" },
-      { status: 404 }
-    );
+  if (!version) {
+    return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
+  }
 
+  // ✅ quyền: admin OR (author/editor trên book)
+  const { data: profile, error: pErr } = await supabase
+    .from("profiles")
+    .select("id,system_role")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  if (pErr) return NextResponse.json({ error: pErr.message }, { status: 500 });
+
+  const isAdmin = profile?.system_role === "admin";
+  let canRender = isAdmin;
+
+  if (!canRender) {
+    // book_permissions: user_id + book_id + role ('author' | 'editor' | 'viewer')
+    const { data: perm, error: permErr } = await supabase
+      .from("book_permissions")
+      .select("role")
+      .eq("book_id", version.book_id) // ✅ FIX: version đã có ở đây
+      .eq("user_id", user.id)
+      .in("role", ["author", "editor"])
+      .maybeSingle();
+
+    if (permErr) {
+      return NextResponse.json({ error: permErr.message }, { status: 500 });
+    }
+
+    canRender = !!perm;
+  }
+
+  if (!canRender) {
+    return NextResponse.json({ error: "Bạn không có quyền render PDF" }, { status: 403 });
+  }
+
+  // load book
   const { data: book, error: bErr } = await admin
     .from("books")
     .select("id,title,unit_name")
@@ -243,8 +231,7 @@ if (!canRender) {
     .maybeSingle();
 
   if (bErr) return NextResponse.json({ error: bErr.message }, { status: 500 });
-  if (!book)
-    return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
+  if (!book) return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
 
   // load template
   const { data: tpl, error: tErr } = await admin
@@ -257,11 +244,7 @@ if (!canRender) {
     .maybeSingle();
 
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
-  if (!tpl)
-    return NextResponse.json(
-      { error: "Không tìm thấy template" },
-      { status: 404 }
-    );
+  if (!tpl) return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
 
   // create render job
   const { data: render, error: rInsErr } = await admin
@@ -323,13 +306,11 @@ if (!canRender) {
         return `
 <section class="${isChapter ? "chapter" : "section"}" id="${esc(
           n.id
-        )}" data-toc-item="${esc(n.toc_item_id)}" data-depth="${
-          n.depth
-        }" data-chapter-title="${esc(n.chapterTitle)}">
+        )}" data-toc-item="${esc(n.toc_item_id)}" data-depth="${n.depth}" data-chapter-title="${esc(
+          n.chapterTitle
+        )}">
   ${runningChapter}
-  <${tag} class="${isChapter ? "chapter-title" : ""}">${esc(
-          n.title
-        )}</${tag}>
+  <${tag} class="${isChapter ? "chapter-title" : ""}">${esc(n.title)}</${tag}>
   ${bodyHtml}
 </section>`;
       })
@@ -411,10 +392,9 @@ if (!canRender) {
     await page.setContent(html, { waitUntil: "load" });
 
     // chờ Paged.js paginate xong
-    await page.waitForFunction(
-      () => (window as any).__PAGED_DONE__ === true,
-      { timeout: 120000 }
-    );
+    await page.waitForFunction(() => (window as any).__PAGED_DONE__ === true, {
+      timeout: 120000,
+    });
 
     const pdfBuffer = await page.pdf({
       format: "A4",
@@ -428,12 +408,10 @@ if (!canRender) {
     // 7) Upload preview
     const pdf_path = `book/${book.id}/version/${version.id}/render/${renderId}.pdf`;
 
-    const { error: upErr } = await admin.storage
-      .from(BUCKET_PREVIEW)
-      .upload(pdf_path, pdfBuffer, {
-        contentType: "application/pdf",
-        upsert: true,
-      });
+    const { error: upErr } = await admin.storage.from(BUCKET_PREVIEW).upload(pdf_path, pdfBuffer, {
+      contentType: "application/pdf",
+      upsert: true,
+    });
 
     if (upErr) throw new Error("Upload preview PDF failed: " + upErr.message);
 
