@@ -80,7 +80,7 @@ function looksLikeHeadingText(text: string): boolean {
   if (!letters) return false;
   const upperLetters = letters.replace(/[^A-ZÀ-Ỹ]/g, "");
   const ratio = upperLetters.length / letters.length;
-  if (ratio >= 0.6) return true;
+  if (ratio >= 0.9) return true;
 
   return false;
 }
