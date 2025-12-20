@@ -175,7 +175,26 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 3) Xác định order_index start
+  // 3) Lấy sẵn tất cả slug hiện có của book_version này để tránh trùng
+  const { data: existingItems, error: exErr } = await supabase
+    .from("toc_items")
+    .select("slug")
+    .eq("book_version_id", item.book_version_id);
+
+  if (exErr) {
+    return NextResponse.json(
+      { error: "Không lấy được danh sách slug hiện có: " + exErr.message },
+      { status: 400 }
+    );
+  }
+
+  const existingSlugs = new Set<string>(
+    (existingItems || [])
+      .map((r: any) => r.slug)
+      .filter((s: any) => typeof s === "string")
+  );
+
+  // 4) Xác định order_index start
   let baseOrder = 1;
   if (!replaceExisting) {
     const { data: maxRow } = await supabase
@@ -190,7 +209,7 @@ export async function POST(req: NextRequest) {
     baseOrder = (maxRow?.order_index ?? 0) + 1;
   }
 
-  // 4) Upsert nội dung root (chương)
+  // 5) Upsert nội dung root (chương)
   {
     const { error: upErr } = await supabase
       .from("toc_contents")
@@ -214,7 +233,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 5) Tạo mục con mới + nội dung
+  // 6) Tạo mục con mới + nội dung, đảm bảo slug không trùng
   const createdIds: string[] = [];
 
   for (let i = 0; i < subsections.length; i++) {
@@ -223,9 +242,27 @@ export async function POST(req: NextRequest) {
     if (!rawTitle) continue;
 
     const html = (sec.html || "").toString().trim() || "<p></p>";
-    const slug = slugify(rawTitle) || `sub-${Date.now()}-${i}`;
 
-    // 5.1) Insert toc_item
+    // baseSlug từ title
+    let baseSlug = slugify(rawTitle);
+    if (!baseSlug) {
+      baseSlug = `sub-${Date.now()}-${i}`;
+    }
+
+    // Tạo slug unique: nếu trùng -> thêm -2, -3, ...
+    let slug = baseSlug;
+    let suffix = 2;
+    while (existingSlugs.has(slug)) {
+      const suffixStr = `-${suffix}`;
+      const maxBaseLen = 80 - suffixStr.length;
+      const trimmedBase =
+        baseSlug.length > maxBaseLen ? baseSlug.slice(0, maxBaseLen) : baseSlug;
+      slug = `${trimmedBase}${suffixStr}`;
+      suffix++;
+    }
+    existingSlugs.add(slug);
+
+    // 6.1) Insert toc_item
     const { data: newItem, error: insErr } = await supabase
       .from("toc_items")
       .insert({
@@ -239,8 +276,13 @@ export async function POST(req: NextRequest) {
       .maybeSingle();
 
     if (insErr || !newItem?.id) {
+      // nếu vẫn lỡ trùng slug do race condition, trả message dễ hiểu hơn
+      const msg =
+        insErr?.code === "23505"
+          ? `Slug bị trùng (version_slug_ux). Thử lại sau hoặc đổi tiêu đề mục con "${rawTitle}".`
+          : insErr?.message || "";
       return NextResponse.json(
-        { error: `Tạo mục con "${rawTitle}" thất bại: ${insErr?.message ?? ""}` },
+        { error: `Tạo mục con "${rawTitle}" thất bại: ${msg}` },
         { status: 400 }
       );
     }
@@ -248,7 +290,7 @@ export async function POST(req: NextRequest) {
     const newId = newItem.id as string;
     createdIds.push(newId);
 
-    // 5.2) Upsert nội dung cho mục con
+    // 6.2) Upsert nội dung cho mục con
     const { error: cErr } = await supabase
       .from("toc_contents")
       .upsert(
