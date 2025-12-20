@@ -19,10 +19,9 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@types/node": "^20.17.10",
-    "@sparticuz/chromium": "^131.0.0",
     "pagedjs": "^0.4.3",
-    "playwright-core": "^1.49.1",
-    "puppeteer-core": "^22.15.0"
+    "@sparticuz/chromium-min": "^141.0.0",
+    "puppeteer-core": "^24.23.1"
   },
   "devDependencies": {
     "typescript": "^5.5.4",
