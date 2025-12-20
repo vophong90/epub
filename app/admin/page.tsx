@@ -118,28 +118,28 @@ export default function AdminPage() {
   }
 
   async function handleResetPassword(u: AdminUser) {
-    if (!u.email) {
-      alert("User này chưa có email, không reset mật khẩu được");
-      return;
-    }
-    const ok = confirm(
-      `Gửi email reset mật khẩu tới ${u.email}? (Supabase dùng redirect URL mặc định trong Project Settings)`
-    );
-    if (!ok) return;
+  const label = u.email || u.name || u.id;
+  const ok = confirm(
+    `Đặt lại mật khẩu của ${label} về mật khẩu mặc định 12345678@ ?`
+  );
+  if (!ok) return;
 
-    const res = await fetch("/api/admin/users/reset-password", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: u.id }),
-    });
-    const j = await res.json().catch(() => ({} as any));
-    if (!res.ok) {
-      console.error("reset password error:", j.error || res.status);
-      alert(j.error || "Gửi mail reset mật khẩu thất bại");
-      return;
-    }
-    alert("Đã gửi email reset mật khẩu (nếu cấu hình Supabase đúng)");
+  const res = await fetch("/api/admin/users/reset-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ profile_id: u.id }), // 👈 trùng với route.ts
+  });
+
+  const j = await res.json().catch(() => ({} as any));
+  if (!res.ok) {
+    console.error("reset password error:", j.error || res.status);
+    alert(j.error || "Đặt lại mật khẩu thất bại");
+    return;
   }
+
+  // Tuỳ bạn có muốn show ra hay không
+  alert("Đã đặt lại mật khẩu về: 12345678@");
+}
 
   async function handleEditUser(u: AdminUser) {
     const newName = window.prompt("Họ tên mới", u.name || "") ?? "";
