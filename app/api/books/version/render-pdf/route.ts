@@ -145,10 +145,9 @@ async function launchBrowser() {
   const executablePath = await chromium.executablePath(
     "https://github.com/Sparticuz/chromium/releases/download/v141.0.0/chromium-v141.0.0-pack.x64.tar"
   );
-
+  
   const browser = await puppeteer.launch({
     args: chromium.args,
-    defaultViewport: chromium.defaultViewport,
     executablePath,
     headless: chromium.headless,
   });
