@@ -17,11 +17,40 @@ function slugify(input: string) {
     .slice(0, 80);
 }
 
-async function getParentContext(
+/**
+ * Ensure slug unique within a book_version_id (safe default).
+ * If your DB unique constraint is narrower (e.g., parent_id+slug) this still works.
+ */
+async function ensureUniqueSlug(
   supabase: any,
-  userId: string,
-  parentId: string
+  bookVersionId: string,
+  desiredSlug: string,
+  excludeId?: string
 ) {
+  const base = desiredSlug || `sub-${Date.now()}`;
+  let slug = base;
+  let i = 2;
+
+  while (true) {
+    let q = supabase
+      .from("toc_items")
+      .select("id")
+      .eq("book_version_id", bookVersionId)
+      .eq("slug", slug)
+      .limit(1);
+
+    if (excludeId) q = q.neq("id", excludeId);
+
+    const { data, error } = await q.maybeSingle();
+    if (error) throw error;
+
+    if (!data) return slug;
+    slug = `${base}-${i++}`;
+    if (i > 200) return `${base}-${Date.now()}`;
+  }
+}
+
+async function getParentContext(supabase: any, userId: string, parentId: string) {
   // TOC cha
   const { data: parent, error: pErr } = await supabase
     .from("toc_items")
@@ -95,7 +124,11 @@ async function getParentContext(
 
 function canManageSubsections(bookRole: BookRole, assignment: any | null) {
   if (bookRole === "editor") return true;
-  if (bookRole === "author" && assignment && assignment.role_in_item === "author") {
+  if (
+    bookRole === "author" &&
+    assignment &&
+    assignment.role_in_item === "author"
+  ) {
     return true;
   }
   return false;
@@ -109,10 +142,7 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const parent_id = searchParams.get("parent_id") || "";
   if (!parent_id) {
-    return NextResponse.json(
-      { error: "parent_id là bắt buộc" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "parent_id là bắt buộc" }, { status: 400 });
   }
 
   const ctx = await getParentContext(supabase, user!.id, parent_id);
@@ -128,10 +158,7 @@ export async function GET(req: NextRequest) {
     .order("order_index", { ascending: true });
 
   if (listErr) {
-    return NextResponse.json(
-      { error: listErr.message },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: listErr.message }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true, items: data ?? [] });
@@ -147,16 +174,10 @@ export async function POST(req: NextRequest) {
   const title = String(body.title || "").trim();
 
   if (!parent_id) {
-    return NextResponse.json(
-      { error: "parent_id là bắt buộc" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "parent_id là bắt buộc" }, { status: 400 });
   }
   if (!title) {
-    return NextResponse.json(
-      { error: "title là bắt buộc" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "title là bắt buộc" }, { status: 400 });
   }
 
   const ctx = await getParentContext(supabase, user!.id, parent_id);
@@ -182,7 +203,18 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
 
   const nextOrder = (maxRow?.order_index ?? 0) + 1;
-  const slug = slugify(title) || `sub-${Date.now()}`;
+
+  // ✅ slug unique
+  const desired = slugify(title) || `sub-${Date.now()}`;
+  let slug: string;
+  try {
+    slug = await ensureUniqueSlug(supabase, parent.book_version_id, desired);
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: e?.message || "Không tạo được slug" },
+      { status: 400 }
+    );
+  }
 
   const { data, error: insErr } = await supabase
     .from("toc_items")
@@ -197,10 +229,7 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
 
   if (insErr) {
-    return NextResponse.json(
-      { error: insErr.message },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: insErr.message }, { status: 400 });
   }
 
   return NextResponse.json({ ok: true, item: data });
@@ -216,22 +245,16 @@ export async function PATCH(req: NextRequest) {
   const title = String(body.title || "").trim();
 
   if (!id) {
-    return NextResponse.json(
-      { error: "id là bắt buộc" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "id là bắt buộc" }, { status: 400 });
   }
   if (!title) {
-    return NextResponse.json(
-      { error: "title là bắt buộc" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "title là bắt buộc" }, { status: 400 });
   }
 
   // Lấy mục con và parent
   const { data: sub, error: sErr } = await supabase
     .from("toc_items")
-    .select("id,parent_id,book_version_id")
+    .select("id,parent_id,book_version_id,slug,title")
     .eq("id", id)
     .maybeSingle();
 
@@ -254,8 +277,40 @@ export async function PATCH(req: NextRequest) {
   }
 
   const patch: any = { title };
+
+  // ✅ Nếu client không gửi slug thì server tự sinh slug theo title (và đảm bảo unique)
+  // Nếu bạn muốn đổi title nhưng GIỮ nguyên slug → hãy gửi body.slug = sub.slug từ client.
   if (!body.slug) {
-    patch.slug = slugify(title);
+    const desired = slugify(title);
+    try {
+      patch.slug = await ensureUniqueSlug(
+        supabase,
+        sub.book_version_id,
+        desired,
+        id // exclude chính nó
+      );
+    } catch (e: any) {
+      return NextResponse.json(
+        { error: e?.message || "Không cập nhật được slug" },
+        { status: 400 }
+      );
+    }
+  } else if (typeof body.slug === "string") {
+    // nếu client muốn set slug cụ thể thì vẫn cho, nhưng đảm bảo unique
+    const desired = slugify(String(body.slug));
+    try {
+      patch.slug = await ensureUniqueSlug(
+        supabase,
+        sub.book_version_id,
+        desired,
+        id
+      );
+    } catch (e: any) {
+      return NextResponse.json(
+        { error: e?.message || "Không cập nhật được slug" },
+        { status: 400 }
+      );
+    }
   }
 
   const { data, error: upErr } = await supabase
@@ -266,10 +321,7 @@ export async function PATCH(req: NextRequest) {
     .maybeSingle();
 
   if (upErr) {
-    return NextResponse.json(
-      { error: upErr.message },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: upErr.message }, { status: 400 });
   }
 
   return NextResponse.json({ ok: true, item: data });
@@ -283,15 +335,12 @@ export async function DELETE(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const id = searchParams.get("id") || "";
   if (!id) {
-    return NextResponse.json(
-      { error: "id là bắt buộc" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "id là bắt buộc" }, { status: 400 });
   }
 
   const { data: sub, error: sErr } = await supabase
     .from("toc_items")
-    .select("id,parent_id,book_version_id")
+    .select("id,parent_id,book_version_id,title")
     .eq("id", id)
     .maybeSingle();
 
@@ -313,16 +362,10 @@ export async function DELETE(req: NextRequest) {
     );
   }
 
-  const { error: delErr } = await supabase
-    .from("toc_items")
-    .delete()
-    .eq("id", id);
+  const { error: delErr } = await supabase.from("toc_items").delete().eq("id", id);
 
   if (delErr) {
-    return NextResponse.json(
-      { error: delErr.message },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: delErr.message }, { status: 400 });
   }
 
   return NextResponse.json({ ok: true });
