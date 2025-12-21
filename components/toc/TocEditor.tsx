@@ -14,6 +14,7 @@ import TableRow from "@tiptap/extension-table-row";
 import TableHeader from "@tiptap/extension-table-header";
 import TableCell from "@tiptap/extension-table-cell";
 import { sanitizeEditorHTML } from "@/lib/editor/sanitize";
+import { BTN_SM, BTN_SM_PRIMARY } from "./tocButtonStyles";
 
 const PANEL =
   "w-full border rounded-lg px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-200";
@@ -479,25 +480,26 @@ export function TocEditor({
               <div className="flex gap-2">
                 <button
                   type="button"
-                  className="px-3 py-1.5 rounded-md border hover:bg-gray-50 text-sm"
+                  className={BTN_SM_PRIMARY}
                   onClick={() => {
                     setPreviewUrl(null);
                     openPreview();
                   }}
                   disabled={previewLoading || !templateId}
-                >
+                  >
                   Render lại
                 </button>
+                
                 <button
                   type="button"
-                  className="px-3 py-1.5 rounded-md border hover:bg-gray-50 text-sm"
+                  className={BTN_SM}
                   onClick={() => setPreviewOpen(false)}
-                >
+                  >
                   Đóng
                 </button>
               </div>
             </div>
-
+            
             <div className="flex-1 p-3">
               {previewErr ? (
                 <div className="text-sm text-red-600">{previewErr}</div>
