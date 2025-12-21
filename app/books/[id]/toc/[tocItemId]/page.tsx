@@ -42,6 +42,27 @@ type TocContent = {
   author_resolved?: boolean;
 };
 
+type TocContentMap = Record<
+  string,
+  {
+    toc_item_id: string;
+    content_json: any;
+    updated_at: string | null;
+    updated_by: string | null;
+    status: "draft" | "submitted" | "needs_revision" | "approved";
+    editor_note: string | null;
+    author_resolved: boolean;
+  }
+>;
+
+type SubsectionsTreeResponse = {
+  ok: boolean;
+  root: TocTreeNode | null;
+  contents?: TocContentMap | null;
+  meta?: any;
+  error?: string;
+};
+
 type Assignment = {
   id: string;
   toc_item_id: string;
@@ -250,48 +271,49 @@ export default function TocItemPage() {
 
   /** LOAD TREE (multi-level) */
   async function loadTree(rootId: string) {
-    setSubLoading(true);
-    try {
-      const res = await fetch(`/api/toc/subsections?root_id=${rootId}`);
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok || j.error) {
-        console.error("load toc tree error:", j.error || res.status);
-        setTocTreeRoot(null);
-        return;
-      }
-      const root = (j.root || null) as TocTreeNode | null;
-      setTocTreeRoot(root);
+  setSubLoading(true);
+  try {
+    // ✅ 1 call: tree + content map
+    const res = await fetch(
+      `/api/toc/subsections?root_id=${encodeURIComponent(
+        rootId
+      )}&include_content=1`
+    );
 
-      // preload contents for every node in tree (including root)
-      const ids = flattenIds(root);
-      if (!ids.length) return;
+    const j = (await res.json().catch(() => ({}))) as SubsectionsTreeResponse;
 
-      const tasks = ids.map(async (id) => {
-        try {
-          const r = await fetch(`/api/toc/item?toc_item_id=${id}`);
-          if (!r.ok) return [id, "<p></p>"] as const;
-          const tj = (await r.json()) as TocItemResponse;
-          return [id, parseContentJson(tj.content?.content_json)] as const;
-        } catch {
-          return [id, "<p></p>"] as const;
-        }
-      });
-
-      const pairs = await Promise.all(tasks);
-      setHtmlById((prev) => {
-        const next = { ...prev };
-        for (const [id, html] of pairs) {
-          if (typeof next[id] !== "string") next[id] = html;
-        }
-        return next;
-      });
-    } catch (e) {
-      console.error("load toc tree failed:", e);
+    if (!res.ok || (j as any).error || !j.ok) {
+      console.error("load toc tree error:", (j as any).error || res.status);
       setTocTreeRoot(null);
-    } finally {
-      setSubLoading(false);
+      return;
     }
+
+    const root = (j.root || null) as TocTreeNode | null;
+    setTocTreeRoot(root);
+
+    // ✅ Fill htmlById từ contents map (không fetch /api/toc/item từng node nữa)
+    const map = (j.contents || null) as TocContentMap | null;
+    if (!map) return;
+
+    setHtmlById((prev) => {
+      const next = { ...prev };
+      for (const [id, c] of Object.entries(map)) {
+        // chỉ set nếu chưa có (giữ các thay đổi chưa lưu trên client)
+        if (typeof next[id] !== "string") {
+          next[id] = parseContentJson(c?.content_json);
+        }
+      }
+      // đảm bảo rootId cũng có (trường hợp root thiếu trong map vì chưa có content row)
+      if (typeof next[rootId] !== "string") next[rootId] = "<p></p>";
+      return next;
+    });
+  } catch (e) {
+    console.error("load toc tree failed:", e);
+    setTocTreeRoot(null);
+  } finally {
+    setSubLoading(false);
   }
+}
 
   async function reloadAll() {
     if (!tocItemId) return;
@@ -301,6 +323,9 @@ export default function TocItemPage() {
   // init load
   useEffect(() => {
     if (!tocItemId) return;
+    setHtmlById({});
+    setTocTreeRoot(null);
+    setActiveSectionId("root");
     loadMain(tocItemId);
     loadTree(tocItemId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
