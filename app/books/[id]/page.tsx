@@ -1,10 +1,29 @@
 // app/books/[id]/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
+
+/** dnd-kit */
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  arrayMove,
+  verticalListSortingStrategy,
+  sortableKeyboardCoordinates,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 /** UI helpers */
 const BTN =
@@ -135,6 +154,166 @@ function buildChildrenMap(items: TocItem[]) {
   return m;
 }
 
+/** Row kéo-thả cho chương cấp 1 (root) */
+function SortableChapterRow(props: {
+  it: TocItem;
+  idx: number;
+  childCount: number;
+  isEditor: boolean;
+  isMenuOpen: boolean;
+  onToggleMenu: (id: string) => void;
+  onCloseMenu: () => void;
+  onOpenEdit: (it: TocItem) => void;
+  onOpenCreateChild: (parentId: string) => void;
+  onMoveUpDown: (id: string, dir: "up" | "down") => void;
+  bookId: string;
+}) {
+  const {
+    it,
+    idx,
+    childCount,
+    isEditor,
+    isMenuOpen,
+    onToggleMenu,
+    onCloseMenu,
+    onOpenEdit,
+    onOpenCreateChild,
+    onMoveUpDown,
+    bookId,
+  } = props;
+
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: it.id });
+
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.6 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="relative rounded-md border border-gray-200 bg-white px-2 py-2 hover:bg-gray-50"
+    >
+      <div className="flex items-start justify-between gap-3">
+        {/* LEFT */}
+        <div className="min-w-0 flex-1 flex gap-2">
+          {/* drag handle */}
+          {isEditor ? (
+            <button
+              type="button"
+              className="mt-0.5 inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md border text-gray-600 hover:bg-gray-100"
+              title="Kéo để đổi thứ tự"
+              onClick={(e) => e.stopPropagation()}
+              {...attributes}
+              {...listeners}
+            >
+              ⠿
+            </button>
+          ) : (
+            <div className="mt-0.5 h-7 w-7 flex-shrink-0" />
+          )}
+
+          <div className="min-w-0 flex-1">
+            <button
+              type="button"
+              className="block w-full truncate text-left text-sm font-semibold text-gray-900 hover:underline"
+              onClick={() => onOpenEdit(it)}
+            >
+              {idx + 1}. {it.title}
+            </button>
+
+            <div className="mt-1 text-xs text-gray-500">
+              Thứ tự: {it.order_index}
+              {childCount > 0 ? ` · ${childCount} mục con` : ""}
+            </div>
+          </div>
+        </div>
+
+        {/* RIGHT menu */}
+        {isEditor && (
+          <div className="relative flex-shrink-0">
+            <button
+              type="button"
+              className={ICON_BTN}
+              title="Tác vụ"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleMenu(it.id);
+              }}
+            >
+              ⋯
+            </button>
+
+            {isMenuOpen && (
+              <div
+                className="absolute right-0 mt-1 w-52 overflow-hidden rounded-md border bg-white shadow-lg z-20"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  className={MENU_ITEM}
+                  onClick={() => {
+                    onCloseMenu();
+                    onOpenEdit(it);
+                  }}
+                >
+                  Sửa tiêu đề
+                </button>
+
+                <button
+                  type="button"
+                  className={MENU_ITEM}
+                  onClick={() => {
+                    onCloseMenu();
+                    onOpenCreateChild(it.id);
+                  }}
+                >
+                  Thêm mục con
+                </button>
+
+                <Link
+                  href={`/books/${bookId}/toc/${it.id}`}
+                  className={MENU_ITEM}
+                  onClick={() => onCloseMenu()}
+                >
+                  Mở trang biên soạn →
+                </Link>
+
+                <div className="my-1 h-px bg-gray-100" />
+
+                <button
+                  type="button"
+                  className={MENU_ITEM}
+                  onClick={() => {
+                    onCloseMenu();
+                    onMoveUpDown(it.id, "up");
+                  }}
+                >
+                  Đưa lên
+                </button>
+
+                <button
+                  type="button"
+                  className={MENU_ITEM}
+                  onClick={() => {
+                    onCloseMenu();
+                    onMoveUpDown(it.id, "down");
+                  }}
+                >
+                  Đưa xuống
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function BookDetailPage() {
   const params = useParams();
   const bookId =
@@ -170,12 +349,8 @@ export default function BookDetailPage() {
   const [modalSaving, setModalSaving] = useState(false);
   const [modalDeleting, setModalDeleting] = useState(false);
 
-  const [modalSelectedAuthors, setModalSelectedAuthors] = useState<string[]>(
-    []
-  );
-  const [modalOriginalAuthors, setModalOriginalAuthors] = useState<string[]>(
-    []
-  );
+  const [modalSelectedAuthors, setModalSelectedAuthors] = useState<string[]>([]);
+  const [modalOriginalAuthors, setModalOriginalAuthors] = useState<string[]>([]);
   const [modalLoadingAssignments, setModalLoadingAssignments] = useState(false);
 
   /** Search user để phân công (theo email) */
@@ -247,7 +422,9 @@ export default function BookDetailPage() {
 
         // 2) Load danh sách version qua API
         const res = await fetch(`/api/books/versions?book_id=${bookId}`);
-        const json = (await res.json().catch(() => ({}))) as Partial<VersionsApiResponse>;
+        const json = (await res
+          .json()
+          .catch(() => ({}))) as Partial<VersionsApiResponse>;
 
         if (cancelled) return;
 
@@ -323,9 +500,14 @@ export default function BookDetailPage() {
     setTemplatesError(null);
     try {
       const res = await fetch("/api/book-templates?active=1");
-      const json = (await res.json().catch(() => ({}))) as Partial<BookTemplatesResponse>;
+      const json = (await res
+        .json()
+        .catch(() => ({}))) as Partial<BookTemplatesResponse>;
       if (!res.ok || !json.ok) {
-        console.error("load templates error:", (json as any)?.error || res.status);
+        console.error(
+          "load templates error:",
+          (json as any)?.error || res.status
+        );
         setTemplates([]);
         setTemplatesError((json as any)?.error || "Không tải được templates.");
         return;
@@ -356,6 +538,70 @@ export default function BookDetailPage() {
   );
 
   const rootItems = useMemo(() => childrenMap.get(null) || [], [childrenMap]);
+
+  /**
+   * DND: lưu thứ tự hiển thị (list id) cho rootItems
+   * - Sync từ server (order_index) mỗi khi rootItems đổi
+   * - Dùng để optimistic reorder UI khi kéo-thả
+   */
+  const [rootOrder, setRootOrder] = useState<string[]>([]);
+  useEffect(() => {
+    setRootOrder(rootItems.map((x) => x.id));
+  }, [rootItems]);
+
+  const rootItemsOrdered = useMemo(() => {
+    const map = new Map(rootItems.map((x) => [x.id, x]));
+    const ordered = rootOrder
+      .map((id) => map.get(id))
+      .filter(Boolean) as TocItem[];
+
+    // nếu có item mới mà rootOrder chưa kịp sync
+    const missing = rootItems.filter((x) => !rootOrder.includes(x.id));
+    return [...ordered, ...missing];
+  }, [rootItems, rootOrder]);
+
+  /** DND sensors */
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  async function handleRootDragEnd(e: DragEndEvent) {
+    if (!version?.id) return;
+    const { active, over } = e;
+    if (!over) return;
+    if (active.id === over.id) return;
+
+    const prev = rootOrder;
+    const oldIndex = prev.indexOf(String(active.id));
+    const newIndex = prev.indexOf(String(over.id));
+    if (oldIndex < 0 || newIndex < 0) return;
+
+    const next = arrayMove(prev, oldIndex, newIndex);
+    setRootOrder(next); // optimistic UI
+
+    const res = await fetch("/api/toc/items/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        book_version_id: version.id,
+        parent_id: null,
+        ordered_ids: next,
+      }),
+    });
+
+    if (!res.ok) {
+      console.error("reorder(root) error", await res.text());
+      alert("Không đổi thứ tự được.");
+      setRootOrder(prev); // rollback
+      return;
+    }
+
+    // reload để đồng bộ order_index
+    await loadTocTree(version.id);
+  }
 
   /** Tạo phiên bản đầu tiên (đi qua API /api/books/versions) */
   async function handleCreateFirstVersion() {
@@ -791,12 +1037,13 @@ export default function BookDetailPage() {
                     ? templatesError
                     : selectedTemplateId
                     ? `Đã chọn: ${
-                      templates.find((x) => x.id === selectedTemplateId)?.name || "—"
-                    }`
-                  : "Chưa chọn template"}
+                        templates.find((x) => x.id === selectedTemplateId)?.name ||
+                        "—"
+                      }`
+                    : "Chưa chọn template"}
                 </div>
               </div>
-              
+
               {/* Middle: select */}
               <div className="w-full md:w-[520px]">
                 <select
@@ -804,7 +1051,7 @@ export default function BookDetailPage() {
                   value={selectedTemplateId}
                   onChange={(e) => setSelectedTemplateId(e.target.value)}
                   disabled={templatesLoading || savingTemplate}
-                  >
+                >
                   <option value="">(Chưa chọn / None)</option>
                   {templates.map((t) => (
                     <option key={t.id} value={t.id}>
@@ -814,10 +1061,12 @@ export default function BookDetailPage() {
                   ))}
                 </select>
                 {templatesError ? (
-          <div className="mt-1 text-[11px] text-red-600">{templatesError}</div>
-        ) : null}
+                  <div className="mt-1 text-[11px] text-red-600">
+                    {templatesError}
+                  </div>
+                ) : null}
               </div>
-              
+
               {/* Right: save */}
               <div className="shrink-0">
                 <button
@@ -825,13 +1074,13 @@ export default function BookDetailPage() {
                   onClick={handleSaveTemplateForVersion}
                   disabled={savingTemplate || templatesLoading}
                   title="Lưu template"
-                  >
+                >
                   {savingTemplate ? "Đang lưu…" : "Lưu template"}
                 </button>
               </div>
             </div>
           </div>
-          
+
           {/* TOC */}
           <div className="rounded-lg border bg-white p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
@@ -859,112 +1108,40 @@ export default function BookDetailPage() {
               </p>
             )}
 
+            {/* ✅ Drag & Drop reorder cho rootItems (không lược bỏ menu ⋯ + nút đưa lên/xuống) */}
             <div className="space-y-2">
-              {rootItems.map((it, idx) => {
-                const childCount = childrenMap.get(it.id)?.length || 0;
-                const isMenuOpen = openMenuFor === it.id;
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleRootDragEnd}
+              >
+                <SortableContext
+                  items={rootItemsOrdered.map((x) => x.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  {rootItemsOrdered.map((it, idx) => {
+                    const childCount = childrenMap.get(it.id)?.length || 0;
+                    const isMenuOpen = openMenuFor === it.id;
 
-                return (
-                  <div
-                    key={it.id}
-                    className="relative rounded-md border border-gray-200 bg-white px-2 py-2 hover:bg-gray-50"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <button
-                          type="button"
-                          className="block w-full truncate text-left text-sm font-semibold text-gray-900 hover:underline"
-                          onClick={() => openEditModal(it)}
-                        >
-                          {idx + 1}. {it.title}
-                        </button>
-
-                        <div className="mt-1 text-xs text-gray-500">
-                          Thứ tự: {it.order_index}
-                          {childCount > 0 ? ` · ${childCount} mục con` : ""}
-                        </div>
-                      </div>
-
-                      {isEditor && (
-                        <div className="relative flex-shrink-0">
-                          <button
-                            type="button"
-                            className={ICON_BTN}
-                            title="Tác vụ"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleMenu(it.id);
-                            }}
-                          >
-                            ⋯
-                          </button>
-
-                          {isMenuOpen && (
-                            <div
-                              className="absolute right-0 mt-1 w-52 overflow-hidden rounded-md border bg-white shadow-lg z-20"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <button
-                                type="button"
-                                className={MENU_ITEM}
-                                onClick={() => {
-                                  closeMenu();
-                                  openEditModal(it);
-                                }}
-                              >
-                                Sửa tiêu đề
-                              </button>
-
-                              <button
-                                type="button"
-                                className={MENU_ITEM}
-                                onClick={() => {
-                                  closeMenu();
-                                  openCreateModal(it.id);
-                                }}
-                              >
-                                Thêm mục con
-                              </button>
-
-                              <Link
-                                href={`/books/${book.id}/toc/${it.id}`}
-                                className={MENU_ITEM}
-                                onClick={() => closeMenu()}
-                              >
-                                Mở trang biên soạn →
-                              </Link>
-
-                              <div className="my-1 h-px bg-gray-100" />
-
-                              <button
-                                type="button"
-                                className={MENU_ITEM}
-                                onClick={() => {
-                                  closeMenu();
-                                  handleMoveItem(it.id, "up");
-                                }}
-                              >
-                                Đưa lên
-                              </button>
-
-                              <button
-                                type="button"
-                                className={MENU_ITEM}
-                                onClick={() => {
-                                  closeMenu();
-                                  handleMoveItem(it.id, "down");
-                                }}
-                              >
-                                Đưa xuống
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+                    return (
+                      <SortableChapterRow
+                        key={it.id}
+                        it={it}
+                        idx={idx}
+                        childCount={childCount}
+                        isEditor={isEditor}
+                        isMenuOpen={isMenuOpen}
+                        onToggleMenu={toggleMenu}
+                        onCloseMenu={closeMenu}
+                        onOpenEdit={openEditModal}
+                        onOpenCreateChild={(pid) => openCreateModal(pid)}
+                        onMoveUpDown={handleMoveItem}
+                        bookId={book.id}
+                      />
+                    );
+                  })}
+                </SortableContext>
+              </DndContext>
             </div>
           </div>
         </div>
