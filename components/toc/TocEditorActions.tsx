@@ -1,5 +1,6 @@
 // components/toc/TocEditorActions.tsx
 "use client";
+
 import { BTN_SM, BTN_SM_PRIMARY } from "./tocButtonStyles";
 
 type TocEditorActionsProps = {
@@ -28,16 +29,18 @@ export function TocEditorActions({
         Chỉ editor mới thấy phần này. Bạn có thể duyệt hoặc yêu cầu tác giả
         chỉnh sửa khi trạng thái chương đang là <strong>Đã nộp</strong>.
       </p>
+
       <div className="flex flex-wrap items-center gap-2">
         <button
-          className={BTN_PRIMARY}
+          className={BTN_SM_PRIMARY}
           onClick={onApprove}
           disabled={!canApprove || approving}
         >
           {approving ? "Đang duyệt..." : "Duyệt chương"}
         </button>
+
         <button
-          className={BTN}
+          className={BTN_SM}
           onClick={onRequestChange}
           disabled={!canRequestChange || requestingChange}
         >
