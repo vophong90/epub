@@ -108,9 +108,7 @@ export function TocImportPanel({
     }
   }
 
-  if (!canImport) {
-    return null;
-  }
+  if (!canImport) return null;
 
   return (
     <section className="mt-4 border-t border-slate-200 pt-4 space-y-3">
@@ -118,9 +116,9 @@ export function TocImportPanel({
         Import nội dung từ file Word (.docx)
       </h4>
       <p className="text-xs text-slate-600">
-        Dùng khi bạn đã có bản thảo chương trong Word với heading chuẩn.
-        Hệ thống sẽ đọc nội dung, tách thành chương + mục con theo heading,
-        cho xem trước, sau đó mới ghi vào DB.
+        Dùng khi bạn đã có bản thảo chương trong Word với heading chuẩn. Hệ thống
+        sẽ đọc nội dung, tách thành chương + mục con theo heading, cho xem trước,
+        sau đó mới ghi vào DB.
       </p>
 
       <div className="flex flex-col md:flex-row gap-3 md:items-center">
@@ -130,8 +128,9 @@ export function TocImportPanel({
           onChange={handleFileChange}
           className="text-xs"
         />
+
         <button
-          className={BTN}
+          className={BTN_SM}
           onClick={handleImportPreview}
           disabled={importLoading || !importFile}
         >
@@ -140,7 +139,7 @@ export function TocImportPanel({
 
         {importPreview && (
           <button
-            className={BTN_PRIMARY}
+            className={BTN_SM_PRIMARY}
             onClick={handleImportApply}
             disabled={importApplying}
           >
@@ -183,6 +182,7 @@ export function TocImportPanel({
               />
             </div>
           </div>
+
           <div className="space-y-2">
             <h5 className="font-semibold text-slate-800">
               Các mục con sẽ được tạo ({importPreview.subsections.length})
@@ -193,6 +193,7 @@ export function TocImportPanel({
                   Không có mục con nào được phát hiện từ heading.
                 </p>
               )}
+
               {importPreview.subsections.map((s, idx) => (
                 <div
                   key={`${idx}-${s.title}`}
