@@ -19,6 +19,9 @@ const ICON_BTN =
   "inline-flex h-7 w-7 items-center justify-center rounded-md border text-sm hover:bg-gray-50 disabled:opacity-50";
 const MENU_ITEM = "w-full text-left px-3 py-2 text-sm hover:bg-gray-50";
 
+const SELECT =
+  "w-full rounded-md border px-3 py-2 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400";
+
 /** DB types (tối giản cho UI này) */
 type Book = {
   id: string;
@@ -45,6 +48,23 @@ type VersionsApiResponse = {
   ok: boolean;
   is_admin: boolean;
   versions: BookVersion[];
+  error?: string;
+};
+
+type BookTemplate = {
+  id: string;
+  name: string;
+  description: string | null;
+  page_size: string;
+  page_margin_mm: any;
+  is_active: boolean;
+  created_by: string;
+  created_at: string;
+};
+
+type BookTemplatesResponse = {
+  ok: boolean;
+  templates: BookTemplate[];
   error?: string;
 };
 
@@ -132,6 +152,15 @@ export default function BookDetailPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [creatingVersion, setCreatingVersion] = useState(false);
 
+  /** Templates */
+  const [templates, setTemplates] = useState<BookTemplate[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
+
+  /** Template selection UI */
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(""); // "" nghĩa là chưa chọn/None
+  const [savingTemplate, setSavingTemplate] = useState(false);
+
   /** Modal state cho tạo / sửa TOC */
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<"create" | "edit">("create");
@@ -141,13 +170,19 @@ export default function BookDetailPage() {
   const [modalSaving, setModalSaving] = useState(false);
   const [modalDeleting, setModalDeleting] = useState(false);
 
-  const [modalSelectedAuthors, setModalSelectedAuthors] = useState<string[]>([]);
-  const [modalOriginalAuthors, setModalOriginalAuthors] = useState<string[]>([]);
+  const [modalSelectedAuthors, setModalSelectedAuthors] = useState<string[]>(
+    []
+  );
+  const [modalOriginalAuthors, setModalOriginalAuthors] = useState<string[]>(
+    []
+  );
   const [modalLoadingAssignments, setModalLoadingAssignments] = useState(false);
 
   /** Search user để phân công (theo email) */
   const [userSearchQuery, setUserSearchQuery] = useState("");
-  const [userSearchResults, setUserSearchResults] = useState<MemberProfile[]>([]);
+  const [userSearchResults, setUserSearchResults] = useState<MemberProfile[]>(
+    []
+  );
   const [userSearchLoading, setUserSearchLoading] = useState(false);
   const [userSearchError, setUserSearchError] = useState<string | null>(null);
 
@@ -157,7 +192,6 @@ export default function BookDetailPage() {
   function toggleMenu(id: string) {
     setOpenMenuFor((cur) => (cur === id ? null : id));
   }
-
   function closeMenu() {
     setOpenMenuFor(null);
   }
@@ -211,7 +245,7 @@ export default function BookDetailPage() {
         if (cancelled) return;
         setBook(bookRow as Book);
 
-        // 2) Load danh sách version qua API (đã kiểm tra quyền, RLS, v.v.)
+        // 2) Load danh sách version qua API
         const res = await fetch(`/api/books/versions?book_id=${bookId}`);
         const json = (await res.json().catch(() => ({}))) as Partial<VersionsApiResponse>;
 
@@ -225,9 +259,11 @@ export default function BookDetailPage() {
 
         const versions = json.versions || [];
         if (versions.length > 0) {
-          // API đang order version_no ascending, nên lấy phần tử cuối là mới nhất
           const latest = versions[versions.length - 1];
           setVersion(latest);
+
+          // sync selected template from latest
+          setSelectedTemplateId(latest.template_id || "");
 
           // 3) Load TOC tree
           await loadTocTree(latest.id, cancelled);
@@ -236,6 +272,7 @@ export default function BookDetailPage() {
           await loadMembers(latest.id, cancelled);
         } else {
           setVersion(null);
+          setSelectedTemplateId("");
         }
       } catch (e: any) {
         if (!cancelled) setErrorMsg(e?.message || "Lỗi khi tải dữ liệu.");
@@ -281,6 +318,35 @@ export default function BookDetailPage() {
     }
   }
 
+  async function loadTemplates() {
+    setTemplatesLoading(true);
+    setTemplatesError(null);
+    try {
+      const res = await fetch("/api/book-templates?active=1");
+      const json = (await res.json().catch(() => ({}))) as Partial<BookTemplatesResponse>;
+      if (!res.ok || !json.ok) {
+        console.error("load templates error:", (json as any)?.error || res.status);
+        setTemplates([]);
+        setTemplatesError((json as any)?.error || "Không tải được templates.");
+        return;
+      }
+      setTemplates((json.templates || []) as BookTemplate[]);
+    } catch (e: any) {
+      console.error("loadTemplates error:", e);
+      setTemplates([]);
+      setTemplatesError(e?.message || "Không tải được templates.");
+    } finally {
+      setTemplatesLoading(false);
+    }
+  }
+
+  // Load templates khi đã có version (vì mới cần chọn template)
+  useEffect(() => {
+    if (!version?.id) return;
+    loadTemplates();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version?.id]);
+
   const isEditor = tocData?.role === "editor";
 
   /** Children map cho hiển thị + reorder */
@@ -316,15 +382,51 @@ export default function BookDetailPage() {
 
       const v = json.version as BookVersion;
       setVersion(v);
+      setSelectedTemplateId(v.template_id || "");
 
       // reload TOC & members cho version mới
       await loadTocTree(v.id);
       await loadMembers(v.id);
+
+      // load templates list
+      await loadTemplates();
     } catch (e: any) {
       console.error("handleCreateFirstVersion error:", e);
       setErrorMsg(e?.message || "Lỗi khi tạo phiên bản mới.");
     } finally {
       setCreatingVersion(false);
+    }
+  }
+
+  /** Lưu template cho version hiện tại (PATCH /api/books/versions) */
+  async function handleSaveTemplateForVersion() {
+    if (!version?.id) return;
+    setSavingTemplate(true);
+    try {
+      const res = await fetch("/api/books/versions", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: version.id,
+          template_id: selectedTemplateId ? selectedTemplateId : null,
+        }),
+      });
+
+      const json = await res.json().catch(() => ({} as any));
+      if (!res.ok || !json?.ok || !json?.version) {
+        console.error("save template error:", json);
+        alert(json?.error || "Không lưu được template cho phiên bản.");
+        return;
+      }
+
+      const updated = json.version as BookVersion;
+      setVersion(updated);
+      setSelectedTemplateId(updated.template_id || "");
+    } catch (e: any) {
+      console.error("handleSaveTemplateForVersion error:", e);
+      alert(e?.message || "Không lưu được template.");
+    } finally {
+      setSavingTemplate(false);
     }
   }
 
@@ -388,7 +490,6 @@ export default function BookDetailPage() {
     setUserSearchLoading(true);
     setUserSearchError(null);
     try {
-      // profiles.id = auth.users.id theo schema của bạn
       const { data, error } = await supabase
         .from("profiles")
         .select("id,name,email")
@@ -480,13 +581,14 @@ export default function BookDetailPage() {
         }
 
         for (const uid of toRemove) {
-          await fetch(`/api/toc/assignments?toc_item_id=${currentItemId}&user_id=${uid}`, {
-            method: "DELETE",
-          });
+          await fetch(
+            `/api/toc/assignments?toc_item_id=${currentItemId}&user_id=${uid}`,
+            { method: "DELETE" }
+          );
         }
       }
 
-      // Reload TOC + members (vì backend có thể auto-add vào book_permissions)
+      // Reload TOC + members
       await loadTocTree(version.id);
       await loadMembers(version.id);
 
@@ -538,7 +640,10 @@ export default function BookDetailPage() {
     const targetIndex = direction === "up" ? index - 1 : index + 1;
     if (targetIndex < 0 || targetIndex >= siblings.length) return;
 
-    [siblings[index], siblings[targetIndex]] = [siblings[targetIndex], siblings[index]];
+    [siblings[index], siblings[targetIndex]] = [
+      siblings[targetIndex],
+      siblings[index],
+    ];
 
     const orderedIds = siblings.map((s) => s.id);
 
@@ -597,6 +702,11 @@ export default function BookDetailPage() {
     );
   }
 
+  const currentTemplate =
+    version?.template_id && templates.length
+      ? templates.find((t) => t.id === version.template_id) || null
+      : null;
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
       {/* Breadcrumb */}
@@ -611,7 +721,9 @@ export default function BookDetailPage() {
       <div className="flex flex-col items-start justify-between gap-2 md:flex-row md:items-center">
         <div>
           <h1 className="text-2xl font-bold">{book.title}</h1>
-          <p className="text-sm text-gray-500">Đơn vị: {book.unit_name || "—"}</p>
+          <p className="text-sm text-gray-500">
+            Đơn vị: {book.unit_name || "—"}
+          </p>
           {version && (
             <p className="mt-1 text-sm text-gray-500">
               Phiên bản {version.version_no} –{" "}
@@ -619,6 +731,18 @@ export default function BookDetailPage() {
                 {version.status}
               </span>{" "}
               · Tạo lúc {formatDateTime(version.created_at)}
+              {version.template_id ? (
+                <span className="ml-2 text-xs text-gray-500">
+                  · Template:{" "}
+                  <span className="font-medium text-gray-700">
+                    {currentTemplate?.name || "Đã gán"}
+                  </span>
+                </span>
+              ) : (
+                <span className="ml-2 text-xs text-gray-500">
+                  · Template: <span className="font-medium">Chưa chọn</span>
+                </span>
+              )}
             </p>
           )}
         </div>
@@ -635,8 +759,8 @@ export default function BookDetailPage() {
         <div className="space-y-4">
           <div className="space-y-3 rounded-lg border border-red-200 bg-red-50 p-4">
             <p className="text-sm text-red-800">
-              Sách này chưa có phiên bản nào. Bạn cần tạo phiên bản đầu tiên trước
-              khi xây dựng mục lục.
+              Sách này chưa có phiên bản nào. Bạn cần tạo phiên bản đầu tiên
+              trước khi xây dựng mục lục.
             </p>
             <button
               className={BTN_PRIMARY}
@@ -652,14 +776,96 @@ export default function BookDetailPage() {
       {/* Khi đã có version */}
       {version && (
         <div className="space-y-4">
+          {/* Template selector (mới) */}
+          <div className="rounded-lg border bg-white p-4 shadow-sm">
+            <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+              <div className="space-y-1">
+                <h2 className="text-lg font-semibold">Template cho phiên bản</h2>
+                <p className="text-xs text-gray-500">
+                  Chọn template để dùng khi Preview PDF / Xuất bản. Bạn có thể đổi
+                  lại bất kỳ lúc nào (miễn version còn cho phép chỉnh).
+                </p>
+              </div>
+
+              <div className="flex w-full flex-col gap-2 md:w-[520px] md:flex-row md:items-center md:justify-end">
+                <div className="w-full">
+                  <select
+                    className={SELECT}
+                    value={selectedTemplateId}
+                    onChange={(e) => setSelectedTemplateId(e.target.value)}
+                    disabled={templatesLoading || savingTemplate}
+                  >
+                    <option value="">(Chưa chọn / None)</option>
+                    {templates.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                        {t.page_size ? ` · ${t.page_size}` : ""}
+                      </option>
+                    ))}
+                  </select>
+
+                  <div className="mt-1 text-[11px] text-gray-500">
+                    {templatesLoading ? (
+                      <span>Đang tải templates…</span>
+                    ) : templatesError ? (
+                      <span className="text-red-600">{templatesError}</span>
+                    ) : selectedTemplateId ? (
+                      <span>
+                        Đã chọn:{" "}
+                        <span className="font-medium text-gray-700">
+                          {templates.find((x) => x.id === selectedTemplateId)?.name ||
+                            "—"}
+                        </span>
+                        {templates.find((x) => x.id === selectedTemplateId)?.description ? (
+                          <span className="ml-1">
+                            ·{" "}
+                            {
+                              templates.find((x) => x.id === selectedTemplateId)
+                                ?.description
+                            }
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : (
+                      <span>Chưa chọn template.</span>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  className={BTN_PRIMARY}
+                  onClick={handleSaveTemplateForVersion}
+                  disabled={savingTemplate || templatesLoading}
+                  title="Lưu template cho phiên bản hiện tại"
+                >
+                  {savingTemplate ? "Đang lưu…" : "Lưu template"}
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-3 text-xs text-gray-500">
+              Gợi ý: nếu bạn muốn bắt buộc chọn template ngay lúc tạo version đầu
+              tiên, mình có thể đổi luồng tạo version để mở modal chọn template
+              trước khi POST.
+            </div>
+          </div>
+
+          {/* TOC */}
           <div className="rounded-lg border bg-white p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-semibold">Mục lục (TOC) của phiên bản này</h2>
-                <p className="text-xs text-gray-500">Vai trò của bạn: {tocData?.role || "—"}</p>
+                <h2 className="text-lg font-semibold">
+                  Mục lục (TOC) của phiên bản này
+                </h2>
+                <p className="text-xs text-gray-500">
+                  Vai trò của bạn: {tocData?.role || "—"}
+                </p>
               </div>
               {isEditor && (
-                <button className={BTN_PRIMARY} onClick={() => openCreateModal(null)}>
+                <button
+                  className={BTN_PRIMARY}
+                  onClick={() => openCreateModal(null)}
+                >
                   + Tạo chương mới
                 </button>
               )}
@@ -808,15 +1014,17 @@ export default function BookDetailPage() {
                 <p className="text-xs text-gray-500">
                   Mục cha:{" "}
                   <span className="font-medium">
-                    {(tocData?.items || []).find((i) => i.id === modalParentId)?.title ||
-                      "(không tìm thấy)"}
+                    {(tocData?.items || []).find((i) => i.id === modalParentId)
+                      ?.title || "(không tìm thấy)"}
                   </span>
                 </p>
               )}
 
               {/* Tiêu đề */}
               <div>
-                <label className="block text-sm font-medium text-gray-700">Tiêu đề</label>
+                <label className="block text-sm font-medium text-gray-700">
+                  Tiêu đề
+                </label>
                 <input
                   type="text"
                   className="mt-1 w-full rounded border px-3 py-2 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
@@ -833,7 +1041,9 @@ export default function BookDetailPage() {
                     Phân công tác giả cho mục này
                   </label>
                   {modalLoadingAssignments && (
-                    <span className="text-xs text-gray-500">Đang tải phân công…</span>
+                    <span className="text-xs text-gray-500">
+                      Đang tải phân công…
+                    </span>
                   )}
                 </div>
 
@@ -866,7 +1076,8 @@ export default function BookDetailPage() {
                 )}
 
                 {/* Kết quả tìm kiếm (user chưa là member của sách) */}
-                {userSearchResults.filter((u) => !memberIdSet.has(u.id)).length > 0 && (
+                {userSearchResults.filter((u) => !memberIdSet.has(u.id)).length >
+                  0 && (
                   <div className="mb-2 rounded border border-dashed border-gray-300 p-2 text-xs">
                     <p className="mb-1 font-semibold text-gray-700">
                       Kết quả tìm kiếm (user chưa là thành viên sách):
@@ -887,14 +1098,19 @@ export default function BookDetailPage() {
                                 onChange={(e) => {
                                   const checked = e.target.checked;
                                   setModalSelectedAuthors((prev) => {
-                                    if (checked) return prev.includes(u.id) ? prev : [...prev, u.id];
+                                    if (checked)
+                                      return prev.includes(u.id)
+                                        ? prev
+                                        : [...prev, u.id];
                                     return prev.filter((id) => id !== u.id);
                                   });
                                 }}
                               />
                               <span>
                                 {u.name || "(Không tên)"}{" "}
-                                <span className="text-xs text-gray-500">({u.email})</span>
+                                <span className="text-xs text-gray-500">
+                                  ({u.email})
+                                </span>
                               </span>
                             </div>
                             <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold uppercase text-indigo-700">
@@ -913,8 +1129,8 @@ export default function BookDetailPage() {
                 {/* Danh sách member (từ book_permissions) */}
                 {members.length === 0 ? (
                   <p className="text-xs text-gray-500">
-                    Hiện chưa có thành viên nào ở cấp sách. Bạn có thể tìm user theo email ở trên
-                    và tick chọn để phân công.
+                    Hiện chưa có thành viên nào ở cấp sách. Bạn có thể tìm user
+                    theo email ở trên và tick chọn để phân công.
                   </p>
                 ) : (
                   <div className="max-h-48 space-y-1 overflow-auto rounded border p-2">
@@ -931,14 +1147,19 @@ export default function BookDetailPage() {
                             onChange={(e) => {
                               const checked = e.target.checked;
                               setModalSelectedAuthors((prev) => {
-                                if (checked) return prev.includes(m.user_id) ? prev : [...prev, m.user_id];
+                                if (checked)
+                                  return prev.includes(m.user_id)
+                                    ? prev
+                                    : [...prev, m.user_id];
                                 return prev.filter((id) => id !== m.user_id);
                               });
                             }}
                           />
                           <span>
                             {m.profile?.name || "(Không tên)"}{" "}
-                            <span className="text-xs text-gray-500">({m.profile?.email})</span>
+                            <span className="text-xs text-gray-500">
+                              ({m.profile?.email})
+                            </span>
                           </span>
                         </div>
                         <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
@@ -949,9 +1170,9 @@ export default function BookDetailPage() {
                   </div>
                 )}
                 <p className="mt-1 text-xs text-gray-500">
-                  Role hiển thị bên phải là vai trò ở cấp sách (viewer/author/editor). Phân công ở
-                  đây sẽ tạo quyền <strong>author</strong> cho mục lục này (và tự thêm vào sách nếu
-                  chưa có).
+                  Role hiển thị bên phải là vai trò ở cấp sách (viewer/author/editor).
+                  Phân công ở đây sẽ tạo quyền <strong>author</strong> cho mục
+                  lục này (và tự thêm vào sách nếu chưa có).
                 </p>
               </div>
 
@@ -972,7 +1193,11 @@ export default function BookDetailPage() {
             {/* Footer buttons */}
             <div className="mt-5 flex items-center justify-between">
               <div className="flex gap-2">
-                <button className={BTN} onClick={closeModal} disabled={modalSaving || modalDeleting}>
+                <button
+                  className={BTN}
+                  onClick={closeModal}
+                  disabled={modalSaving || modalDeleting}
+                >
                   Hủy
                 </button>
                 <button
