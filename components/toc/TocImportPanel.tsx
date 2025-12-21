@@ -2,11 +2,7 @@
 "use client";
 
 import { useState, ChangeEvent } from "react";
-
-const BTN =
-  "inline-flex items-center justify-center px-3 py-2 rounded-lg border hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed";
-const BTN_PRIMARY =
-  "inline-flex items-center justify-center px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed";
+import { BTN_SM, BTN_SM_PRIMARY } from "./tocButtonStyles";
 
 type ImportPreviewSubsection = {
   title: string;
