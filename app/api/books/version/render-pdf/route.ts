@@ -67,37 +67,107 @@ function makeAnchor(tocItemId: string, slug: string) {
 }
 
 /**
+ * =========================
+ * Pagination helpers (fix 1000 rows cap)
+ * =========================
+ */
+
+/** Fetch ALL toc_items for a version using pagination (.range) */
+async function fetchAllTocItemsByVersion(
+  admin: any,
+  versionId: string
+): Promise<TocItemRow[]> {
+  const PAGE = 1000;
+  let from = 0;
+  const all: TocItemRow[] = [];
+
+  while (true) {
+    const { data, error } = await admin
+      .from("toc_items")
+      .select("id,parent_id,title,slug,order_index")
+      .eq("book_version_id", versionId)
+      .order("order_index", { ascending: true })
+      .order("id", { ascending: true }) // stable order across pages
+      .range(from, from + PAGE - 1);
+
+    if (error) throw new Error("Load toc_items failed: " + error.message);
+
+    const batch = (data || []) as TocItemRow[];
+    all.push(...batch);
+
+    if (batch.length < PAGE) break;
+    from += PAGE;
+  }
+
+  return all;
+}
+
+/**
+ * Fetch toc_contents by item ids, in batches + pagination.
+ * Why:
+ * - `.in('toc_item_id', ids)` with too many ids can be heavy/limit.
+ * - PostgREST may still cap 1000 rows per request.
+ *
+ * Strategy:
+ * - Split ids into chunks (e.g. 500 each)
+ * - For each chunk, page through results with .range()
+ */
+async function fetchAllTocContentsByItemIds(
+  admin: any,
+  tocItemIds: string[]
+): Promise<TocContentRow[]> {
+  if (!tocItemIds.length) return [];
+
+  const ID_CHUNK = 500; // safe chunk for IN list
+  const PAGE = 1000;
+
+  const all: TocContentRow[] = [];
+
+  for (let i = 0; i < tocItemIds.length; i += ID_CHUNK) {
+    const slice = tocItemIds.slice(i, i + ID_CHUNK);
+
+    let from = 0;
+    while (true) {
+      const { data, error } = await admin
+        .from("toc_contents")
+        .select("toc_item_id,content_json,status")
+        .in("toc_item_id", slice)
+        .order("toc_item_id", { ascending: true })
+        .range(from, from + PAGE - 1);
+
+      if (error) throw new Error("Load toc_contents failed: " + error.message);
+
+      const batch = (data || []) as TocContentRow[];
+      all.push(...batch);
+
+      if (batch.length < PAGE) break;
+      from += PAGE;
+    }
+  }
+
+  return all;
+}
+
+/**
  * Build ordered toc tree nodes + attach content_html from toc_contents.content_json.html
  * - depth 1 => chapter
  * - depth 2 => section
  * - depth 3+ => sub-sections
  */
 async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNode[]> {
-  // 1) load all toc items
-  const { data: items, error: itErr } = await admin
-    .from("toc_items")
-    .select("id,parent_id,title,slug,order_index")
-    .eq("book_version_id", versionId);
-
-  if (itErr) throw new Error("Load toc_items failed: " + itErr.message);
-  const tocItems = (items || []) as TocItemRow[];
+  // 1) load all toc items (FIX: pagination)
+  const tocItems = await fetchAllTocItemsByVersion(admin, versionId);
 
   if (!tocItems.length) {
     // Không có TOC thì trả về rỗng, tránh gọi .in([]) bị lỗi
     return [];
   }
 
-  // 2) load all contents (1-1 with toc_item_id)
-  const { data: contents, error: ctErr } = await admin
-    .from("toc_contents")
-    .select("toc_item_id,content_json,status")
-    .in(
-      "toc_item_id",
-      tocItems.map((x) => x.id)
-    );
-
-  if (ctErr) throw new Error("Load toc_contents failed: " + ctErr.message);
-  const tocContents = (contents || []) as TocContentRow[];
+  // 2) load all contents (FIX: chunk + pagination)
+  const tocContents = await fetchAllTocContentsByItemIds(
+    admin,
+    tocItems.map((x) => x.id)
+  );
 
   const contentByItem = new Map<string, TocContentRow>();
   for (const c of tocContents) contentByItem.set(c.toc_item_id, c);
@@ -241,7 +311,10 @@ export async function POST(req: NextRequest) {
   }
 
   if (!canRender) {
-    return NextResponse.json({ error: "Bạn không có quyền render PDF" }, { status: 403 });
+    return NextResponse.json(
+      { error: "Bạn không có quyền render PDF" },
+      { status: 403 }
+    );
   }
 
   // 3) load book
@@ -290,7 +363,7 @@ export async function POST(req: NextRequest) {
   const renderId = render.id;
 
   try {
-    // 1) Build nodes từ DB
+    // 1) Build nodes từ DB (FIX 1000-row cap)
     const nodes = await buildNodesFromDB(admin, versionId);
 
     // 2) Token replace cho template
