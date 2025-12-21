@@ -17,6 +17,86 @@ import { getAdminClient } from "@/lib/supabase-admin";
  * - Tạo version mới: status = 'draft', version_no = max(version_no) + 1
  * - Clone toàn bộ toc_items, toc_contents, toc_assignments từ source sang version mới
  */
+
+// ====== Pagination helpers (fix Supabase 1000 row cap) ======
+
+async function fetchAllTocItemsByVersion(
+  supabase: any,
+  sourceVersionId: string
+) {
+  const PAGE = 1000;
+  let from = 0;
+  const all: any[] = [];
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("toc_items")
+      .select("id, book_version_id, parent_id, title, slug, order_index, created_at")
+      .eq("book_version_id", sourceVersionId)
+      .order("order_index", { ascending: true })
+      .order("id", { ascending: true }) // stable paging
+      .range(from, from + PAGE - 1);
+
+    if (error) throw new Error(`Lỗi khi đọc TOC của phiên bản nguồn: ${error.message}`);
+
+    const batch = data || [];
+    all.push(...batch);
+
+    if (batch.length < PAGE) break;
+    from += PAGE;
+  }
+
+  return all;
+}
+
+/**
+ * Fetch rows from a table by chunked IN(ids) + pagination.
+ * - Avoids 1000 row cap and overly-large IN list.
+ */
+async function fetchAllByItemIds<T>(
+  supabase: any,
+  table: "toc_contents" | "toc_assignments",
+  selectCols: string,
+  idCol: string, // "toc_item_id"
+  tocItemIds: string[]
+): Promise<T[]> {
+  if (!tocItemIds.length) return [];
+
+  const ID_CHUNK = 500; // safe for IN list
+  const PAGE = 1000;
+
+  const all: T[] = [];
+
+  for (let i = 0; i < tocItemIds.length; i += ID_CHUNK) {
+    const slice = tocItemIds.slice(i, i + ID_CHUNK);
+
+    let from = 0;
+    while (true) {
+      const q = supabase
+        .from(table)
+        .select(selectCols)
+        .in(idCol, slice)
+        .order(idCol, { ascending: true })
+        .range(from, from + PAGE - 1);
+
+      const { data, error } = await q;
+
+      if (error) {
+        const label = table === "toc_contents" ? "nội dung TOC" : "phân công TOC";
+        throw new Error(`Lỗi khi lấy ${label}: ${error.message}`);
+      }
+
+      const batch = (data || []) as T[];
+      all.push(...batch);
+
+      if (batch.length < PAGE) break;
+      from += PAGE;
+    }
+  }
+
+  return all;
+}
+
 export async function POST(req: NextRequest) {
   const supabase = getAdminClient();
 
@@ -28,7 +108,8 @@ export async function POST(req: NextRequest) {
   }
 
   const book_id_input = (body.book_id as string | undefined) || undefined;
-  const source_version_id_input = (body.source_version_id as string | undefined) || undefined;
+  const source_version_id_input =
+    (body.source_version_id as string | undefined) || undefined;
 
   if (!book_id_input && !source_version_id_input) {
     return NextResponse.json(
@@ -165,7 +246,7 @@ export async function POST(req: NextRequest) {
     const newVersion = insertedVersion as VersionRow;
     const newVersionId = newVersion.id;
 
-    // 4) Lấy toàn bộ TOC items của sourceVersion
+    // 4) Lấy toàn bộ TOC items của sourceVersion (FIX: pagination)
     type TocItemRow = {
       id: string;
       book_version_id: string;
@@ -176,25 +257,10 @@ export async function POST(req: NextRequest) {
       created_at: string | null;
     };
 
-    const { data: tocItems, error: tocErr } = await supabase
-      .from("toc_items")
-      .select(
-        "id, book_version_id, parent_id, title, slug, order_index, created_at"
-      )
-      .eq("book_version_id", sourceVersion.id)
-      .order("order_index", { ascending: true });
-
-    if (tocErr) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: `Lỗi khi đọc TOC của phiên bản nguồn: ${tocErr.message}`,
-        },
-        { status: 500 }
-      );
-    }
-
-    const allItems = (tocItems || []) as TocItemRow[];
+    const allItems = (await fetchAllTocItemsByVersion(
+      supabase,
+      sourceVersion.id
+    )) as TocItemRow[];
 
     // Nếu không có nội dung TOC thì không sao, chỉ trả về version mới
     if (allItems.length === 0) {
@@ -206,9 +272,9 @@ export async function POST(req: NextRequest) {
     }
 
     // 5) Map id -> item, và group theo parent để clone theo tree
-    const byId = new Map<string, TocItemRow>(
-      allItems.map((i) => [i.id, i])
-    );
+    const byId = new Map<string, TocItemRow>(allItems.map((i) => [i.id, i]));
+    void byId; // giữ đúng chức năng/biến cũ (tránh lint), dù không dùng trực tiếp
+
     const childrenMap = new Map<string | null, TocItemRow[]>();
 
     for (const it of allItems) {
@@ -236,55 +302,37 @@ export async function POST(req: NextRequest) {
       role_in_item: string;
     };
 
-    // cache contents & assignments theo toc_item_id để đỡ query lặp lại
-    const { data: allContents, error: contentErr } = await supabase
-      .from("toc_contents")
-      .select("toc_item_id, content_json, status, updated_by, updated_at")
-      .in(
-        "toc_item_id",
-        allItems.map((i) => i.id)
-      );
+    const sourceItemIds = allItems.map((i) => i.id);
 
-    if (contentErr) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: `Lỗi khi lấy nội dung TOC: ${contentErr.message}`,
-        },
-        { status: 500 }
-      );
-    }
+    // cache contents & assignments theo toc_item_id để đỡ query lặp lại
+    // FIX: chunk+pagination instead of single .in(...)
+    const allContents = await fetchAllByItemIds<TocContentRow>(
+      supabase,
+      "toc_contents",
+      "toc_item_id, content_json, status, updated_by, updated_at",
+      "toc_item_id",
+      sourceItemIds
+    );
 
     const contentsByItem = new Map<string, TocContentRow>();
     (allContents || []).forEach((c) => {
       contentsByItem.set(c.toc_item_id, c as TocContentRow);
     });
 
-    const { data: allAssignments, error: assignErr } = await supabase
-      .from("toc_assignments")
-      .select("toc_item_id, user_id, role_in_item")
-      .in(
-        "toc_item_id",
-        allItems.map((i) => i.id)
-      );
-
-    if (assignErr) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: `Lỗi khi lấy phân công TOC: ${assignErr.message}`,
-        },
-        { status: 500 }
-      );
-    }
+    const allAssignments = await fetchAllByItemIds<TocAssignmentRow>(
+      supabase,
+      "toc_assignments",
+      "toc_item_id, user_id, role_in_item",
+      "toc_item_id",
+      sourceItemIds
+    );
 
     const assignmentsByItem = new Map<string, TocAssignmentRow[]>();
     (allAssignments || []).forEach((a) => {
       const arr =
-        assignmentsByItem.get(a.toc_item_id) ||
-        ([] as TocAssignmentRow[]);
+        assignmentsByItem.get((a as any).toc_item_id) || ([] as TocAssignmentRow[]);
       arr.push(a as TocAssignmentRow);
-      assignmentsByItem.set(a.toc_item_id, arr);
+      assignmentsByItem.set((a as any).toc_item_id, arr);
     });
 
     // Hàm đệ quy clone một node và toàn bộ subtree của nó
@@ -306,9 +354,7 @@ export async function POST(req: NextRequest) {
         .limit(1);
 
       if (insItemErr || !insertedItemRows || insertedItemRows.length === 0) {
-        throw new Error(
-          insItemErr?.message || "Không clone được một mục TOC."
-        );
+        throw new Error(insItemErr?.message || "Không clone được một mục TOC.");
       }
 
       const newItemId = insertedItemRows[0].id as string;
