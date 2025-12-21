@@ -149,6 +149,19 @@ type TocTreeNode = TocRow & {
   children: TocTreeNode[];
 };
 
+type TocContentMap = Record<
+  string,
+  {
+    toc_item_id: string;
+    content_json: any;
+    status: "draft" | "submitted" | "needs_revision" | "approved";
+    editor_note: string | null;
+    updated_at: string | null;
+    updated_by: string | null;
+    author_resolved: boolean;
+  }
+>;
+
 function buildTree(rows: TocRow[], rootId: string): TocTreeNode | null {
   const byId = new Map<string, TocTreeNode>();
   for (const r of rows) {
@@ -274,6 +287,7 @@ async function fetchSubtreeByRoot(
 /** GET:
  * - ?parent_id=... -> list con trực tiếp (compat)
  * - ?root_id=...   -> trả tree nhiều cấp (dùng cho sidebar tree)
+ * - ?root_id=...&include_content=1 -> trả tree + map content theo id (tối ưu giảm request)
  */
 export async function GET(req: NextRequest) {
   const { supabase, user, error } = await requireUser();
@@ -282,6 +296,7 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const root_id = searchParams.get("root_id") || "";
   const parent_id = searchParams.get("parent_id") || "";
+  const includeContent = searchParams.get("include_content") === "1";
 
   if (!root_id && !parent_id) {
     return NextResponse.json(
@@ -305,7 +320,10 @@ export async function GET(req: NextRequest) {
       rows = rpcRes.rows;
     } else {
       // 2) Fallback: fetch all within version (paginated) to keep system working
-      const fb = await fetchAllTocItemsByVersion(supabase, parent.book_version_id);
+      const fb = await fetchAllTocItemsByVersion(
+        supabase,
+        parent.book_version_id
+      );
       if (fb.error) {
         // Return the fallback error (most actionable)
         return NextResponse.json({ error: fb.error }, { status: 500 });
@@ -314,20 +332,45 @@ export async function GET(req: NextRequest) {
     }
 
     const tree = buildTree(rows, root_id);
+
+    // ✅ NEW: include_content=1 -> trả kèm map content theo toc_item_id
+    let contentMap: TocContentMap | null = null;
+    if (includeContent && rows.length > 0) {
+      const ids = rows.map((r) => r.id);
+
+      const { data: contents, error: cErr } = await supabase
+        .from("toc_contents")
+        .select(
+          "toc_item_id,content_json,status,editor_note,updated_at,updated_by,author_resolved"
+        )
+        .in("toc_item_id", ids);
+
+      if (cErr) {
+        return NextResponse.json({ error: cErr.message }, { status: 500 });
+      }
+
+      contentMap = {};
+      for (const c of (contents ?? []) as any[]) {
+        contentMap[c.toc_item_id] = c;
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       root: tree,
+      contents: contentMap, // 👈 có thể null nếu include_content != 1
       meta: {
         mode: "tree",
         used_rpc: !rpcRes.error,
         note: rpcRes.error
           ? "RPC toc_subtree not available/failed; fallback to full-version fetch."
           : "Fetched subtree via RPC toc_subtree.",
+        include_content: includeContent,
       },
     });
   }
 
-  // MODE LIST (con trực tiếp)
+  // MODE LIST (con trực tiếp) - giữ nguyên hành vi cũ
   const ctx = await getParentContext(supabase, user!.id, parent_id);
   if (!ctx.ok) return ctx.res;
 
@@ -356,7 +399,10 @@ export async function POST(req: NextRequest) {
   const title = String(body.title || "").trim();
 
   if (!parent_id) {
-    return NextResponse.json({ error: "parent_id là bắt buộc" }, { status: 400 });
+    return NextResponse.json(
+      { error: "parent_id là bắt buộc" },
+      { status: 400 }
+    );
   }
   if (!title) {
     return NextResponse.json({ error: "title là bắt buộc" }, { status: 400 });
@@ -422,7 +468,8 @@ export async function PATCH(req: NextRequest) {
   const id = String(body.id || "");
   const title = String(body.title || "").trim();
 
-  if (!id) return NextResponse.json({ error: "id là bắt buộc" }, { status: 400 });
+  if (!id)
+    return NextResponse.json({ error: "id là bắt buộc" }, { status: 400 });
   if (!title)
     return NextResponse.json({ error: "title là bắt buộc" }, { status: 400 });
 
@@ -434,7 +481,10 @@ export async function PATCH(req: NextRequest) {
     .maybeSingle();
 
   if (sErr || !sub || !sub.parent_id) {
-    return NextResponse.json({ error: "Không tìm thấy mục để sửa" }, { status: 404 });
+    return NextResponse.json(
+      { error: "Không tìm thấy mục để sửa" },
+      { status: 404 }
+    );
   }
 
   const ctx = await getParentContext(supabase, user!.id, sub.parent_id);
@@ -490,7 +540,10 @@ export async function DELETE(req: NextRequest) {
     .maybeSingle();
 
   if (sErr || !sub || !sub.parent_id) {
-    return NextResponse.json({ error: "Không tìm thấy mục để xoá" }, { status: 404 });
+    return NextResponse.json(
+      { error: "Không tìm thấy mục để xoá" },
+      { status: 404 }
+    );
   }
 
   const ctx = await getParentContext(supabase, user!.id, sub.parent_id);
