@@ -101,15 +101,16 @@ export function TocTreeSidebar({
     const activeId = activeSectionId === "root" ? node.id : activeSectionId;
     const isActive = nodeKey === activeId;
 
-    const pad = 6 + node.depth * 14;
+    // (4) giảm indent: base 4px, mỗi depth +10px
+    const pad = 4 + node.depth * 10;
 
     return (
-      <div key={nodeKey} className="space-y-1">
-        <div className="flex items-start gap-1 min-w-0">
-          {/* Expand/collapse */}
+      <div key={nodeKey} className="space-y-0.5">
+        <div className="flex items-start gap-1 min-w-0 group">
+          {/* (3) Expand/collapse: nhỏ hơn + gọn hơn */}
           <button
             type="button"
-            className={`mt-2 shrink-0 w-6 h-6 rounded-md border text-xs ${
+            className={`mt-[5px] shrink-0 w-5 h-5 rounded border text-[10px] leading-none ${
               hasChildren ? "hover:bg-gray-50" : "opacity-40 cursor-default"
             }`}
             title={hasChildren ? "Mở/thu gọn" : "Không có mục con"}
@@ -120,24 +121,30 @@ export function TocTreeSidebar({
             {hasChildren ? (isExpanded(nodeKey) ? "▾" : "▸") : "•"}
           </button>
 
-          {/* Node button */}
+          {/* (1) Node button: giảm padding + font */}
           <button
             type="button"
-            className={`flex-1 min-w-0 text-left px-2 py-1.5 rounded-md border text-sm ${
+            className={`flex-1 min-w-0 text-left px-2 py-1 rounded-md text-[13px] ${
               isActive
-                ? "border-blue-500 bg-blue-50 text-blue-800"
-                : "border-transparent hover:bg-gray-50 text-gray-700"
+                ? "bg-blue-50 text-blue-800 ring-1 ring-blue-500"
+                : "text-gray-700 hover:bg-gray-50"
             }`}
             style={{ paddingLeft: pad }}
             onClick={() => onSelectSection(nodeKey)}
+            title={node.title}
           >
-            {label ? <div className="text-[11px] text-gray-400">{label}</div> : null}
-            <div className="font-medium truncate">{node.title}</div>
+            {/* label chuyển sang inline để đỡ cao */}
+            <div className="truncate">
+              {label ? (
+                <span className="text-[11px] text-gray-400 mr-1">{label}</span>
+              ) : null}
+              <span className="font-medium">{node.title}</span>
+            </div>
           </button>
 
-          {/* Actions */}
+          {/* (5) Actions: chỉ hiện khi hover (hoặc focus-within) */}
           {canManageSubsections && (
-            <div className="flex gap-1 shrink-0 pt-1">
+            <div className="flex gap-1 shrink-0 pt-0.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition">
               <button
                 type="button"
                 className="px-1.5 py-1 text-[11px] border rounded-md bg-gray-50 hover:bg-gray-100 text-gray-700"
@@ -187,7 +194,7 @@ export function TocTreeSidebar({
         {/* Rename inline */}
         {renamingId === nodeKey && (
           <form
-            className="flex items-center gap-2 text-xs ml-7"
+            className="flex items-center gap-2 text-xs ml-6"
             onSubmit={(e) => submitRename(e, nodeKey)}
           >
             <input
@@ -219,7 +226,7 @@ export function TocTreeSidebar({
         {/* Add child inline */}
         {newChildParentId === nodeKey && (
           <form
-            className="flex items-center gap-2 text-xs ml-7"
+            className="flex items-center gap-2 text-xs ml-6"
             onSubmit={(e) => submitNewChild(e, nodeKey)}
           >
             <input
@@ -251,10 +258,8 @@ export function TocTreeSidebar({
 
         {/* Children */}
         {hasChildren && isExpanded(nodeKey) && (
-          <div className="space-y-1">
-            {node.children.map((c) =>
-              renderNode(c, [...numberPath, c.order_index])
-            )}
+          <div className="space-y-0.5">
+            {node.children.map((c) => renderNode(c, [...numberPath, c.order_index]))}
           </div>
         )}
       </div>
@@ -293,10 +298,10 @@ export function TocTreeSidebar({
       {/* “Root content” selector: vẫn chọn node root để edit phần chương */}
       <button
         type="button"
-        className={`w-full text-left px-2 py-2 rounded-md border text-sm ${
+        className={`w-full text-left px-2 py-2 rounded-md text-sm ${
           activeSectionId === "root"
-            ? "border-blue-500 bg-blue-50 text-blue-800"
-            : "border-transparent hover:bg-gray-50 text-gray-700"
+            ? "bg-blue-50 text-blue-800 ring-1 ring-blue-500"
+            : "hover:bg-gray-50 text-gray-700"
         }`}
         onClick={() => onSelectSection("root")}
       >
@@ -305,7 +310,7 @@ export function TocTreeSidebar({
       </button>
 
       {/* Tree */}
-     <div className="space-y-1">{renderNode(treeReady, [])}</div>
+      <div className="space-y-0.5">{renderNode(treeReady, [])}</div>
     </aside>
   );
 }
