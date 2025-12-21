@@ -180,6 +180,97 @@ function buildTree(rows: TocRow[], rootId: string): TocTreeNode | null {
   return root;
 }
 
+/** Fetch ALL toc_items for a version (fallback; avoids Supabase 1000-row cap) */
+async function fetchAllTocItemsByVersion(
+  supabase: any,
+  book_version_id: string
+): Promise<{ rows: TocRow[]; error: string | null }> {
+  const PAGE = 1000;
+  let from = 0;
+  const all: TocRow[] = [];
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("toc_items")
+      .select("id,parent_id,title,slug,order_index")
+      .eq("book_version_id", book_version_id)
+      .order("order_index", { ascending: true })
+      .order("id", { ascending: true }) // stable ordering across pages
+      .range(from, from + PAGE - 1);
+
+    if (error) return { rows: [], error: error.message };
+
+    const batch = (data ?? []) as TocRow[];
+    all.push(...batch);
+
+    if (batch.length < PAGE) break;
+    from += PAGE;
+  }
+
+  return { rows: all, error: null };
+}
+
+/** Fetch ALL direct children under a parent (paginated for safety) */
+async function fetchAllChildren(
+  supabase: any,
+  book_version_id: string,
+  parent_id: string
+): Promise<{ rows: TocRow[]; error: string | null }> {
+  const PAGE = 1000;
+  let from = 0;
+  const all: TocRow[] = [];
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("toc_items")
+      .select("id,parent_id,title,slug,order_index")
+      .eq("book_version_id", book_version_id)
+      .eq("parent_id", parent_id)
+      .order("order_index", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, from + PAGE - 1);
+
+    if (error) return { rows: [], error: error.message };
+
+    const batch = (data ?? []) as TocRow[];
+    all.push(...batch);
+
+    if (batch.length < PAGE) break;
+    from += PAGE;
+  }
+
+  return { rows: all, error: null };
+}
+
+/**
+ * Optimized: Fetch subtree rows by root_id using RPC (recursive CTE in DB)
+ * - Fast: only returns the branch
+ * - Avoids 1000 row cap because RPC returns full set (still subject to PostgREST response size,
+ *   but practically better than loading entire version).
+ */
+async function fetchSubtreeByRoot(
+  supabase: any,
+  root_id: string
+): Promise<{ rows: TocRow[]; error: string | null; usedRpc: boolean }> {
+  // Try RPC first
+  const { data, error } = await supabase.rpc("toc_subtree", {
+    p_root_id: root_id,
+  });
+
+  if (!error && data) {
+    // data expected: [{id, parent_id, title, slug, order_index}, ...]
+    const rows = (Array.isArray(data) ? data : []) as TocRow[];
+    return { rows, error: null, usedRpc: true };
+  }
+
+  // If RPC missing or failed, return error to allow fallback decision upstream
+  return {
+    rows: [],
+    error: error?.message || "RPC toc_subtree failed",
+    usedRpc: false,
+  };
+}
+
 /** GET:
  * - ?parent_id=... -> list con trực tiếp (compat)
  * - ?root_id=...   -> trả tree nhiều cấp (dùng cho sidebar tree)
@@ -199,26 +290,41 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // MODE TREE
+  // MODE TREE (optimized)
   if (root_id) {
     const ctx = await getParentContext(supabase, user!.id, root_id);
     if (!ctx.ok) return ctx.res;
 
     const { parent } = ctx;
 
-    // lấy tất cả toc_items trong cùng book_version_id để build tree
-    const { data: rows, error: listErr } = await supabase
-      .from("toc_items")
-      .select("id,parent_id,title,slug,order_index")
-      .eq("book_version_id", parent.book_version_id)
-      .order("order_index", { ascending: true });
+    // 1) Try subtree RPC: only fetch branch
+    const rpcRes = await fetchSubtreeByRoot(supabase, root_id);
 
-    if (listErr) {
-      return NextResponse.json({ error: listErr.message }, { status: 500 });
+    let rows: TocRow[] = [];
+    if (!rpcRes.error) {
+      rows = rpcRes.rows;
+    } else {
+      // 2) Fallback: fetch all within version (paginated) to keep system working
+      const fb = await fetchAllTocItemsByVersion(supabase, parent.book_version_id);
+      if (fb.error) {
+        // Return the fallback error (most actionable)
+        return NextResponse.json({ error: fb.error }, { status: 500 });
+      }
+      rows = fb.rows;
     }
 
-    const tree = buildTree((rows ?? []) as TocRow[], root_id);
-    return NextResponse.json({ ok: true, root: tree });
+    const tree = buildTree(rows, root_id);
+    return NextResponse.json({
+      ok: true,
+      root: tree,
+      meta: {
+        mode: "tree",
+        used_rpc: !rpcRes.error,
+        note: rpcRes.error
+          ? "RPC toc_subtree not available/failed; fallback to full-version fetch."
+          : "Fetched subtree via RPC toc_subtree.",
+      },
+    });
   }
 
   // MODE LIST (con trực tiếp)
@@ -227,18 +333,17 @@ export async function GET(req: NextRequest) {
 
   const { parent } = ctx;
 
-  const { data, error: listErr } = await supabase
-    .from("toc_items")
-    .select("id,parent_id,title,slug,order_index")
-    .eq("book_version_id", parent.book_version_id)
-    .eq("parent_id", parent.id)
-    .order("order_index", { ascending: true });
+  const { rows, error: listErr } = await fetchAllChildren(
+    supabase,
+    parent.book_version_id,
+    parent.id
+  );
 
   if (listErr) {
-    return NextResponse.json({ error: listErr.message }, { status: 500 });
+    return NextResponse.json({ error: listErr }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true, items: data ?? [] });
+  return NextResponse.json({ ok: true, items: rows });
 }
 
 /** POST: tạo mục con mới dưới parent_id bất kỳ */
