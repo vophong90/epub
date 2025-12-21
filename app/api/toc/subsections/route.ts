@@ -17,14 +17,18 @@ function slugify(input: string) {
     .slice(0, 80);
 }
 
+/**
+ * IMPORTANT:
+ * DB unique constraint: toc_items_version_slug_ux => UNIQUE(book_version_id, slug)
+ * => slug phải unique trên TOÀN version (không theo parent).
+ */
 async function ensureUniqueSlug(opts: {
   supabase: any;
   book_version_id: string;
-  parent_id: string | null;
   baseSlug: string;
   excludeId?: string;
 }) {
-  const { supabase, book_version_id, parent_id, baseSlug, excludeId } = opts;
+  const { supabase, book_version_id, baseSlug, excludeId } = opts;
 
   const base = (baseSlug || `node-${Date.now()}`).slice(0, 80);
   let candidate = base;
@@ -35,7 +39,6 @@ async function ensureUniqueSlug(opts: {
       .from("toc_items")
       .select("id")
       .eq("book_version_id", book_version_id)
-      .eq("parent_id", parent_id)
       .eq("slug", candidate)
       .limit(1);
 
@@ -333,7 +336,7 @@ export async function GET(req: NextRequest) {
 
     const tree = buildTree(rows, root_id);
 
-    // ✅ NEW: include_content=1 -> trả kèm map content theo toc_item_id
+    // include_content=1 -> trả kèm map content theo toc_item_id
     let contentMap: TocContentMap | null = null;
     if (includeContent && rows.length > 0) {
       const ids = rows.map((r) => r.id);
@@ -358,7 +361,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       root: tree,
-      contents: contentMap, // 👈 có thể null nếu include_content != 1
+      contents: contentMap, // can be null if include_content != 1
       meta: {
         mode: "tree",
         used_rpc: !rpcRes.error,
@@ -370,7 +373,7 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  // MODE LIST (con trực tiếp) - giữ nguyên hành vi cũ
+  // MODE LIST (con trực tiếp)
   const ctx = await getParentContext(supabase, user!.id, parent_id);
   if (!ctx.ok) return ctx.res;
 
@@ -389,7 +392,10 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ ok: true, items: rows });
 }
 
-/** POST: tạo mục con mới dưới parent_id bất kỳ */
+/** POST: tạo mục con mới dưới parent_id bất kỳ
+ * - slug unique theo (book_version_id, slug)
+ * - retry 23505 để chống race
+ */
 export async function POST(req: NextRequest) {
   const { supabase, user, error } = await requireUser();
   if (error) return error;
@@ -432,34 +438,62 @@ export async function POST(req: NextRequest) {
 
   const nextOrder = (maxRow?.order_index ?? 0) + 1;
 
-  const baseSlug = slugify(title) || `sub-${Date.now()}`;
-  const slug = await ensureUniqueSlug({
-    supabase,
-    book_version_id: parent.book_version_id,
-    parent_id: parent.id,
-    baseSlug,
-  });
+  const baseSlug0 = slugify(title) || `sub-${Date.now()}`;
 
-  const { data, error: insErr } = await supabase
-    .from("toc_items")
-    .insert({
+  let inserted: any = null;
+  let lastErr: any = null;
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const candidateBase =
+      attempt === 0 ? baseSlug0 : `${baseSlug0}-${attempt}`;
+
+    const slug = await ensureUniqueSlug({
+      supabase,
       book_version_id: parent.book_version_id,
-      parent_id: parent.id,
-      title,
-      slug,
-      order_index: nextOrder,
-    })
-    .select("id,parent_id,title,slug,order_index")
-    .maybeSingle();
+      baseSlug: candidateBase,
+    });
 
-  if (insErr) {
-    return NextResponse.json({ error: insErr.message }, { status: 400 });
+    const { data, error: insErr } = await supabase
+      .from("toc_items")
+      .insert({
+        book_version_id: parent.book_version_id,
+        parent_id: parent.id,
+        title,
+        slug,
+        order_index: nextOrder,
+      })
+      .select("id,parent_id,title,slug,order_index")
+      .maybeSingle();
+
+    if (!insErr) {
+      inserted = data;
+      lastErr = null;
+      break;
+    }
+
+    lastErr = insErr;
+
+    const isDup =
+      insErr.code === "23505" ||
+      String(insErr.message || "").toLowerCase().includes("duplicate key") ||
+      String(insErr.message || "")
+        .toLowerCase()
+        .includes("toc_items_version_slug_ux");
+
+    if (!isDup) break;
   }
 
-  return NextResponse.json({ ok: true, item: data });
+  if (lastErr) {
+    return NextResponse.json({ error: lastErr.message }, { status: 400 });
+  }
+
+  return NextResponse.json({ ok: true, item: inserted });
 }
 
-/** PATCH: đổi tên node (và tự fix slug trùng) */
+/** PATCH: đổi tên node (và tự fix slug trùng)
+ * - slug unique theo (book_version_id, slug)
+ * - retry 23505 để chống race
+ */
 export async function PATCH(req: NextRequest) {
   const { supabase, user, error } = await requireUser();
   if (error) return error;
@@ -498,33 +532,60 @@ export async function PATCH(req: NextRequest) {
     );
   }
 
-  // Mặc định: đổi title thì đổi slug theo title, nhưng phải unique để tránh duplicate
-  const baseSlug = slugify(title) || sub.slug || `sub-${Date.now()}`;
-  const nextSlug = await ensureUniqueSlug({
-    supabase,
-    book_version_id: sub.book_version_id,
-    parent_id: sub.parent_id,
-    baseSlug,
-    excludeId: id,
-  });
+  const baseSlug0 = slugify(title) || sub.slug || `sub-${Date.now()}`;
 
-  const patch: any = { title, slug: nextSlug };
+  let updated: any = null;
+  let lastErr: any = null;
 
-  const { data, error: upErr } = await supabase
-    .from("toc_items")
-    .update(patch)
-    .eq("id", id)
-    .select("id,parent_id,title,slug,order_index")
-    .maybeSingle();
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const candidateBase =
+      attempt === 0 ? baseSlug0 : `${baseSlug0}-${attempt}`;
 
-  if (upErr) {
-    return NextResponse.json({ error: upErr.message }, { status: 400 });
+    const nextSlug = await ensureUniqueSlug({
+      supabase,
+      book_version_id: sub.book_version_id,
+      baseSlug: candidateBase,
+      excludeId: id,
+    });
+
+    const { data, error: upErr } = await supabase
+      .from("toc_items")
+      .update({ title, slug: nextSlug })
+      .eq("id", id)
+      .select("id,parent_id,title,slug,order_index")
+      .maybeSingle();
+
+    if (!upErr) {
+      updated = data;
+      lastErr = null;
+      break;
+    }
+
+    lastErr = upErr;
+
+    const isDup =
+      upErr.code === "23505" ||
+      String(upErr.message || "").toLowerCase().includes("duplicate key") ||
+      String(upErr.message || "")
+        .toLowerCase()
+        .includes("toc_items_version_slug_ux");
+
+    if (!isDup) break;
   }
 
-  return NextResponse.json({ ok: true, item: data });
+  if (lastErr) {
+    return NextResponse.json({ error: lastErr.message }, { status: 400 });
+  }
+
+  return NextResponse.json({ ok: true, item: updated });
 }
 
-/** DELETE: xoá node */
+/** DELETE: xoá node
+ * - Sau khi xoá: gọi RPC toc_reindex_version để dồn order_index (không hở số)
+ *
+ * YÊU CẦU DB:
+ * - RPC public.toc_reindex_version(p_version_id uuid) tồn tại
+ */
 export async function DELETE(req: NextRequest) {
   const { supabase, user, error } = await requireUser();
   if (error) return error;
@@ -535,7 +596,7 @@ export async function DELETE(req: NextRequest) {
 
   const { data: sub, error: sErr } = await supabase
     .from("toc_items")
-    .select("id,parent_id,book_version_id,title")
+    .select("id,parent_id,book_version_id,title,order_index")
     .eq("id", id)
     .maybeSingle();
 
@@ -561,6 +622,19 @@ export async function DELETE(req: NextRequest) {
 
   if (delErr) {
     return NextResponse.json({ error: delErr.message }, { status: 400 });
+  }
+
+  // ✅ Reindex toàn version để không hở số (partition theo parent_id ở DB function)
+  const { error: rxErr } = await supabase.rpc("toc_reindex_version", {
+    p_version_id: sub.book_version_id,
+  });
+
+  if (rxErr) {
+    // Xoá đã thành công, nhưng reindex lỗi -> báo rõ
+    return NextResponse.json(
+      { error: `Xoá thành công nhưng reindex lỗi: ${rxErr.message}` },
+      { status: 500 }
+    );
   }
 
   return NextResponse.json({ ok: true });
