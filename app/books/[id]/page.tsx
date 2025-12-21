@@ -776,80 +776,62 @@ export default function BookDetailPage() {
       {/* Khi đã có version */}
       {version && (
         <div className="space-y-4">
-          {/* Template selector (mới) */}
+          {/* Template selector */}
           <div className="rounded-lg border bg-white p-4 shadow-sm">
-            <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-              <div className="space-y-1">
-                <h2 className="text-lg font-semibold">Template cho phiên bản</h2>
-                <p className="text-xs text-gray-500">
-                  Chọn template để dùng khi Preview PDF / Xuất bản. Bạn có thể đổi
-                  lại bất kỳ lúc nào (miễn version còn cho phép chỉnh).
-                </p>
-              </div>
-
-              <div className="flex w-full flex-col gap-2 md:w-[520px] md:flex-row md:items-center md:justify-end">
-                <div className="w-full">
-                  <select
-                    className={SELECT}
-                    value={selectedTemplateId}
-                    onChange={(e) => setSelectedTemplateId(e.target.value)}
-                    disabled={templatesLoading || savingTemplate}
-                  >
-                    <option value="">(Chưa chọn / None)</option>
-                    {templates.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name}
-                        {t.page_size ? ` · ${t.page_size}` : ""}
-                      </option>
-                    ))}
-                  </select>
-
-                  <div className="mt-1 text-[11px] text-gray-500">
-                    {templatesLoading ? (
-                      <span>Đang tải templates…</span>
-                    ) : templatesError ? (
-                      <span className="text-red-600">{templatesError}</span>
-                    ) : selectedTemplateId ? (
-                      <span>
-                        Đã chọn:{" "}
-                        <span className="font-medium text-gray-700">
-                          {templates.find((x) => x.id === selectedTemplateId)?.name ||
-                            "—"}
-                        </span>
-                        {templates.find((x) => x.id === selectedTemplateId)?.description ? (
-                          <span className="ml-1">
-                            ·{" "}
-                            {
-                              templates.find((x) => x.id === selectedTemplateId)
-                                ?.description
-                            }
-                          </span>
-                        ) : null}
-                      </span>
-                    ) : (
-                      <span>Chưa chọn template.</span>
-                    )}
-                  </div>
+            <div className="flex flex-col gap-3 md:flex-row md:items-center">
+              {/* Left: title */}
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-gray-900">
+                  Template cho phiên bản
                 </div>
-
+                <div className="text-xs text-gray-500 truncate">
+                  {templatesLoading
+                    ? "Đang tải templates…"
+                    : templatesError
+                    ? templatesError
+                    : selectedTemplateId
+                    ? `Đã chọn: ${
+                      templates.find((x) => x.id === selectedTemplateId)?.name || "—"
+                    }`
+                  : "Chưa chọn template"}
+                </div>
+              </div>
+              
+              {/* Middle: select */}
+              <div className="w-full md:w-[520px]">
+                <select
+                  className={SELECT}
+                  value={selectedTemplateId}
+                  onChange={(e) => setSelectedTemplateId(e.target.value)}
+                  disabled={templatesLoading || savingTemplate}
+                  >
+                  <option value="">(Chưa chọn / None)</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                      {t.page_size ? ` · ${t.page_size}` : ""}
+                    </option>
+                  ))}
+                </select>
+                {templatesError ? (
+          <div className="mt-1 text-[11px] text-red-600">{templatesError}</div>
+        ) : null}
+              </div>
+              
+              {/* Right: save */}
+              <div className="shrink-0">
                 <button
                   className={BTN_PRIMARY}
                   onClick={handleSaveTemplateForVersion}
                   disabled={savingTemplate || templatesLoading}
-                  title="Lưu template cho phiên bản hiện tại"
-                >
+                  title="Lưu template"
+                  >
                   {savingTemplate ? "Đang lưu…" : "Lưu template"}
                 </button>
               </div>
             </div>
-
-            <div className="mt-3 text-xs text-gray-500">
-              Gợi ý: nếu bạn muốn bắt buộc chọn template ngay lúc tạo version đầu
-              tiên, mình có thể đổi luồng tạo version để mở modal chọn template
-              trước khi POST.
-            </div>
           </div>
-
+          
           {/* TOC */}
           <div className="rounded-lg border bg-white p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
