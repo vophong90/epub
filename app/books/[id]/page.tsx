@@ -14,6 +14,11 @@ const BTN_PRIMARY =
 const BTN_DANGER =
   "inline-flex items-center justify-center rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50";
 
+// Compact menu helpers
+const ICON_BTN =
+  "inline-flex h-7 w-7 items-center justify-center rounded-md border text-sm hover:bg-gray-50 disabled:opacity-50";
+const MENU_ITEM = "w-full text-left px-3 py-2 text-sm hover:bg-gray-50";
+
 /** DB types (tối giản cho UI này) */
 type Book = {
   id: string;
@@ -145,6 +150,33 @@ export default function BookDetailPage() {
   const [userSearchResults, setUserSearchResults] = useState<MemberProfile[]>([]);
   const [userSearchLoading, setUserSearchLoading] = useState(false);
   const [userSearchError, setUserSearchError] = useState<string | null>(null);
+
+  /** MENU state cho card chương (⋯) */
+  const [openMenuFor, setOpenMenuFor] = useState<string | null>(null);
+
+  function toggleMenu(id: string) {
+    setOpenMenuFor((cur) => (cur === id ? null : id));
+  }
+
+  function closeMenu() {
+    setOpenMenuFor(null);
+  }
+
+  // Đóng menu khi click ra ngoài / nhấn ESC
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") closeMenu();
+    }
+    function onClick() {
+      closeMenu();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("click", onClick);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("click", onClick);
+    };
+  }, []);
 
   /** Set id set để lọc kết quả search không trùng với members */
   const memberIdSet = useMemo(
@@ -448,10 +480,9 @@ export default function BookDetailPage() {
         }
 
         for (const uid of toRemove) {
-          await fetch(
-            `/api/toc/assignments?toc_item_id=${currentItemId}&user_id=${uid}`,
-            { method: "DELETE" }
-          );
+          await fetch(`/api/toc/assignments?toc_item_id=${currentItemId}&user_id=${uid}`, {
+            method: "DELETE",
+          });
         }
       }
 
@@ -507,10 +538,7 @@ export default function BookDetailPage() {
     const targetIndex = direction === "up" ? index - 1 : index + 1;
     if (targetIndex < 0 || targetIndex >= siblings.length) return;
 
-    [siblings[index], siblings[targetIndex]] = [
-      siblings[targetIndex],
-      siblings[index],
-    ];
+    [siblings[index], siblings[targetIndex]] = [siblings[targetIndex], siblings[index]];
 
     const orderedIds = siblings.map((s) => s.id);
 
@@ -583,9 +611,7 @@ export default function BookDetailPage() {
       <div className="flex flex-col items-start justify-between gap-2 md:flex-row md:items-center">
         <div>
           <h1 className="text-2xl font-bold">{book.title}</h1>
-          <p className="text-sm text-gray-500">
-            Đơn vị: {book.unit_name || "—"}
-          </p>
+          <p className="text-sm text-gray-500">Đơn vị: {book.unit_name || "—"}</p>
           {version && (
             <p className="mt-1 text-sm text-gray-500">
               Phiên bản {version.version_no} –{" "}
@@ -609,8 +635,8 @@ export default function BookDetailPage() {
         <div className="space-y-4">
           <div className="space-y-3 rounded-lg border border-red-200 bg-red-50 p-4">
             <p className="text-sm text-red-800">
-              Sách này chưa có phiên bản nào. Bạn cần tạo phiên bản đầu tiên
-              trước khi xây dựng mục lục.
+              Sách này chưa có phiên bản nào. Bạn cần tạo phiên bản đầu tiên trước
+              khi xây dựng mục lục.
             </p>
             <button
               className={BTN_PRIMARY}
@@ -629,18 +655,11 @@ export default function BookDetailPage() {
           <div className="rounded-lg border bg-white p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-semibold">
-                  Mục lục (TOC) của phiên bản này
-                </h2>
-                <p className="text-xs text-gray-500">
-                  Vai trò của bạn: {tocData?.role || "—"}
-                </p>
+                <h2 className="text-lg font-semibold">Mục lục (TOC) của phiên bản này</h2>
+                <p className="text-xs text-gray-500">Vai trò của bạn: {tocData?.role || "—"}</p>
               </div>
               {isEditor && (
-                <button
-                  className={BTN_PRIMARY}
-                  onClick={() => openCreateModal(null)}
-                >
+                <button className={BTN_PRIMARY} onClick={() => openCreateModal(null)}>
                   + Tạo chương mới
                 </button>
               )}
@@ -653,66 +672,111 @@ export default function BookDetailPage() {
             )}
 
             <div className="space-y-2">
-              {rootItems.map((it, idx) => (
-                <div
-                  key={it.id}
-                  className="rounded-md border border-gray-200 bg-white px-3 py-2 transition hover:bg-gray-50"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1">
-                      <button
-                        type="button"
-                        className="text-left text-sm font-semibold text-gray-900 hover:underline"
-                        onClick={() => openEditModal(it)}
-                      >
-                        {idx + 1}. {it.title}
-                      </button>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                        <span>ID: {it.id.slice(0, 8)}…</span>
-                        <span>· Thứ tự: {it.order_index}</span>
-                        {childrenMap.get(it.id)?.length ? (
-                          <span>
-                            · {childrenMap.get(it.id)?.length} mục con
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
+              {rootItems.map((it, idx) => {
+                const childCount = childrenMap.get(it.id)?.length || 0;
+                const isMenuOpen = openMenuFor === it.id;
 
-                    {isEditor && (
-                      <div className="flex flex-col items-end gap-1 text-xs">
-                        <div className="flex gap-1">
-                          <button
-                            className={BTN}
-                            onClick={() => handleMoveItem(it.id, "up")}
-                            title="Đưa lên trên"
-                          >
-                            ↑
-                          </button>
-                          <button
-                            className={BTN}
-                            onClick={() => handleMoveItem(it.id, "down")}
-                            title="Đưa xuống dưới"
-                          >
-                            ↓
-                          </button>
-                        </div>
+                return (
+                  <div
+                    key={it.id}
+                    className="relative rounded-md border border-gray-200 bg-white px-2 py-2 hover:bg-gray-50"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
                         <button
-                          className={BTN}
-                          onClick={() => openCreateModal(it.id)}
+                          type="button"
+                          className="block w-full truncate text-left text-sm font-semibold text-gray-900 hover:underline"
+                          onClick={() => openEditModal(it)}
                         >
-                          + Mục con
+                          {idx + 1}. {it.title}
                         </button>
-                        <Link
-                          href={`/books/${book.id}/toc/${it.id}`}
-                          className="mt-1 text-xs text-blue-600 hover:underline"
-                        >
-                          Mở trang biên soạn →
-                        </Link>
+
+                        <div className="mt-1 text-xs text-gray-500">
+                          Thứ tự: {it.order_index}
+                          {childCount > 0 ? ` · ${childCount} mục con` : ""}
+                        </div>
                       </div>
-                    )}
+
+                      {isEditor && (
+                        <div className="relative flex-shrink-0">
+                          <button
+                            type="button"
+                            className={ICON_BTN}
+                            title="Tác vụ"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleMenu(it.id);
+                            }}
+                          >
+                            ⋯
+                          </button>
+
+                          {isMenuOpen && (
+                            <div
+                              className="absolute right-0 mt-1 w-52 overflow-hidden rounded-md border bg-white shadow-lg z-20"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <button
+                                type="button"
+                                className={MENU_ITEM}
+                                onClick={() => {
+                                  closeMenu();
+                                  openEditModal(it);
+                                }}
+                              >
+                                Sửa tiêu đề
+                              </button>
+
+                              <button
+                                type="button"
+                                className={MENU_ITEM}
+                                onClick={() => {
+                                  closeMenu();
+                                  openCreateModal(it.id);
+                                }}
+                              >
+                                Thêm mục con
+                              </button>
+
+                              <Link
+                                href={`/books/${book.id}/toc/${it.id}`}
+                                className={MENU_ITEM}
+                                onClick={() => closeMenu()}
+                              >
+                                Mở trang biên soạn →
+                              </Link>
+
+                              <div className="my-1 h-px bg-gray-100" />
+
+                              <button
+                                type="button"
+                                className={MENU_ITEM}
+                                onClick={() => {
+                                  closeMenu();
+                                  handleMoveItem(it.id, "up");
+                                }}
+                              >
+                                Đưa lên
+                              </button>
+
+                              <button
+                                type="button"
+                                className={MENU_ITEM}
+                                onClick={() => {
+                                  closeMenu();
+                                  handleMoveItem(it.id, "down");
+                                }}
+                              >
+                                Đưa xuống
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -744,17 +808,15 @@ export default function BookDetailPage() {
                 <p className="text-xs text-gray-500">
                   Mục cha:{" "}
                   <span className="font-medium">
-                    {(tocData?.items || []).find((i) => i.id === modalParentId)
-                      ?.title || "(không tìm thấy)"}
+                    {(tocData?.items || []).find((i) => i.id === modalParentId)?.title ||
+                      "(không tìm thấy)"}
                   </span>
                 </p>
               )}
 
               {/* Tiêu đề */}
               <div>
-                <label className="block text-sm font-medium text-gray-700">
-                  Tiêu đề
-                </label>
+                <label className="block text-sm font-medium text-gray-700">Tiêu đề</label>
                 <input
                   type="text"
                   className="mt-1 w-full rounded border px-3 py-2 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
@@ -771,9 +833,7 @@ export default function BookDetailPage() {
                     Phân công tác giả cho mục này
                   </label>
                   {modalLoadingAssignments && (
-                    <span className="text-xs text-gray-500">
-                      Đang tải phân công…
-                    </span>
+                    <span className="text-xs text-gray-500">Đang tải phân công…</span>
                   )}
                 </div>
 
@@ -802,14 +862,11 @@ export default function BookDetailPage() {
                   </button>
                 </div>
                 {userSearchError && (
-                  <p className="mb-1 text-xs text-red-600">
-                    {userSearchError}
-                  </p>
+                  <p className="mb-1 text-xs text-red-600">{userSearchError}</p>
                 )}
 
                 {/* Kết quả tìm kiếm (user chưa là member của sách) */}
-                {userSearchResults.filter((u) => !memberIdSet.has(u.id))
-                  .length > 0 && (
+                {userSearchResults.filter((u) => !memberIdSet.has(u.id)).length > 0 && (
                   <div className="mb-2 rounded border border-dashed border-gray-300 p-2 text-xs">
                     <p className="mb-1 font-semibold text-gray-700">
                       Kết quả tìm kiếm (user chưa là thành viên sách):
@@ -830,23 +887,14 @@ export default function BookDetailPage() {
                                 onChange={(e) => {
                                   const checked = e.target.checked;
                                   setModalSelectedAuthors((prev) => {
-                                    if (checked) {
-                                      return prev.includes(u.id)
-                                        ? prev
-                                        : [...prev, u.id];
-                                    } else {
-                                      return prev.filter(
-                                        (id) => id !== u.id
-                                      );
-                                    }
+                                    if (checked) return prev.includes(u.id) ? prev : [...prev, u.id];
+                                    return prev.filter((id) => id !== u.id);
                                   });
                                 }}
                               />
                               <span>
                                 {u.name || "(Không tên)"}{" "}
-                                <span className="text-xs text-gray-500">
-                                  ({u.email})
-                                </span>
+                                <span className="text-xs text-gray-500">({u.email})</span>
                               </span>
                             </div>
                             <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold uppercase text-indigo-700">
@@ -865,8 +913,8 @@ export default function BookDetailPage() {
                 {/* Danh sách member (từ book_permissions) */}
                 {members.length === 0 ? (
                   <p className="text-xs text-gray-500">
-                    Hiện chưa có thành viên nào ở cấp sách. Bạn có thể tìm user
-                    theo email ở trên và tick chọn để phân công.
+                    Hiện chưa có thành viên nào ở cấp sách. Bạn có thể tìm user theo email ở trên
+                    và tick chọn để phân công.
                   </p>
                 ) : (
                   <div className="max-h-48 space-y-1 overflow-auto rounded border p-2">
@@ -883,23 +931,14 @@ export default function BookDetailPage() {
                             onChange={(e) => {
                               const checked = e.target.checked;
                               setModalSelectedAuthors((prev) => {
-                                if (checked) {
-                                  return prev.includes(m.user_id)
-                                    ? prev
-                                    : [...prev, m.user_id];
-                                } else {
-                                  return prev.filter(
-                                    (id) => id !== m.user_id
-                                  );
-                                }
+                                if (checked) return prev.includes(m.user_id) ? prev : [...prev, m.user_id];
+                                return prev.filter((id) => id !== m.user_id);
                               });
                             }}
                           />
                           <span>
                             {m.profile?.name || "(Không tên)"}{" "}
-                            <span className="text-xs text-gray-500">
-                              ({m.profile?.email})
-                            </span>
+                            <span className="text-xs text-gray-500">({m.profile?.email})</span>
                           </span>
                         </div>
                         <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
@@ -910,9 +949,9 @@ export default function BookDetailPage() {
                   </div>
                 )}
                 <p className="mt-1 text-xs text-gray-500">
-                  Role hiển thị bên phải là vai trò ở cấp sách (viewer/author/editor).
-                  Phân công ở đây sẽ tạo quyền <strong>author</strong> cho mục
-                  lục này (và tự thêm vào sách nếu chưa có).
+                  Role hiển thị bên phải là vai trò ở cấp sách (viewer/author/editor). Phân công ở
+                  đây sẽ tạo quyền <strong>author</strong> cho mục lục này (và tự thêm vào sách nếu
+                  chưa có).
                 </p>
               </div>
 
@@ -933,11 +972,7 @@ export default function BookDetailPage() {
             {/* Footer buttons */}
             <div className="mt-5 flex items-center justify-between">
               <div className="flex gap-2">
-                <button
-                  className={BTN}
-                  onClick={closeModal}
-                  disabled={modalSaving || modalDeleting}
-                >
+                <button className={BTN} onClick={closeModal} disabled={modalSaving || modalDeleting}>
                   Hủy
                 </button>
                 <button
