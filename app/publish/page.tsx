@@ -153,7 +153,7 @@ export default function PublishPage() {
   }
 
   /** Xuất Word (DOCX) dùng API render-docx */
-  async function handleExportDocx() {
+  async function handleExportDoc() {
   setError("");
   setMessage("");
 
@@ -162,15 +162,15 @@ export default function PublishPage() {
     return;
   }
 
-  setExportingDocx(true);
+  setExportingDoc(true);
   try {
-    const res = await fetch("/api/books/version/render-doc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        version_id: selectedVersionId,
-        template_id: selectedTemplateId,
-      }),
+    const qs = new URLSearchParams({
+      version_id: selectedVersionId,
+      template_id: selectedTemplateId,
+    }).toString();
+
+    const res = await fetch(`/api/books/version/render-doc?${qs}`, {
+      method: "GET",
     });
 
     if (!res.ok) {
@@ -183,8 +183,8 @@ export default function PublishPage() {
     const blob = await res.blob();
     const disposition = res.headers.get("content-disposition") || "";
     let filename = "book.doc";
-    const match = disposition.match(/filename="(.+?)"/i);
-    if (match && match[1]) filename = match[1];
+    const m = disposition.match(/filename="(.+?)"/i);
+    if (m && m[1]) filename = m[1];
 
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -200,7 +200,7 @@ export default function PublishPage() {
     console.error(e);
     setError("Lỗi kết nối khi gọi API render-doc.");
   } finally {
-    setExportingDocx(false);
+    setExportingDoc(false);
   }
 }
 
