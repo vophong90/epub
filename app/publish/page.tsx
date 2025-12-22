@@ -205,51 +205,88 @@ export default function PublishPage() {
 }
 
   /** Publish: upload file PDF final lên publish API */
-  async function handlePublish() {
-    setError("");
-    setMessage("");
+  const PUBLISHED_BUCKET = "published_pdfs";
 
-    if (!selectedVersionId) {
-      setError("Hãy chọn phiên bản sách cần publish.");
-      return;
-    }
+function getSelectedVersionMeta() {
+  const v = versions.find((x) => x.id === selectedVersionId);
+  return v ? { id: v.id, version_no: v.version_no } : null;
+}
 
-    if (!pdfFile) {
-      setError("Hãy chọn file PDF hoàn chỉnh để publish.");
-      return;
-    }
+async function uploadPdfToPublishedBucket(file: File) {
+  if (!selectedBookId) throw new Error("Thiếu selectedBookId.");
+  const meta = getSelectedVersionMeta();
+  if (!meta) throw new Error("Không tìm thấy version đang chọn.");
 
-    setPublishing(true);
-    try {
-      const fd = new FormData();
-      fd.append("version_id", selectedVersionId);
-      fd.append("pdf", pdfFile);
+  const safeName = `v${meta.version_no}-${meta.id}.pdf`;
+  const pdf_path = `book/${selectedBookId}/published/${safeName}`;
 
-      const res = await fetch("/api/books/version/publish", {
-        method: "POST",
-        body: fd,
-      });
+  const { error: upErr } = await supabase.storage
+    .from(PUBLISHED_BUCKET)
+    .upload(pdf_path, file, {
+      contentType: "application/pdf",
+      upsert: true,
+    });
 
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok || (j as any).error) {
-        console.error("publish error:", (j as any).error || res.status);
-        setError(
-          (j as any).error ||
-            "Publish thất bại. Vui lòng kiểm tra file PDF và thử lại."
-        );
-        return;
-      }
-
-      setMessage(
-        "Publish thành công. Bạn có thể ra trang Xem tài liệu để kiểm tra."
-      );
-    } catch (e: any) {
-      console.error(e);
-      setError("Lỗi kết nối khi gọi API publish.");
-    } finally {
-      setPublishing(false);
-    }
+  if (upErr) {
+    // thường gặp nếu policy storage chưa cho phép upload
+    throw new Error(`Upload storage thất bại: ${upErr.message}`);
   }
+
+  return pdf_path;
+}
+  
+async function handlePublish() {
+  setError("");
+  setMessage("");
+
+  if (!selectedBookId) {
+    setError("Hãy chọn sách.");
+    return;
+  }
+
+  if (!selectedVersionId) {
+    setError("Hãy chọn phiên bản sách cần publish.");
+    return;
+  }
+
+  if (!pdfFile) {
+    setError("Hãy chọn file PDF hoàn chỉnh để publish.");
+    return;
+  }
+
+  setPublishing(true);
+  try {
+    // 1) Upload thẳng lên Supabase Storage (tránh 413)
+    const pdf_path = await uploadPdfToPublishedBucket(pdfFile);
+
+    // 2) Gọi API publish chỉ bằng JSON nhỏ
+    const res = await fetch("/api/books/version/publish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        version_id: selectedVersionId,
+        pdf_path,
+      }),
+    });
+
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || (j as any).error) {
+      console.error("publish error:", (j as any).error || res.status, j);
+      setError(
+        (j as any).error ||
+          "Publish thất bại. Vui lòng thử lại hoặc kiểm tra quyền upload Storage."
+      );
+      return;
+    }
+
+    setMessage("Publish thành công. Bạn có thể ra trang Xem tài liệu để kiểm tra.");
+  } catch (e: any) {
+    console.error(e);
+    setError(e?.message || "Lỗi khi publish.");
+  } finally {
+    setPublishing(false);
+  }
+}
 
   if (authLoading) {
     return (
