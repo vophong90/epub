@@ -253,7 +253,8 @@ async function launchBrowser() {
   const browser = await puppeteer.launch({
     args: chromium.args,
     executablePath,
-    headless: chromium.headless, // ✅ ổn định trên serverless
+    // ❌ chromium-min không có chromium.headless => bỏ để TS không lỗi
+    // headless: "new", // nếu muốn ép headless, có thể bật dòng này
   });
 
   return browser;
@@ -418,11 +419,7 @@ export async function POST(req: NextRequest) {
     const header = token(tpl.header_html);
     const footer = token(tpl.footer_html);
 
-    /**
-     * ✅ FONT FIX: Puppeteer/Paged.js chạy trong chromium serverless
-     * - url("/fonts/...") đôi khi fail do base URL trống => đổi sang absolute origin
-     * - robust cho ", ', và không-quote
-     */
+    // ✅ FONT FIX: đổi url(/fonts/...) => absolute để chromium serverless load được
     const origin = getSiteOrigin(req);
     const cssWithAbsoluteFonts = (tpl.css || "")
       .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
@@ -531,7 +528,7 @@ export async function POST(req: NextRequest) {
     const browser = await launchBrowser();
     const page = await browser.newPage();
 
-    // ✅ Debug: nếu font fail sẽ thấy ngay trong log Vercel
+    // ✅ Debug: nếu font fail sẽ thấy log Vercel
     page.on("requestfailed", (r) => {
       const url = r.url();
       if (url.includes("/fonts/")) {
@@ -541,7 +538,7 @@ export async function POST(req: NextRequest) {
 
     await page.setContent(html, { waitUntil: "load" });
 
-    // ✅ Chờ font ready + network idle (đảm bảo CJK font tải xong trước khi pdf)
+    // ✅ Chờ font ready + network idle
     await page.evaluate(() => document.fonts.ready);
     await page.waitForNetworkIdle({ idleTime: 500, timeout: 30000 });
 
