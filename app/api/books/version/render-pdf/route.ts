@@ -530,8 +530,8 @@ ${cssWithAbsoluteFonts}
 
     await page.setContent(html, { waitUntil: "load" });
 
-    // Đợi fonts/layout ổn định một chút
-    await page.waitForTimeout(8000);
+    // Đợi fonts/layout ổn định một chút (thay vì page.waitForTimeout)
+    await new Promise((resolve) => setTimeout(resolve, 8000));
 
     const pdfBuffer = await page.pdf({
       format: "A4",
