@@ -242,9 +242,9 @@ async function buildNodesFromDB(
   return nodes;
 }
 
-/* ========== MAIN HANDLER ========== */
+/* ========== CORE LOGIC dùng chung cho GET & POST ========== */
 
-export async function POST(req: NextRequest) {
+async function handleRenderDoc(req: NextRequest, body: Body) {
   const supabase = getRouteClient();
   const admin = getAdminClient();
 
@@ -255,13 +255,6 @@ export async function POST(req: NextRequest) {
 
   if (uErr || !user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  let body: Body = {};
-  try {
-    body = await req.json();
-  } catch {
-    body = {};
   }
 
   const versionId = (body.version_id || "").toString().trim();
@@ -508,4 +501,24 @@ body, body * {
       { status: 500 }
     );
   }
+}
+
+/* ========== EXPORT GET + POST ========== */
+
+export async function POST(req: NextRequest) {
+  let body: Body = {};
+  try {
+    body = await req.json();
+  } catch {
+    body = {};
+  }
+  return handleRenderDoc(req, body);
+}
+
+// Cho phép gọi GET ?version_id=...&template_id=...
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const version_id = searchParams.get("version_id") || undefined;
+  const template_id = searchParams.get("template_id") || undefined;
+  return handleRenderDoc(req, { version_id, template_id });
 }
