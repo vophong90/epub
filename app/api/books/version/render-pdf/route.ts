@@ -321,7 +321,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Quyền: admin hoặc author/editor
+  // Quyền
   const { data: profile, error: pErr } = await supabase
     .from("profiles")
     .select("id,system_role")
@@ -356,7 +356,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // load book
+  // book
   const { data: book, error: bErr } = await admin
     .from("books")
     .select("id,title,unit_name")
@@ -367,7 +367,7 @@ export async function POST(req: NextRequest) {
   if (!book)
     return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
 
-  // load template
+  // template
   const { data: tpl, error: tErr } = await admin
     .from("book_templates")
     .select(
@@ -385,7 +385,7 @@ export async function POST(req: NextRequest) {
     ? Math.min(6, Math.max(1, Number(tpl.toc_depth)))
     : 1;
 
-  // tạo render job
+  // render job
   const { data: render, error: rInsErr } = await admin
     .from("book_renders")
     .insert({
@@ -408,7 +408,6 @@ export async function POST(req: NextRequest) {
   const renderId = render.id;
 
   try {
-    // build nodes
     const nodes = await buildNodesFromDB(admin, versionId);
 
     const year = new Date().getFullYear().toString();
@@ -478,11 +477,12 @@ export async function POST(req: NextRequest) {
       .map((n) => {
         const pad = tocDepth > 1 ? Math.max(0, (n.depth - 1) * 14) : 0;
         const padAttr = pad ? ` style="padding-left:${pad}px"` : "";
+        // TẠM THỜI: chưa có số trang -> để trống span.page
         return `
 <li${padAttr}>
   <a href="#${esc(n.id)}">${esc(n.title)}</a>
   <span class="dots"></span>
-  <span class="page" data-toc-target="#${esc(n.id)}"></span>
+  <span class="page"></span>
 </li>`;
       })
       .join("\n");
@@ -514,42 +514,12 @@ ${cssWithAbsoluteFonts}
   <main id="book-content">
     ${main}
   </main>
-
-  <script>
-    window.PagedConfig = window.PagedConfig || {};
-    window.PagedConfig.after = function(flow){
-      try{
-        console.log("PagedConfig.after called, pages:", flow && flow.pages ? flow.pages.length : "n/a");
-        var map = {};
-        flow.pages.forEach(function(page, idx){
-          var pn = (idx + 1).toString();
-          var elts = page.element.querySelectorAll("[id]");
-          elts.forEach(function(el){
-            if (!map[el.id]) map[el.id] = pn;
-          });
-        });
-
-        document.querySelectorAll("[data-toc-target]").forEach(function(span){
-          var sel = span.getAttribute("data-toc-target") || "";
-          if (!sel.startsWith("#")) return;
-          var id = sel.slice(1);
-          span.setAttribute("data-page-number", map[id] || "");
-          span.textContent = map[id] || "";
-        });
-      } catch(e){}
-      window.__PAGED_DONE__ = true;
-      window.__pagedjs__done = true;
-    };
-  </script>
-
-  <script src="https://unpkg.com/pagedjs/dist/paged.polyfill.js"></script>
 </body>
 </html>`;
 
     const browser = await launchBrowser();
     const page = await browser.newPage();
 
-    // log console trong browser ra server log
     page.on("console", (msg) => {
       try {
         console.log("[render-pdf][browser]", msg.type(), msg.text());
@@ -558,46 +528,10 @@ ${cssWithAbsoluteFonts}
       }
     });
 
-    page.on("requestfailed", (r) => {
-      const url = r.url();
-      if (url.includes("/fonts/")) {
-        console.error("FONT REQUEST FAILED:", url, r.failure()?.errorText);
-      }
-    });
-
     await page.setContent(html, { waitUntil: "load" });
 
-    await page
-      .evaluate(async () => {
-        try {
-          if (document.fonts?.ready) {
-            await document.fonts.ready;
-          }
-        } catch (e) {}
-      })
-      .catch(() => {});
-
-    await page.waitForNetworkIdle({ idleTime: 500, timeout: 30000 }).catch(() => {});
-
-    // chờ Paged.js (nhiều điều kiện, tránh bị kẹt → PDF trắng)
-    try {
-      await page.waitForFunction(
-        () =>
-          (window as any).__PAGED_DONE__ === true ||
-          (window as any).__pagedjs__done === true ||
-          (window as any).Paged !== undefined,
-        { timeout: 240000 }
-      );
-    } catch (e) {
-      console.error("Paged.js wait timeout:", e);
-      await page
-        .evaluate(() => {
-          const html = document.documentElement;
-          html.classList.remove("pagedjs-loading", "pagedjs-rendering");
-          (document.body as any).style.visibility = "visible";
-        })
-        .catch(() => {});
-    }
+    // Đợi fonts/layout ổn định một chút
+    await page.waitForTimeout(8000);
 
     const pdfBuffer = await page.pdf({
       format: "A4",
