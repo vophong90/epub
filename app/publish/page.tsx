@@ -37,7 +37,7 @@ export default function PublishPage() {
 
   const [previewUrl, setPreviewUrl] = useState<string>("");
   const [rendering, setRendering] = useState(false);
-  const [exportingDocx, setExportingDocx] = useState(false); // mới
+  const [exportingDoc, setExportingDoc] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [message, setMessage] = useState<string>("");
   const [error, setError] = useState<string>("");
