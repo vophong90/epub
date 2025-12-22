@@ -374,17 +374,17 @@ export default function PublishPage() {
           onClick={handleRender}
           disabled={rendering || !selectedVersionId || !selectedTemplateId}
           className="inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50"
-        >
+          >
           {rendering ? "Đang render..." : "Render PDF xem thử"}
         </button>
-
+        
         <button
           type="button"
-          onClick={handleExportDocx}
-          disabled={exportingDocx || !selectedVersionId || !selectedTemplateId}
+          onClick={handleExportDoc}
+          disabled={exportingDoc || !selectedVersionId || !selectedTemplateId}
           className="inline-flex items-center px-4 py-2 rounded-lg border border-indigo-600 text-indigo-600 text-sm font-semibold hover:bg-indigo-50 disabled:opacity-50"
-        >
-          {exportingDocx ? "Đang xuất Word..." : "Xuất Word (DOC)"}
+          >
+          {exportingDoc ? "Đang xuất Word..." : "Xuất Word (.doc)"}
         </button>
       </div>
 
