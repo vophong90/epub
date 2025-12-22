@@ -18,8 +18,8 @@ export const maxDuration = 300;
 const BUCKET_PREVIEW = "pdf_previews";
 const SIGNED_EXPIRES_SEC = 60 * 10;
 
-// ❗ Body mới: chỉ cần version_id
-type Body = { version_id?: string };
+// ❗ Body mới: version_id + (optional) template_id
+type Body = { version_id?: string; template_id?: string };
 
 function esc(s: string) {
   return s
@@ -312,6 +312,8 @@ export async function POST(req: NextRequest) {
   }
 
   const versionId = (body.version_id || "").toString().trim();
+  const bodyTemplateId = (body.template_id || "").toString().trim() || null;
+
   if (!versionId) {
     return NextResponse.json(
       { error: "version_id là bắt buộc" },
@@ -335,14 +337,15 @@ export async function POST(req: NextRequest) {
       { status: 404 }
     );
   }
-  if (!version.template_id) {
+
+  // ✅ Ưu tiên template_id do UI gửi lên, nếu không có thì fallback version.template_id
+  const templateId = bodyTemplateId || version.template_id;
+  if (!templateId) {
     return NextResponse.json(
       { error: "Phiên bản sách chưa được gán template" },
       { status: 400 }
     );
   }
-
-  const templateId = version.template_id;
 
   // 2) quyền: admin OR (author/editor trên book)
   const { data: profile, error: pErr } = await supabase
@@ -390,7 +393,7 @@ export async function POST(req: NextRequest) {
   if (!book)
     return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
 
-  // 4) load template (từ version.template_id)
+  // 4) load template (theo templateId đã chọn)
   const { data: tpl, error: tErr } = await admin
     .from("book_templates")
     .select(
@@ -402,7 +405,10 @@ export async function POST(req: NextRequest) {
 
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
   if (!tpl)
-    return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
+    return NextResponse.json(
+      { error: "Không tìm thấy template" },
+      { status: 404 }
+    );
 
   // ✅ normalize toc_depth (1..6), default 1
   const tocDepth = Number.isFinite(Number(tpl.toc_depth))
@@ -415,7 +421,7 @@ export async function POST(req: NextRequest) {
     .insert({
       book_id: book.id,
       version_id: version.id,
-      template_id: tpl.id,
+      template_id: tpl.id, // lưu đúng template đang render
       status: "rendering",
       created_by: user.id,
     })
@@ -434,6 +440,13 @@ export async function POST(req: NextRequest) {
   try {
     // 1) Build nodes từ DB (FIX 1000-row cap)
     const nodes = await buildNodesFromDB(admin, versionId);
+
+    // ✅ Nếu không có node nào thì coi như lỗi, tránh PDF trắng
+    if (!nodes.length) {
+      throw new Error(
+        "Không có TOC items nào cho version này (toc_items rỗng hoặc sai book_version_id)."
+      );
+    }
 
     // 2) Token replace cho template
     const year = new Date().getFullYear().toString();
@@ -490,11 +503,15 @@ export async function POST(req: NextRequest) {
         return `
 <section class="${isChapter ? "chapter" : "section"}" id="${esc(
           n.id
-        )}" data-toc-item="${esc(n.toc_item_id)}" data-depth="${n.depth}" data-chapter-title="${esc(
+        )}" data-toc-item="${esc(
+          n.toc_item_id
+        )}" data-depth="${n.depth}" data-chapter-title="${esc(
           n.chapterTitle
         )}">
   ${runningChapter}
-  <${tag} class="${isChapter ? "chapter-title" : ""}">${esc(n.title)}</${tag}>
+  <${tag} class="${isChapter ? "chapter-title" : ""}">${esc(
+          n.title
+        )}</${tag}>
   ${bodyHtml}
 </section>`;
       })
@@ -586,38 +603,56 @@ ${cssWithAbsoluteFonts}
         console.error("FONT REQUEST FAILED:", url, r.failure()?.errorText);
       }
     });
-    
-    await page.setContent(html, { waitUntil: "load" });
-    await page.evaluate(async () => {
-      try {
-        if (document.fonts?.ready) {
-          await document.fonts.ready;
-        }
-      } catch (e) {
-        
-      }
-    })
-  .catch(() => {
-    
-  });
 
+    await page.setContent(html, { waitUntil: "load" });
+
+    // chờ fonts (nếu hỗ trợ)
+    await page
+      .evaluate(async () => {
+        try {
+          if ((document as any).fonts?.ready) {
+            await (document as any).fonts.ready;
+          }
+        } catch (e) {}
+      })
+      .catch(() => {});
+
+    // chờ network rảnh 1 nhịp
     await page
       .waitForNetworkIdle({ idleTime: 500, timeout: 30000 })
       .catch(() => {});
 
-    try {
-      await page.evaluate(() => {
-        document.documentElement.classList.remove("pagedjs-loading", "pagedjs-rendering");
-        (document.body as any).style.visibility = "visible";
-      });
-      
-    } catch (e) {
-      await page.evaluate(() => {
-        const html = document.documentElement;
-        html.classList.remove("pagedjs-loading", "pagedjs-rendering");
-        (document.body as any).style.visibility = "visible";
-      });
-    }
+    // ✅ CHÍNH: chờ Paged.js render xong (__PAGED_DONE__),
+    // nếu vì lý do gì không có thì bỏ qua, vẫn render DOM hiện tại
+    await page
+      .waitForFunction(
+        () => (window as any).__PAGED_DONE__ === true,
+        { timeout: 120000 }
+      )
+      .catch(() => {});
+
+    // đảm bảo không bị class ẩn nội dung
+    await page.evaluate(() => {
+      document.documentElement.classList.remove(
+        "pagedjs-loading",
+        "pagedjs-rendering"
+      );
+      (document.body as any).style.visibility = "visible";
+    });
+
+    // (tùy chọn) debug nhanh nếu vẫn bị trắng
+    const dbg = await page.evaluate(() => {
+      const pages = document.querySelectorAll(
+        ".pagedjs_page, .pagedjs_pages"
+      ).length;
+      const body = document.body;
+      const main = document.getElementById("book-content");
+      const bodyTextLen = (body?.innerText || "").trim().length;
+      const bodyVis = body ? getComputedStyle(body).visibility : "no-body";
+      const mainDisp = main ? getComputedStyle(main).display : "no-main";
+      return { pages, bodyTextLen, bodyVis, mainDisp };
+    });
+    console.log("RENDER_DEBUG:", dbg);
 
     const pdfBuffer = await page.pdf({
       format: "A4",
