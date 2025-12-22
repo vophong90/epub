@@ -6,6 +6,10 @@ import { getAdminClient } from "@/lib/supabase-admin";
 import chromium from "@sparticuz/chromium-min";
 import puppeteer from "puppeteer-core";
 
+// ✅ PATCH: embed font CJK via base64 (serverless-safe)
+import fs from "fs";
+import path from "path";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -13,8 +17,11 @@ export const maxDuration = 300;
 const BUCKET_PREVIEW = "pdf_previews";
 const SIGNED_EXPIRES_SEC = 60 * 10;
 
-// Body: version + template (ưu tiên template chọn ở UI)
-type Body = { version_id?: string; template_id?: string };
+// ❗ Body: cho phép override template_id từ UI publish
+type Body = {
+  version_id?: string;
+  template_id?: string;
+};
 
 function esc(s: string) {
   return s
@@ -42,6 +49,23 @@ function getSiteOrigin(req: NextRequest) {
     new URL(req.url).host;
 
   return `${proto}://${host}`.replace(/\/+$/, "");
+}
+
+/** Embed font CJK */
+function loadCJKFontBase64() {
+  try {
+    const fontPath = path.join(
+      process.cwd(),
+      "public",
+      "fonts",
+      "NotoSerifCJKsc-Regular.otf"
+    );
+    const buf = fs.readFileSync(fontPath);
+    return buf.toString("base64");
+  } catch (e) {
+    console.error("❌ Load CJK font failed:", e);
+    return null;
+  }
 }
 
 /** DB row types tối giản */
@@ -76,6 +100,7 @@ type VersionRow = {
   template_id: string | null;
 };
 
+// ✅ Template row type (có toc_depth)
 type TemplateRow = {
   id: string;
   name: string | null;
@@ -99,7 +124,9 @@ function makeAnchor(tocItemId: string, slug: string) {
   return `toc-${tocItemId}${safeSlug ? "-" + safeSlug : ""}`;
 }
 
-/** ===== Pagination helpers ===== */
+/* =========================
+ * Pagination helpers
+ * ========================= */
 
 async function fetchAllTocItemsByVersion(
   admin: any,
@@ -138,6 +165,7 @@ async function fetchAllTocContentsByItemIds(
 
   const ID_CHUNK = 500;
   const PAGE = 1000;
+
   const all: TocContentRow[] = [];
 
   for (let i = 0; i < tocItemIds.length; i += ID_CHUNK) {
@@ -165,11 +193,13 @@ async function fetchAllTocContentsByItemIds(
   return all;
 }
 
+/** Build ordered nodes */
 async function buildNodesFromDB(
   admin: any,
   versionId: string
 ): Promise<RenderNode[]> {
   const tocItems = await fetchAllTocItemsByVersion(admin, versionId);
+
   if (!tocItems.length) return [];
 
   const tocContents = await fetchAllTocContentsByItemIds(
@@ -193,12 +223,16 @@ async function buildNodesFromDB(
 
   const nodes: RenderNode[] = [];
 
-  function walk(parentId: string | null, depth: number, chapterTitle: string) {
+  function walk(
+    parentId: string | null,
+    depth: number,
+    currentChapterTitle: string
+  ) {
     const kids = children.get(parentId) || [];
     for (const it of kids) {
       const anchor = makeAnchor(it.id, it.slug);
       const isChapter = depth === 1;
-      const newChapterTitle = isChapter ? it.title : chapterTitle;
+      const chapterTitle = isChapter ? it.title : currentChapterTitle;
 
       const c = contentByItem.get(it.id);
       const cj = c?.content_json || {};
@@ -210,19 +244,21 @@ async function buildNodesFromDB(
         title: it.title,
         slug: it.slug,
         depth,
-        chapterTitle: newChapterTitle,
+        chapterTitle,
         html: html || "",
       });
 
-      walk(it.id, depth + 1, newChapterTitle);
+      walk(it.id, depth + 1, chapterTitle);
     }
   }
 
   walk(null, 1, "");
+
+  console.log("[render-pdf] nodes count:", nodes.length);
   return nodes;
 }
 
-/** ===== Launch Chromium ===== */
+/** Launch browser */
 async function launchBrowser() {
   const executablePath = await chromium.executablePath(
     "https://github.com/Sparticuz/chromium/releases/download/v141.0.0/chromium-v141.0.0-pack.x64.tar"
@@ -240,7 +276,6 @@ export async function POST(req: NextRequest) {
   const supabase = getRouteClient();
   const admin = getAdminClient();
 
-  // auth
   const {
     data: { user },
     error: uErr,
@@ -259,8 +294,6 @@ export async function POST(req: NextRequest) {
   }
 
   const versionId = (body.version_id || "").toString().trim();
-  const bodyTemplateId = (body.template_id || "").toString().trim() || null;
-
   if (!versionId) {
     return NextResponse.json(
       { error: "version_id là bắt buộc" },
@@ -268,7 +301,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 1) load version
+  // 1) load version + book_id + template_id mặc định
   const { data: version, error: vErr } = await admin
     .from("book_versions")
     .select("id,book_id,version_no,template_id")
@@ -285,16 +318,20 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ✅ ưu tiên template từ UI, fallback version.template_id
-  const templateId = bodyTemplateId || version.template_id;
+  // ✅ Ưu tiên template_id từ body (UI /publish), nếu không có thì dùng version.template_id
+  let templateId = (body.template_id || "").toString().trim();
+  if (!templateId) {
+    templateId = version.template_id || "";
+  }
+
   if (!templateId) {
     return NextResponse.json(
-      { error: "Phiên bản sách chưa được gán template" },
+      { error: "Chưa xác định được template cho phiên bản này" },
       { status: 400 }
     );
   }
 
-  // 2) quyền
+  // 2) quyền: admin OR (author/editor trên book)
   const { data: profile, error: pErr } = await supabase
     .from("profiles")
     .select("id,system_role")
@@ -318,6 +355,7 @@ export async function POST(req: NextRequest) {
     if (permErr) {
       return NextResponse.json({ error: permErr.message }, { status: 500 });
     }
+
     canRender = !!perm;
   }
 
@@ -339,7 +377,7 @@ export async function POST(req: NextRequest) {
   if (!book)
     return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
 
-  // 4) load template
+  // 4) load template (từ templateId đã chọn)
   const { data: tpl, error: tErr } = await admin
     .from("book_templates")
     .select(
@@ -351,16 +389,13 @@ export async function POST(req: NextRequest) {
 
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
   if (!tpl)
-    return NextResponse.json(
-      { error: "Không tìm thấy template" },
-      { status: 404 }
-    );
+    return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
 
   const tocDepth = Number.isFinite(Number(tpl.toc_depth))
     ? Math.min(6, Math.max(1, Number(tpl.toc_depth)))
     : 1;
 
-  // 5) tạo job render
+  // 5) create render job
   const { data: render, error: rInsErr } = await admin
     .from("book_renders")
     .insert({
@@ -383,16 +418,10 @@ export async function POST(req: NextRequest) {
   const renderId = render.id;
 
   try {
-    // 1) build nodes
+    // 1) Build nodes từ DB
     const nodes = await buildNodesFromDB(admin, versionId);
 
-    if (!nodes.length) {
-      throw new Error(
-        "Không có TOC items cho version này (toc_items rỗng hoặc sai book_version_id)."
-      );
-    }
-
-    // 2) token & css
+    // 2) Token replace cho template
     const year = new Date().getFullYear().toString();
     const token = (s?: string) =>
       (s || "")
@@ -412,7 +441,20 @@ export async function POST(req: NextRequest) {
       .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
       .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
 
-    // 3) main sections
+    const cjkBase64 = loadCJKFontBase64();
+    const inlineFontCSS = cjkBase64
+      ? `
+/* ===== Embedded CJK fallback font (serverless-safe) ===== */
+@font-face {
+  font-family: "CJK-Fallback";
+  src: url(data:font/opentype;base64,${cjkBase64}) format("opentype");
+  font-weight: 400;
+  font-style: normal;
+}
+`
+      : "";
+
+    // 3) MAIN HTML
     const main = nodes
       .map((n) => {
         const isChapter = n.depth === 1;
@@ -438,9 +480,7 @@ export async function POST(req: NextRequest) {
           n.chapterTitle
         )}">
   ${runningChapter}
-  <${tag} class="${isChapter ? "chapter-title" : ""}">${esc(
-          n.title
-        )}</${tag}>
+  <${tag} class="${isChapter ? "chapter-title" : ""}">${esc(n.title)}</${tag}>
   ${bodyHtml}
 </section>`;
       })
@@ -468,6 +508,7 @@ export async function POST(req: NextRequest) {
   <meta charset="utf-8"/>
   <title>${esc(book.title)} – v${version.version_no}</title>
   <style>
+${inlineFontCSS}
 ${cssWithAbsoluteFonts}
   </style>
 </head>
@@ -518,12 +559,9 @@ ${cssWithAbsoluteFonts}
 </body>
 </html>`;
 
-    // 6) Puppeteer
+    // 6) Launch Chromium
     const browser = await launchBrowser();
     const page = await browser.newPage();
-
-    // dùng media "screen" cho Paged.js
-    await page.emulateMediaType("screen");
 
     page.on("requestfailed", (r) => {
       const url = r.url();
@@ -534,50 +572,36 @@ ${cssWithAbsoluteFonts}
 
     await page.setContent(html, { waitUntil: "load" });
 
+    // chờ font
     await page
       .evaluate(async () => {
         try {
-          if ((document as any).fonts?.ready) {
-            await (document as any).fonts.ready;
+          if (document.fonts?.ready) {
+            await document.fonts.ready;
           }
         } catch (e) {}
       })
       .catch(() => {});
 
-    await page
-      .waitForNetworkIdle({ idleTime: 500, timeout: 30000 })
-      .catch(() => {});
+    await page.waitForNetworkIdle({ idleTime: 500, timeout: 30000 }).catch(() => {});
 
-    // chờ Paged.js tạo trang hoặc timeout
-    await page
-      .waitForFunction(
-        () =>
-          (window as any).__PAGED_DONE__ === true ||
-          document.querySelectorAll(".pagedjs_page").length > 0,
-        { timeout: 120000 }
-      )
-      .catch(() => {});
-
-    await page.evaluate(() => {
-      document.documentElement.classList.remove(
-        "pagedjs-loading",
-        "pagedjs-rendering"
+    // ✅ QUAN TRỌNG: chờ Paged.js phân trang hoàn tất
+    try {
+      await page.waitForFunction(
+        () => (window as any).__PAGED_DONE__ === true,
+        { timeout: 240000 } // 4 phút cho sách dày
       );
-      (document.body as any).style.visibility = "visible";
-    });
-
-    const dbg = await page.evaluate(() => {
-      const pages = document.querySelectorAll(
-        ".pagedjs_page, .pagedjs_pages"
-      ).length;
-      const body = document.body;
-      const main = document.getElementById("book-content");
-      const bodyTextLen = (body?.innerText || "").trim().length;
-      const bodyVis = body ? getComputedStyle(body).visibility : "no-body";
-      const mainDisp = main ? getComputedStyle(main).display : "no-main";
-      return { pages, bodyTextLen, bodyVis, mainDisp };
-    });
-    console.log("RENDER_DEBUG:", dbg);
+    } catch (e) {
+      console.error("Paged.js did not signal __PAGED_DONE__ in time:", e);
+      // fallback: bỏ class loading để tránh ẩn body
+      await page
+        .evaluate(() => {
+          const html = document.documentElement;
+          html.classList.remove("pagedjs-loading", "pagedjs-rendering");
+          (document.body as any).style.visibility = "visible";
+        })
+        .catch(() => {});
+    }
 
     const pdfBuffer = await page.pdf({
       format: "A4",
@@ -588,7 +612,7 @@ ${cssWithAbsoluteFonts}
 
     await browser.close();
 
-    // 7) Upload
+    // 7) Upload preview
     const pdf_path = `book/${book.id}/version/${version.id}/render/${renderId}.pdf`;
 
     const { error: upErr } = await admin.storage
