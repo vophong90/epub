@@ -3,19 +3,23 @@ import { NextRequest, NextResponse } from "next/server";
 import { getRouteClient } from "@/lib/supabaseServer";
 import { getAdminClient } from "@/lib/supabase-admin";
 
-// html-to-docx là CommonJS
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const HTMLtoDOCX: any = require("html-to-docx");
+import fs from "fs";
+import path from "path";
+
+// ❗ Dùng require vì html-to-docx là CommonJS
+// (TypeScript vẫn build OK trong môi trường Next Node.js)
+const HTMLtoDOCX = require("html-to-docx");
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-// Body: cho phép override template_id từ UI (giống render-pdf)
 type Body = {
   version_id?: string;
-  template_id?: string;
+  template_id?: string; // cho phép override khi cần (giống render-pdf)
 };
+
+const BUCKET_PREVIEW = "pdf_previews"; // không dùng ở đây, chỉ giữ cho đồng nhất
 
 function esc(s: string) {
   return s
@@ -25,7 +29,43 @@ function esc(s: string) {
     .replaceAll('"', "&quot;");
 }
 
-/** DB row types tối giản */
+function getSiteOrigin(req: NextRequest) {
+  const env =
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.SITE_URL ||
+    process.env.VERCEL_URL;
+
+  if (env) {
+    if (env.startsWith("http")) return env.replace(/\/+$/, "");
+    return `https://${env}`.replace(/\/+$/, "");
+  }
+
+  const proto = req.headers.get("x-forwarded-proto") || "https";
+  const host =
+    req.headers.get("x-forwarded-host") ||
+    req.headers.get("host") ||
+    new URL(req.url).host;
+
+  return `${proto}://${host}`.replace(/\/+$/, "");
+}
+
+function loadCJKFontBase64() {
+  try {
+    const fontPath = path.join(
+      process.cwd(),
+      "public",
+      "fonts",
+      "NotoSerifCJKsc-Regular.otf"
+    );
+    const buf = fs.readFileSync(fontPath);
+    return buf.toString("base64");
+  } catch (e) {
+    console.error("❌ Load CJK font failed (DOCX):", e);
+    return null;
+  }
+}
+
+/** DB row types */
 type TocItemRow = {
   id: string;
   parent_id: string | null;
@@ -41,11 +81,11 @@ type TocContentRow = {
 };
 
 type RenderNode = {
-  id: string; // anchor id
+  id: string;
   toc_item_id: string;
   title: string;
   slug: string;
-  depth: number; // 1 = chapter
+  depth: number;
   chapterTitle: string;
   html: string;
 };
@@ -81,7 +121,7 @@ function makeAnchor(tocItemId: string, slug: string) {
 }
 
 /* =========================
- * Pagination helpers (reuse từ render-pdf)
+ * Helpers: lấy toàn bộ TOC + content
  * ========================= */
 
 async function fetchAllTocItemsByVersion(
@@ -207,18 +247,18 @@ async function buildNodesFromDB(
 
   walk(null, 1, "");
 
+  console.log("[render-docx] nodes count:", nodes.length);
   return nodes;
 }
 
 /* =========================
- * Handler
+ * MAIN HANDLER
  * ========================= */
 
 export async function POST(req: NextRequest) {
   const supabase = getRouteClient();
   const admin = getAdminClient();
 
-  // 1) Auth
   const {
     data: { user },
     error: uErr,
@@ -228,7 +268,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // 2) Body
   let body: Body = {};
   try {
     body = await req.json();
@@ -244,7 +283,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 3) Load version
+  // Lấy version
   const { data: version, error: vErr } = await admin
     .from("book_versions")
     .select("id,book_id,version_no,template_id")
@@ -261,10 +300,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Ưu tiên template từ body, nếu không có thì dùng version.template_id
+  // Ưu tiên template_id từ body nếu có
   let templateId = (body.template_id || "").toString().trim();
-  if (!templateId) templateId = version.template_id || "";
-
+  if (!templateId) {
+    templateId = version.template_id || "";
+  }
   if (!templateId) {
     return NextResponse.json(
       { error: "Chưa xác định được template cho phiên bản này" },
@@ -272,7 +312,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 4) Quyền: admin OR (author/editor trên book)
+  // Quyền: admin hoặc author/editor của book
   const { data: profile, error: pErr } = await supabase
     .from("profiles")
     .select("id,system_role")
@@ -282,9 +322,9 @@ export async function POST(req: NextRequest) {
   if (pErr) return NextResponse.json({ error: pErr.message }, { status: 500 });
 
   const isAdmin = profile?.system_role === "admin";
-  let canExport = isAdmin;
+  let canRender = isAdmin;
 
-  if (!canExport) {
+  if (!canRender) {
     const { data: perm, error: permErr } = await supabase
       .from("book_permissions")
       .select("role")
@@ -297,17 +337,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: permErr.message }, { status: 500 });
     }
 
-    canExport = !!perm;
+    canRender = !!perm;
   }
 
-  if (!canExport) {
+  if (!canRender) {
     return NextResponse.json(
       { error: "Bạn không có quyền xuất DOCX" },
       { status: 403 }
     );
   }
 
-  // 5) Load book
+  // Lấy book
   const { data: book, error: bErr } = await admin
     .from("books")
     .select("id,title,unit_name")
@@ -321,7 +361,7 @@ export async function POST(req: NextRequest) {
       { status: 404 }
     );
 
-  // 6) Load template
+  // Lấy template
   const { data: tpl, error: tErr } = await admin
     .from("book_templates")
     .select(
@@ -338,15 +378,13 @@ export async function POST(req: NextRequest) {
       { status: 404 }
     );
 
+  const tocDepth = Number.isFinite(Number(tpl.toc_depth))
+    ? Math.min(6, Math.max(1, Number(tpl.toc_depth)))
+    : 1;
+
   try {
-    // 7) Build nodes (toàn bộ sách, giống render-pdf)
+    // 1) Build nodes
     const nodes = await buildNodesFromDB(admin, versionId);
-    if (!nodes.length) {
-      return NextResponse.json(
-        { error: "Version này chưa có nội dung để xuất DOCX" },
-        { status: 400 }
-      );
-    }
 
     const year = new Date().getFullYear().toString();
     const token = (s?: string) =>
@@ -357,27 +395,60 @@ export async function POST(req: NextRequest) {
 
     const cover = token(tpl.cover_html || "");
     const front = token(tpl.front_matter_html || "");
+    const tocHtml = token(tpl.toc_html || "");
     const header = token(tpl.header_html || "");
     const footer = token(tpl.footer_html || "");
-    // TOC: có thể dùng lại, nhưng Word sẽ không tự link lại như Paged.js
-    const tocTemplate = token(tpl.toc_html || "");
 
-    // Tạm dùng CSS template “nguyên xi” – Word sẽ hiểu được 1 phần:
-    // h1/h2/h3, font-size, text-align, margin...
-    const css = tpl.css || "";
+    const origin = getSiteOrigin(req);
 
-    // MAIN: đơn giản hóa, bỏ running-header phức tạp.
+    // Patch font URLs trong CSS template
+    const patchedCss = (tpl.css || "")
+      .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
+      .replaceAll("url('/fonts/", `url(\"${origin}/fonts/`)
+      .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
+
+    // CJK fallback
+    const cjkBase64 = loadCJKFontBase64();
+    const cjkInlineCSS = cjkBase64
+      ? `
+@font-face {
+  font-family: "CJK-Fallback";
+  src: url("data:font/opentype;base64,${cjkBase64}") format("opentype");
+  font-weight: normal;
+  font-style: normal;
+}
+body, body * {
+  font-family: "Times New Roman", "CJK-Fallback", serif !important;
+}
+`
+      : `
+body, body * {
+  font-family: "Times New Roman", serif !important;
+}
+`;
+
+    // 2) MAIN – giống render-pdf để giữ cấu trúc chương
     let chapterCounter = 0;
+    const tocItems: string[] = [];
 
-    const mainHtml = nodes
+    const main = nodes
       .map((n) => {
         const isChapter = n.depth === 1;
         const tag = n.depth === 1 ? "h1" : n.depth === 2 ? "h2" : "h3";
 
-        let title = esc(n.title);
-        if (isChapter) {
+        let label = esc(n.title);
+        if (n.depth === 1) {
           chapterCounter += 1;
-          title = `${chapterCounter}. ${title}`;
+          label = `${chapterCounter}. ${label}`;
+        }
+
+        // TOC entry cho DOCX (nếu có dùng)
+        if (n.depth >= 1 && n.depth <= tocDepth) {
+          const pad = tocDepth > 1 ? Math.max(0, (n.depth - 1) * 14) : 0;
+          const padAttr = pad ? ` style="padding-left:${pad}px"` : "";
+          tocItems.push(
+            `<li${padAttr}><a href="#${esc(n.id)}">${label}</a></li>`
+          );
         }
 
         const bodyHtml =
@@ -388,64 +459,59 @@ export async function POST(req: NextRequest) {
         return `
 <section class="${isChapter ? "chapter" : "section"}" id="${esc(
           n.id
-        )}" data-depth="${n.depth}">
-  <${tag} class="${isChapter ? "chapter-title" : ""}">${title}</${tag}>
+        )}" data-toc-item="${esc(
+          n.toc_item_id
+        )}" data-depth="${n.depth}" data-chapter-title="${esc(
+          n.chapterTitle
+        )}">
+  <${tag} class="${
+          isChapter ? "chapter-title" : ""
+        }">${label}</${tag}>
   ${bodyHtml}
 </section>`;
       })
       .join("\n");
 
-    // Ghép TOC đơn giản: list toàn bộ chương depth=1
-    const tocItems: string[] = [];
-    let tmpCount = 0;
-    for (const n of nodes) {
-      if (n.depth !== 1) continue;
-      tmpCount += 1;
-      tocItems.push(
-        `<p>${tmpCount}. ${esc(n.title)} (chương)</p>`
-      );
-    }
-    const tocHtml =
-      tocTemplate ||
-      (tocItems.length
-        ? `<h2>Mục lục</h2>\n${tocItems.join("\n")}`
-        : "");
+    const tocList = tocItems.join("\n");
 
-    const fullHtml = `<!doctype html>
+    // 3) HTML tổng – dùng cho html-to-docx
+    const html = `<!doctype html>
 <html>
 <head>
-  <meta charset="utf-8" />
+  <meta charset="utf-8"/>
   <title>${esc(book.title)} – v${version.version_no}</title>
   <style>
-  ${css}
+    ${cjkInlineCSS}
+    ${patchedCss}
   </style>
 </head>
 <body>
+  ${header || ""}
+
   ${cover || ""}
+
   ${front || ""}
 
   ${tocHtml || ""}
-
-  ${header || ""}
+  <ol id="toc-list">
+    ${tocList}
+  </ol>
 
   <main id="book-content">
-    ${mainHtml}
+    ${main}
   </main>
 
   ${footer || ""}
 </body>
 </html>`;
 
-    // 8) HTML -> DOCX
-    const fileNameSafeTitle = book.title.replace(/[^a-zA-Z0-9\-_.]+/g, "_");
-    const docxBuffer: Buffer = await HTMLtoDOCX(fullHtml, null, {
-      // vài option cơ bản, có thể tinh chỉnh thêm nếu muốn
-      header: true,
-      footer: true,
-      pageNumber: true,
-    });
+    // 4) Gọi html-to-docx – chỉ 1 tham số để tránh lỗi
+    const docxBuffer = await HTMLtoDOCX(html);
 
-    const filename = `book-${fileNameSafeTitle}-v${version.version_no}.docx`;
+    const filenameSafe = book.title.replace(/[^a-zA-Z0-9\-_.]+/g, "_");
+    const filename = `${filenameSafe || "book"}_v${
+      version.version_no
+    }.docx`;
 
     return new NextResponse(docxBuffer as any, {
       status: 200,
