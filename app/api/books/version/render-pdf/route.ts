@@ -6,6 +6,10 @@ import { getAdminClient } from "@/lib/supabase-admin";
 import chromium from "@sparticuz/chromium-min";
 import puppeteer from "puppeteer-core";
 
+// ✅ PATCH: embed font CJK via base64 (serverless-safe)
+import fs from "fs";
+import path from "path";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 // Cho job render chạy lâu hơn một chút
@@ -46,6 +50,27 @@ function getSiteOrigin(req: NextRequest) {
     new URL(req.url).host;
 
   return `${proto}://${host}`.replace(/\/+$/, "");
+}
+
+/**
+ * ✅ PATCH: Read CJK font from /public/fonts and embed as base64
+ * - Fix: Puppeteer serverless often cannot reliably load /fonts via http(s) (404/proxy/cors)
+ * - Keep all existing behavior; only adds inline @font-face.
+ */
+function loadCJKFontBase64() {
+  try {
+    const fontPath = path.join(
+      process.cwd(),
+      "public",
+      "fonts",
+      "NotoSerifCJKsc-Regular.otf"
+    );
+    const buf = fs.readFileSync(fontPath);
+    return buf.toString("base64");
+  } catch (e) {
+    console.error("❌ Load CJK font failed:", e);
+    return null;
+  }
 }
 
 /** DB row types tối giản */
@@ -305,7 +330,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: vErr.message }, { status: 500 });
   }
   if (!version) {
-    return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
+    return NextResponse.json(
+      { error: "Không tìm thấy version" },
+      { status: 404 }
+    );
   }
   if (!version.template_id) {
     return NextResponse.json(
@@ -421,12 +449,26 @@ export async function POST(req: NextRequest) {
     const header = token(tpl.header_html || "");
     const footer = token(tpl.footer_html || "");
 
-    // ✅ FONT FIX (quan trọng): biến url(/fonts/...) => absolute để chromium serverless load được
+    // ✅ FONT FIX (cũ): biến url(/fonts/...) => absolute để chromium serverless load được
     const origin = getSiteOrigin(req);
     const cssWithAbsoluteFonts = (tpl.css || "")
       .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
       .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
       .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
+
+    // ✅ PATCH (mới): embed CJK font base64 (ổn định 100% dù absolute-fonts bị fail)
+    const cjkBase64 = loadCJKFontBase64();
+    const inlineFontCSS = cjkBase64
+      ? `
+/* ===== Embedded CJK fallback font (serverless-safe) ===== */
+@font-face {
+  font-family: "CJK-Fallback";
+  src: url(data:font/opentype;base64,${cjkBase64}) format("opentype");
+  font-weight: 400;
+  font-style: normal;
+}
+`
+      : "";
 
     // 3) MAIN HTML
     const main = nodes
@@ -479,7 +521,10 @@ export async function POST(req: NextRequest) {
 <head>
   <meta charset="utf-8"/>
   <title>${esc(book.title)} – v${version.version_no}</title>
-  <style>${cssWithAbsoluteFonts}</style>
+  <style>
+${inlineFontCSS}
+${cssWithAbsoluteFonts}
+  </style>
 </head>
 <body>
   ${cover || ""}
