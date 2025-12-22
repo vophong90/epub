@@ -214,22 +214,34 @@ function getSelectedVersionMeta() {
 
 async function uploadPdfToPublishedBucket(file: File) {
   if (!selectedBookId) throw new Error("Thiếu selectedBookId.");
-  const meta = getSelectedVersionMeta();
+  const meta = versions.find((x) => x.id === selectedVersionId);
   if (!meta) throw new Error("Không tìm thấy version đang chọn.");
 
   const safeName = `v${meta.version_no}-${meta.id}.pdf`;
   const pdf_path = `book/${selectedBookId}/published/${safeName}`;
 
-  const { error: upErr } = await supabase.storage
-    .from(PUBLISHED_BUCKET)
-    .upload(pdf_path, file, {
-      contentType: "application/pdf",
-      upsert: true,
-    });
+  // 1) xin signed upload url từ server (admin)
+  const res = await fetch("/api/storage/signed-upload", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: pdf_path, contentType: "application/pdf" }),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j?.error || "Không tạo được signed upload URL.");
 
-  if (upErr) {
-    // thường gặp nếu policy storage chưa cho phép upload
-    throw new Error(`Upload storage thất bại: ${upErr.message}`);
+  // 2) upload trực tiếp lên signedUrl (no auth, no RLS)
+  const up = await fetch(j.signedUrl, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/pdf",
+      "x-upsert": "true",
+    },
+    body: file,
+  });
+
+  if (!up.ok) {
+    const t = await up.text().catch(() => "");
+    throw new Error(`Upload signed URL thất bại: ${up.status} ${t}`);
   }
 
   return pdf_path;
