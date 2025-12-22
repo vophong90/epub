@@ -25,6 +25,29 @@ function esc(s: string) {
     .replaceAll('"', "&quot;");
 }
 
+function getSiteOrigin(req: NextRequest) {
+  // ưu tiên env (nếu bạn đã set)
+  const env =
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.SITE_URL ||
+    process.env.VERCEL_URL;
+
+  if (env) {
+    // VERCEL_URL thường là domain không có https
+    if (env.startsWith("http")) return env.replace(/\/+$/, "");
+    return `https://${env}`.replace(/\/+$/, "");
+  }
+
+  // fallback theo headers proxy
+  const proto = req.headers.get("x-forwarded-proto") || "https";
+  const host =
+    req.headers.get("x-forwarded-host") ||
+    req.headers.get("host") ||
+    new URL(req.url).host;
+
+  return `${proto}://${host}`.replace(/\/+$/, "");
+}
+
 /** DB row types tối giản */
 type TocItemRow = {
   id: string;
@@ -119,13 +142,6 @@ async function fetchAllTocItemsByVersion(
 
 /**
  * Fetch toc_contents by item ids, in batches + pagination.
- * Why:
- * - `.in('toc_item_id', ids)` with too many ids can be heavy/limit.
- * - PostgREST may still cap 1000 rows per request.
- *
- * Strategy:
- * - Split ids into chunks (e.g. 500 each)
- * - For each chunk, page through results with .range()
  */
 async function fetchAllTocContentsByItemIds(
   admin: any,
@@ -165,9 +181,6 @@ async function fetchAllTocContentsByItemIds(
 
 /**
  * Build ordered toc tree nodes + attach content_html from toc_contents.content_json.html
- * - depth 1 => chapter
- * - depth 2 => section
- * - depth 3+ => sub-sections
  */
 async function buildNodesFromDB(
   admin: any,
@@ -177,7 +190,6 @@ async function buildNodesFromDB(
   const tocItems = await fetchAllTocItemsByVersion(admin, versionId);
 
   if (!tocItems.length) {
-    // Không có TOC thì trả về rỗng, tránh gọi .in([]) bị lỗi
     return [];
   }
 
@@ -276,10 +288,13 @@ export async function POST(req: NextRequest) {
 
   const versionId = (body.version_id || "").toString().trim();
   if (!versionId) {
-    return NextResponse.json({ error: "version_id là bắt buộc" }, { status: 400 });
+    return NextResponse.json(
+      { error: "version_id là bắt buộc" },
+      { status: 400 }
+    );
   }
 
-  // 1) load version + book_id + template_id (phải có trước để check quyền & template)
+  // 1) load version + book_id + template_id
   const { data: version, error: vErr } = await admin
     .from("book_versions")
     .select("id,book_id,version_no,template_id")
@@ -330,7 +345,10 @@ export async function POST(req: NextRequest) {
   }
 
   if (!canRender) {
-    return NextResponse.json({ error: "Bạn không có quyền render PDF" }, { status: 403 });
+    return NextResponse.json(
+      { error: "Bạn không có quyền render PDF" },
+      { status: 403 }
+    );
   }
 
   // 3) load book
@@ -341,7 +359,8 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
 
   if (bErr) return NextResponse.json({ error: bErr.message }, { status: 500 });
-  if (!book) return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
+  if (!book)
+    return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
 
   // 4) load template (từ version.template_id)
   const { data: tpl, error: tErr } = await admin
@@ -354,7 +373,8 @@ export async function POST(req: NextRequest) {
     .maybeSingle<TemplateRow>();
 
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
-  if (!tpl) return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
+  if (!tpl)
+    return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
 
   // ✅ normalize toc_depth (1..6), default 1
   const tocDepth = Number.isFinite(Number(tpl.toc_depth))
@@ -400,6 +420,13 @@ export async function POST(req: NextRequest) {
     const toc = token(tpl.toc_html || "");
     const header = token(tpl.header_html || "");
     const footer = token(tpl.footer_html || "");
+
+    // ✅ FONT FIX (quan trọng): biến url(/fonts/...) => absolute để chromium serverless load được
+    const origin = getSiteOrigin(req);
+    const cssWithAbsoluteFonts = (tpl.css || "")
+      .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
+      .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
+      .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
 
     // 3) MAIN HTML
     const main = nodes
@@ -452,7 +479,7 @@ export async function POST(req: NextRequest) {
 <head>
   <meta charset="utf-8"/>
   <title>${esc(book.title)} – v${version.version_no}</title>
-  <style>${tpl.css || ""}</style>
+  <style>${cssWithAbsoluteFonts}</style>
 </head>
 <body>
   ${cover || ""}
@@ -503,10 +530,23 @@ export async function POST(req: NextRequest) {
 </body>
 </html>`;
 
-    // 6) Launch Chromium (serverless-friendly, dùng puppeteer)
+    // 6) Launch Chromium
     const browser = await launchBrowser();
     const page = await browser.newPage();
+
+    // ✅ Debug font load fail (rất hữu ích để biết còn bị 404/blocked không)
+    page.on("requestfailed", (r) => {
+      const url = r.url();
+      if (url.includes("/fonts/")) {
+        console.error("FONT REQUEST FAILED:", url, r.failure()?.errorText);
+      }
+    });
+
     await page.setContent(html, { waitUntil: "load" });
+
+    // ✅ Chờ font ready + network idle (giúp chữ Hoa render đúng)
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForNetworkIdle({ idleTime: 500, timeout: 30000 });
 
     // chờ Paged.js paginate xong
     await page.waitForFunction(() => (window as any).__PAGED_DONE__ === true, {
