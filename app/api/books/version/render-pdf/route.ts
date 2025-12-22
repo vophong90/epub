@@ -606,12 +606,11 @@ ${cssWithAbsoluteFonts}
       .catch(() => {});
 
     try {
-      await page.waitForFunction(
-        () =>
-          (window as any).__PAGED_DONE__ === true ||
-          (window as any).Paged !== undefined,
-        { timeout: 120000 }
-      );
+      await page.evaluate(() => {
+        document.documentElement.classList.remove("pagedjs-loading", "pagedjs-rendering");
+        (document.body as any).style.visibility = "visible";
+      });
+      
     } catch (e) {
       await page.evaluate(() => {
         const html = document.documentElement;
