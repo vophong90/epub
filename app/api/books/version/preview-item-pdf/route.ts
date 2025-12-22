@@ -11,9 +11,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const BUCKET_PREVIEW = "pdf_previews";
-const SIGNED_EXPIRES_SEC = 60 * 10;
-
 // Body: preview đúng 1 chương (toc_item)
 type Body = { version_id?: string; toc_item_id?: string };
 
@@ -269,8 +266,7 @@ async function launchBrowser() {
   const browser = await puppeteer.launch({
     args: chromium.args,
     executablePath,
-    // ❌ chromium-min không có chromium.headless => bỏ để TS không lỗi
-    // headless: "new", // nếu muốn ép headless, có thể bật dòng này
+    // headless: "new", // nếu cần ép headless rõ ràng
   });
 
   return browser;
@@ -280,7 +276,7 @@ export async function POST(req: NextRequest) {
   const supabase = getRouteClient();
   const admin = getAdminClient();
 
-  // auth
+  // 1) auth
   const {
     data: { user },
     error: uErr,
@@ -290,7 +286,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // body
+  // 2) body
   let body: Body = {};
   try {
     body = await req.json();
@@ -314,7 +310,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 1) load version + book_id + template_id
+  // 3) load version + book_id + template_id
   const { data: version, error: vErr } = await admin
     .from("book_versions")
     .select("id,book_id,version_no,template_id")
@@ -323,7 +319,10 @@ export async function POST(req: NextRequest) {
 
   if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 });
   if (!version)
-    return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
+    return NextResponse.json(
+      { error: "Không tìm thấy version" },
+      { status: 404 }
+    );
   if (!version.template_id) {
     return NextResponse.json(
       { error: "Phiên bản sách chưa được gán template" },
@@ -333,7 +332,7 @@ export async function POST(req: NextRequest) {
 
   const templateId = version.template_id;
 
-  // 2) quyền: admin OR (author/editor trên book)
+  // 4) quyền: admin OR (author/editor trên book)
   const { data: profile, error: pErr } = await supabase
     .from("profiles")
     .select("id,system_role")
@@ -367,7 +366,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 3) load book
+  // 5) load book
   const { data: book, error: bErr } = await admin
     .from("books")
     .select("id,title,unit_name")
@@ -376,9 +375,12 @@ export async function POST(req: NextRequest) {
 
   if (bErr) return NextResponse.json({ error: bErr.message }, { status: 500 });
   if (!book)
-    return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
+    return NextResponse.json(
+      { error: "Không tìm thấy book" },
+      { status: 404 }
+    );
 
-  // 4) load template
+  // 6) load template
   const { data: tpl, error: tErr } = await admin
     .from("book_templates")
     .select(
@@ -390,29 +392,10 @@ export async function POST(req: NextRequest) {
 
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
   if (!tpl)
-    return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
-
-  // 5) create render job (log)
-  const { data: render, error: rInsErr } = await admin
-    .from("book_renders")
-    .insert({
-      book_id: book.id,
-      version_id: version.id,
-      template_id: tpl.id,
-      status: "rendering",
-      created_by: user.id,
-    })
-    .select("id")
-    .maybeSingle();
-
-  if (rInsErr || !render?.id) {
     return NextResponse.json(
-      { error: "Không tạo được render job", detail: rInsErr?.message },
-      { status: 500 }
+      { error: "Không tìm thấy template" },
+      { status: 404 }
     );
-  }
-
-  const renderId = render.id;
 
   try {
     // 1) nodes chỉ subtree của tocItemId
@@ -421,7 +404,7 @@ export async function POST(req: NextRequest) {
 
     const chapterTitle = nodes[0]?.chapterTitle || nodes[0]?.title || "";
 
-    // 2) Token replace
+    // 2) Token replace (chỉ cho header/footer, không dùng cover/front/toc)
     const year = new Date().getFullYear().toString();
     const token = (s?: string) =>
       (s || "")
@@ -429,9 +412,6 @@ export async function POST(req: NextRequest) {
         .replaceAll("{{YEAR}}", esc(year))
         .replaceAll("{{CHAPTER_TITLE}}", esc(chapterTitle || ""));
 
-    const cover = token(tpl.cover_html);
-    const front = token(tpl.front_matter_html);
-    const toc = token(tpl.toc_html);
     const header = token(tpl.header_html);
     const footer = token(tpl.footer_html);
 
@@ -441,22 +421,22 @@ export async function POST(req: NextRequest) {
     const cjkInlineCSS = cjkBase64
       ? `
       @font-face {
-      font-family: "CJK-Fallback";
-      src: url(data:font/opentype;base64,${cjkBase64}) format("opentype");
-      font-weight: normal;
-      font-style: normal;
+        font-family: "CJK-Fallback";
+        src: url(data:font/opentype;base64,${cjkBase64}) format("opentype");
+        font-weight: normal;
+        font-style: normal;
       }
       `
       : "";
-    
+
     const cssWithAbsoluteFonts =
       cjkInlineCSS +
       (tpl.css || "")
-      .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
-      .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
-      .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
+        .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
+        .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
+        .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
 
-    // 3) MAIN HTML (chỉ nodes của chương)
+    // 3) MAIN HTML (chỉ nodes của chương, giữ layout 2 cột)
     const main = nodes
       .map((n) => {
         const isRoot = n.depth === 1;
@@ -476,7 +456,9 @@ export async function POST(req: NextRequest) {
         return `
 <section class="${isRoot ? "chapter" : "section"}" id="${esc(
           n.id
-        )}" data-toc-item="${esc(n.toc_item_id)}" data-depth="${n.depth}" data-chapter-title="${esc(
+        )}" data-toc-item="${esc(
+          n.toc_item_id
+        )}" data-depth="${n.depth}" data-chapter-title="${esc(
           n.chapterTitle
         )}">
   ${runningChapter}
@@ -486,40 +468,22 @@ export async function POST(req: NextRequest) {
       })
       .join("\n");
 
-    // 4) TOC list (chỉ subtree)
-    const tocList = nodes
-      .map((n) => {
-        const pad = Math.max(0, (n.depth - 1) * 14);
-        return `
-<li style="padding-left:${pad}px">
-  <a href="#${esc(n.id)}">${esc(n.title)}</a>
-  <span class="dots"></span>
-  <span class="page" data-toc-target="#${esc(n.id)}"></span>
-</li>`;
-      })
-      .join("\n");
-
-    // 5) HTML tổng
+    // 4) HTML tổng – ❌ không cover, không front matter, không TOC
+    const safeChapterForTitle = chapterTitle || book.title;
     const html = `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8"/>
-  <title>${esc(book.title)} – v${version.version_no} – Preview</title>
+  <title>${esc(
+    book.title
+  )} – v${version.version_no} – Preview chương: ${esc(
+      safeChapterForTitle
+    )}</title>
   <style>${cssWithAbsoluteFonts}</style>
 </head>
 <body>
-  ${cover || ""}
-  ${front || ""}
   ${header || ""}
   ${footer || ""}
-
-  ${toc || ""}
-  <script>
-    (function(){
-      var ol = document.getElementById("toc-list");
-      if (ol) ol.innerHTML = ${JSON.stringify(tocList)};
-    })();
-  </script>
 
   <main id="book-content">
     ${main}
@@ -527,38 +491,18 @@ export async function POST(req: NextRequest) {
 
   <script>
     window.PagedConfig = window.PagedConfig || {};
-    window.PagedConfig.after = function(flow){
-      try{
-        var map = {};
-        flow.pages.forEach(function(page, idx){
-          var pn = (idx + 1).toString();
-          var elts = page.element.querySelectorAll("[id]");
-          elts.forEach(function(el){
-            if (!map[el.id]) map[el.id] = pn;
-          });
-        });
-
-        document.querySelectorAll("[data-toc-target]").forEach(function(span){
-          var sel = span.getAttribute("data-toc-target") || "";
-          if (!sel.startsWith("#")) return;
-          var id = sel.slice(1);
-          span.setAttribute("data-page-number", map[id] || "");
-          span.textContent = map[id] || "";
-        });
-      } catch(e){}
-      window.__PAGED_DONE__ = true;
-    };
+    // Không cần after() vì không có Mục lục; Paged.js chỉ dùng để render @page, header/footer, phân trang.
   </script>
 
   <script src="https://unpkg.com/pagedjs/dist/paged.polyfill.js"></script>
 </body>
 </html>`;
 
-    // 6) Launch Chromium
+    // 5) Launch Chromium & render PDF
     const browser = await launchBrowser();
     const page = await browser.newPage();
 
-    // ✅ Debug: nếu font fail sẽ thấy log Vercel
+    // Debug font nếu cần
     page.on("requestfailed", (r) => {
       const url = r.url();
       if (url.includes("/fonts/")) {
@@ -568,13 +512,15 @@ export async function POST(req: NextRequest) {
 
     await page.setContent(html, { waitUntil: "load" });
 
-    // ✅ Chờ font ready + network idle
-    await page.evaluate(() => document.fonts.ready);
+    // Chờ fonts + network idle + Paged.js paginate xong
+    await page.evaluate(() => (document as any).fonts?.ready);
     await page.waitForNetworkIdle({ idleTime: 500, timeout: 30000 });
 
-    // chờ Paged.js paginate xong
-    await page.waitForFunction(() => (window as any).__PAGED_DONE__ === true, {
-      timeout: 120000,
+    await page.waitForFunction(
+      () => (window as any).Paged !== undefined || (window as any).__pagedjs__done,
+      { timeout: 120000 }
+    ).catch(() => {
+      // Nếu không bắt được flag, vẫn tiếp tục; Paged.js thường hoàn thành khá nhanh.
     });
 
     const pdfBuffer = await page.pdf({
@@ -586,56 +532,22 @@ export async function POST(req: NextRequest) {
 
     await browser.close();
 
-    // 7) Upload preview (path theo tocItem để không đè)
-    const pdf_path = `item/${book.id}/version/${version.id}/toc/${tocItemId}/render/${renderId}.pdf`;
+    // 6) Trả PDF trực tiếp, không upload, không ghi DB
+    const filename = `preview-${book.id}-${version.id}-${tocItemId}.pdf`;
 
-    const { error: upErr } = await admin.storage
-      .from(BUCKET_PREVIEW)
-      .upload(pdf_path, pdfBuffer, {
-        contentType: "application/pdf",
-        upsert: true,
-      });
-
-    if (upErr) throw new Error("Upload preview PDF failed: " + upErr.message);
-
-    await admin
-      .from("book_renders")
-      .update({
-        status: "done",
-        pdf_path,
-        finished_at: new Date().toISOString(),
-        error: null,
-      })
-      .eq("id", renderId);
-
-    const { data: signed, error: sErr } = await admin.storage
-      .from(BUCKET_PREVIEW)
-      .createSignedUrl(pdf_path, SIGNED_EXPIRES_SEC);
-
-    if (sErr || !signed?.signedUrl) {
-      return NextResponse.json({ ok: true, render_id: renderId, pdf_path });
-    }
-
-    return NextResponse.json({
-      ok: true,
-      render_id: renderId,
-      preview_url: signed.signedUrl,
+    return new NextResponse(pdfBuffer, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `inline; filename="${filename}"`,
+      },
     });
   } catch (e: any) {
-    await admin
-      .from("book_renders")
-      .update({
-        status: "error",
-        error: e?.message || String(e),
-        finished_at: new Date().toISOString(),
-      })
-      .eq("id", renderId);
-
+    console.error("Preview item PDF failed:", e);
     return NextResponse.json(
       {
         error: "Preview item PDF failed",
         detail: e?.message || String(e),
-        render_id: renderId,
       },
       { status: 500 }
     );
