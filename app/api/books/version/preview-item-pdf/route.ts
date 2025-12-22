@@ -435,19 +435,11 @@ ${cssWithAbsoluteFonts}
 `;
 
     // 3) MAIN HTML (chỉ nodes của chương, thêm đánh số chương depth=1)
-    let chapterCounter = 0;
-
     const main = nodes
       .map((n) => {
         const isRoot = n.depth === 1;
         const tag = isRoot ? "h1" : n.depth === 2 ? "h2" : "h3";
-
-        let title = esc(n.title);
-        if (isRoot) {
-          chapterCounter += 1;
-          title = `${chapterCounter}. ${title}`;
-        }
-
+        const title = esc(n.title);
         const runningChapter = isRoot
           ? `<div class="runningHeaderRight" style="position: running(runningHeaderRight);">${esc(
               n.title
