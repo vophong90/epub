@@ -523,7 +523,7 @@ export async function POST(req: NextRequest) {
       // Nếu không bắt được flag, vẫn tiếp tục; Paged.js thường hoàn thành khá nhanh.
     });
 
-    const pdfBuffer = await page.pdf({
+       const pdfBuffer = await page.pdf({
       format: "A4",
       printBackground: true,
       preferCSSPageSize: true,
@@ -535,7 +535,10 @@ export async function POST(req: NextRequest) {
     // 6) Trả PDF trực tiếp, không upload, không ghi DB
     const filename = `preview-${book.id}-${version.id}-${tocItemId}.pdf`;
 
-    return new NextResponse(pdfBuffer, {
+    // Bọc pdfBuffer vào Blob để hợp kiểu BodyInit
+    const blob = new Blob([pdfBuffer], { type: "application/pdf" });
+
+    return new NextResponse(blob, {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
