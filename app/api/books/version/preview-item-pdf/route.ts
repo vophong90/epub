@@ -24,6 +24,29 @@ function esc(s: string) {
     .replaceAll('"', "&quot;");
 }
 
+function getSiteOrigin(req: NextRequest) {
+  // ưu tiên env (nếu bạn đã set)
+  const env =
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.SITE_URL ||
+    process.env.VERCEL_URL;
+
+  if (env) {
+    // VERCEL_URL thường là domain không có https
+    if (env.startsWith("http")) return env.replace(/\/+$/, "");
+    return `https://${env}`.replace(/\/+$/, "");
+  }
+
+  // fallback theo headers proxy
+  const proto = req.headers.get("x-forwarded-proto") || "https";
+  const host =
+    req.headers.get("x-forwarded-host") ||
+    req.headers.get("host") ||
+    new URL(req.url).host;
+
+  return `${proto}://${host}`.replace(/\/+$/, "");
+}
+
 /** DB row types tối giản */
 type TocItemRow = {
   id: string;
@@ -406,6 +429,11 @@ export async function POST(req: NextRequest) {
     const toc = token(tpl.toc_html);
     const header = token(tpl.header_html);
     const footer = token(tpl.footer_html);
+    const origin = getSiteOrigin(req);
+    const cssWithAbsoluteFonts = (tpl.css || "").replaceAll(
+      'url("/fonts/',
+      `url("${origin}/fonts/`
+    );
 
     // 3) MAIN HTML (chỉ nodes của chương)
     const main = nodes
@@ -456,7 +484,7 @@ export async function POST(req: NextRequest) {
 <head>
   <meta charset="utf-8"/>
   <title>${esc(book.title)} – v${version.version_no} – Preview</title>
-  <style>${tpl.css}</style>
+  <style>${cssWithAbsoluteFonts}</style>
 </head>
 <body>
   ${cover || ""}
@@ -509,6 +537,8 @@ export async function POST(req: NextRequest) {
     const browser = await launchBrowser();
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "load" });
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForNetworkIdle({ idleTime: 500, timeout: 30000 });
 
     // chờ Paged.js paginate xong
     await page.waitForFunction(() => (window as any).__PAGED_DONE__ === true, {
