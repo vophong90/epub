@@ -472,44 +472,39 @@ export async function POST(req: NextRequest) {
       })
       .join("\n");
 
-// 4) TOC list — số cấp do template quyết định (toc_depth)
+    // 4) TOC list — số cấp do template quyết định (toc_depth)
     let chapterCounter = 0;
     const tocItems: string[] = [];
-
+    
     for (const n of nodes) {
       if (n.depth < 1 || n.depth > tocDepth) continue;
-
+      
       const pad = tocDepth > 1 ? Math.max(0, (n.depth - 1) * 14) : 0;
       const padAttr = pad ? ` style="padding-left:${pad}px"` : "";
-
-      // Nhãn hiển thị trong MỤC LỤC
+      
       let label = esc(n.title);
       if (n.depth === 1) {
         chapterCounter += 1;
-        label = `${chapterCounter}. ${label}`; // ví dụ: "1. SỐT"
+        label = `${chapterCounter}. ${label}`; // Ví dụ: "1. SỐT"
       }
-
       tocItems.push(`
-<li${padAttr}>
-  <a href="#${esc(n.id)}">${label}</a>
-  <span class="dots"></span>
-  <span class="page" data-toc-target="#${esc(n.id)}"></span>
-</li>`);
+      <li${padAttr}>
+      <a href="#${esc(n.id)}">${label}</a>
+      </li>`);
     }
-
+    
     const tocList = tocItems.join("\n");
-
     const html = `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8"/>
-  <title>${esc(book.title)} – v${version.version_no}</title>
-  <style>
-${inlineFontCSS}
-${cssWithAbsoluteFonts}
-  </style>
-</head>
-<body>
+    <html>
+    <head>
+    <meta charset="utf-8"/>
+    <title>${esc(book.title)} – v${version.version_no}</title>
+    <style>
+    ${inlineFontCSS}
+    ${cssWithAbsoluteFonts}
+    </style>
+    </head>
+    <body>
   ${cover || ""}
   ${front || ""}
   ${header || ""}
