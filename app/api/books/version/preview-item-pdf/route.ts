@@ -421,14 +421,17 @@ export async function POST(req: NextRequest) {
     // Dùng URL tuyệt đối tới font trong /public/fonts thay vì base64
     const fontUrl = `${origin}/fonts/NotoSerifCJKsc-Regular.otf`;
 
-    const cjkInlineCSS = `
-@font-face {
-  font-family: "CJK-Fallback";
-  src: url("${fontUrl}") format("opentype");
-  font-weight: normal;
-  font-style: normal;
-}
-`;
+    const cjkBase64 = loadCJKFontBase64();
+    const cjkInlineCSS = cjkBase64
+      ? `
+      @font-face {
+      font-family: "CJK-Fallback";
+      src: url("data:font/opentype;base64,${cjkBase64}") format("opentype");
+      font-weight: normal;
+      font-style: normal;
+      }
+      `
+      : "";
 
     // Patch lại url font trong CSS template
     const patchedTplCss = (tpl.css || "")
@@ -501,13 +504,16 @@ ${cjkFallbackPatch}
   <main id="book-content">
     ${main}
   </main>
-
+  
   <script>
-    window.PagedConfig = window.PagedConfig || {};
-    // Không cần after() vì không có Mục lục; Paged.js chỉ dùng để render @page, header/footer, phân trang.
+  window.PagedConfig = window.PagedConfig || {};
+  window.PagedConfig.after = function () {
+  window.__pagedjs__done = true;
+  };
   </script>
-
+  
   <script src="https://unpkg.com/pagedjs/dist/paged.polyfill.js"></script>
+
 </body>
 </html>`;
 
@@ -524,22 +530,32 @@ ${cjkFallbackPatch}
     });
 
     await page.setContent(html, { waitUntil: "load" });
-
-    // Chờ fonts + network idle + Paged.js paginate xong
-    await page.evaluate(() => (document as any).fonts?.ready);
-    await page.waitForNetworkIdle({ idleTime: 500, timeout: 30000 });
-
-    await page
-      .waitForFunction(
-        () =>
-          (window as any).Paged !== undefined ||
-          (window as any).__pagedjs__done,
-        { timeout: 120000 }
-      )
+    await page.evaluate(async () => {
+      if (document.fonts && document.fonts.ready) {
+        await document.fonts.ready;
+      }
+      return document.fonts?.status || "no-fonts-api";
+    })
       .catch(() => {
-        // Nếu không bắt được flag, vẫn tiếp tục; Paged.js thường hoàn thành khá nhanh.
+        
       });
-
+    
+    await page.waitForFunction(() => {
+      return !document.fonts || document.fonts.status === "loaded";
+    }, { timeout: 30000 })
+      .catch(() => {
+        
+      });
+    
+    await page.waitForNetworkIdle({ idleTime: 500, timeout: 30000 });
+    await page.waitForFunction(
+      () => (window as any).__pagedjs__done === true,
+      { timeout: 120000 }
+    )
+      .catch(() => {
+        
+      });
+    
     const pdfBuffer = await page.pdf({
       format: "A4",
       printBackground: true,
