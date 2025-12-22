@@ -439,8 +439,8 @@ const patchedTplCss =
 // ⚠️ Quan trọng: ép body/p/li/... dùng CJK-Fallback làm fallback
 const cjkFallbackPatch = cjkBase64
   ? `
-body, p, span, li, td, th, h1, h2, h3, h4, h5, h6 {
-  font-family: "Times New Roman", "CJK-Fallback", serif;
+html, body, p, span, li, td, th, h1, h2, h3, h4, h5, h6, em, i, strong, b {
+  font-family: "CJK-Fallback", "Times New Roman", serif !important;
 }
 `
   : "";
