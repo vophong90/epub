@@ -414,43 +414,39 @@ export async function POST(req: NextRequest) {
 
     const header = token(tpl.header_html);
     const footer = token(tpl.footer_html);
-
-    // ✅ FONT FIX: đổi url(/fonts/...) => absolute để chromium serverless load được
+    
     const origin = getSiteOrigin(req);
     const cjkBase64 = loadCJKFontBase64();
     const cjkInlineCSS = cjkBase64
-  ? `
-@font-face {
-  font-family: "CJK-Fallback";
-  src: url("data:font/opentype;base64,${cjkBase64}") format("opentype");
-  font-weight: normal;
-  font-style: normal;
-}
-`
-  : "";
-
-// Patch lại url font trong CSS template
-const patchedTplCss =
-  (tpl.css || "")
-    .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
-    .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
-    .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
-
-// ⚠️ Quan trọng: ép body/p/li/... dùng CJK-Fallback làm fallback
-const cjkFallbackPatch = cjkBase64
-  ? `
-html, body, p, span, li, td, th, h1, h2, h3, h4, h5, h6, em, i, strong, b {
-  font-family: "CJK-Fallback", "Times New Roman", serif !important;
-}
-`
-  : "";
-
-// CSS cuối cùng đưa vào HTML
-const cssWithAbsoluteFonts = `
-${cjkInlineCSS}
-${patchedTplCss}
-${cjkFallbackPatch}
-`;
+      ? `
+      @font-face {
+      font-family: "CJK-Fallback";
+      src: url("data:font/opentype;base64,${cjkBase64}") format("opentype");
+      font-weight: normal;
+      font-style: normal;
+      }
+      `
+      : "";
+    
+    // Patch lại url font trong CSS template
+    const patchedTplCss = (tpl.css || "")
+      .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
+      .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
+      .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
+    
+    const cjkFallbackPatch = cjkBase64
+      ? `
+      html, body, p, span, li, td, th, h1, h2, h3, h4, h5, h6, em, i, strong, b {
+      font-family: "Times New Roman", "CJK-Fallback", serif !important;
+      }
+      `
+      : "";
+    
+    const cssWithAbsoluteFonts = `
+    ${cjkInlineCSS}
+    ${patchedTplCss}
+    ${cjkFallbackPatch}
+    `;
 
     // 3) MAIN HTML (chỉ nodes của chương, giữ layout 2 cột)
     const main = nodes
