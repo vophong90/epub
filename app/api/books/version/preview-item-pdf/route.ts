@@ -232,7 +232,6 @@ async function buildNodesForSubtree(
   function walkFrom(parentId: string, depth: number) {
     const kids = children.get(parentId) || [];
     for (const it of kids) {
-      // chỉ đi trong subtree (dù kids đã thuộc subtree theo collect)
       pushNode(it, depth);
       walkFrom(it.id, depth + 1);
     }
@@ -254,6 +253,7 @@ async function launchBrowser() {
   const browser = await puppeteer.launch({
     args: chromium.args,
     executablePath,
+    headless: chromium.headless, // ✅ ổn định trên serverless
   });
 
   return browser;
@@ -341,18 +341,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: permErr.message }, { status: 500 });
     }
     canRender = !!perm;
-
-    // ✅ OPTIONAL: nếu bạn có bảng phân công theo toc_item thì check ở đây
-    // Ví dụ:
-    // if (perm?.role === "author") {
-    //   const { data: asg } = await supabase
-    //     .from("toc_assignments")
-    //     .select("id")
-    //     .eq("toc_item_id", tocItemId)
-    //     .eq("user_id", user.id)
-    //     .maybeSingle();
-    //   if (!asg) canRender = false;
-    // }
   }
 
   if (!canRender) {
@@ -429,11 +417,17 @@ export async function POST(req: NextRequest) {
     const toc = token(tpl.toc_html);
     const header = token(tpl.header_html);
     const footer = token(tpl.footer_html);
+
+    /**
+     * ✅ FONT FIX: Puppeteer/Paged.js chạy trong chromium serverless
+     * - url("/fonts/...") đôi khi fail do base URL trống => đổi sang absolute origin
+     * - robust cho ", ', và không-quote
+     */
     const origin = getSiteOrigin(req);
-    const cssWithAbsoluteFonts = (tpl.css || "").replaceAll(
-      'url("/fonts/',
-      `url("${origin}/fonts/`
-    );
+    const cssWithAbsoluteFonts = (tpl.css || "")
+      .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
+      .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
+      .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
 
     // 3) MAIN HTML (chỉ nodes của chương)
     const main = nodes
@@ -536,7 +530,18 @@ export async function POST(req: NextRequest) {
     // 6) Launch Chromium
     const browser = await launchBrowser();
     const page = await browser.newPage();
+
+    // ✅ Debug: nếu font fail sẽ thấy ngay trong log Vercel
+    page.on("requestfailed", (r) => {
+      const url = r.url();
+      if (url.includes("/fonts/")) {
+        console.error("FONT REQUEST FAILED:", url, r.failure()?.errorText);
+      }
+    });
+
     await page.setContent(html, { waitUntil: "load" });
+
+    // ✅ Chờ font ready + network idle (đảm bảo CJK font tải xong trước khi pdf)
     await page.evaluate(() => document.fonts.ready);
     await page.waitForNetworkIdle({ idleTime: 500, timeout: 30000 });
 
