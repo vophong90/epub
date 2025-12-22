@@ -57,6 +57,21 @@ type VersionRow = {
   template_id: string | null;
 };
 
+// ✅ Template row type (có toc_depth)
+type TemplateRow = {
+  id: string;
+  name: string | null;
+  css: string | null;
+  cover_html: string | null;
+  front_matter_html: string | null;
+  toc_html: string | null;
+  header_html: string | null;
+  footer_html: string | null;
+  page_size: string | null;
+  page_margin_mm: any;
+  toc_depth: number | null;
+};
+
 function makeAnchor(tocItemId: string, slug: string) {
   const safeSlug = (slug || "")
     .toLowerCase()
@@ -154,7 +169,10 @@ async function fetchAllTocContentsByItemIds(
  * - depth 2 => section
  * - depth 3+ => sub-sections
  */
-async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNode[]> {
+async function buildNodesFromDB(
+  admin: any,
+  versionId: string
+): Promise<RenderNode[]> {
   // 1) load all toc items (FIX: pagination)
   const tocItems = await fetchAllTocItemsByVersion(admin, versionId);
 
@@ -186,7 +204,11 @@ async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNo
 
   const nodes: RenderNode[] = [];
 
-  function walk(parentId: string | null, depth: number, currentChapterTitle: string) {
+  function walk(
+    parentId: string | null,
+    depth: number,
+    currentChapterTitle: string
+  ) {
     const kids = children.get(parentId) || [];
     for (const it of kids) {
       const anchor = makeAnchor(it.id, it.slug);
@@ -254,10 +276,7 @@ export async function POST(req: NextRequest) {
 
   const versionId = (body.version_id || "").toString().trim();
   if (!versionId) {
-    return NextResponse.json(
-      { error: "version_id là bắt buộc" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "version_id là bắt buộc" }, { status: 400 });
   }
 
   // 1) load version + book_id + template_id (phải có trước để check quyền & template)
@@ -311,10 +330,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (!canRender) {
-    return NextResponse.json(
-      { error: "Bạn không có quyền render PDF" },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: "Bạn không có quyền render PDF" }, { status: 403 });
   }
 
   // 3) load book
@@ -331,14 +347,19 @@ export async function POST(req: NextRequest) {
   const { data: tpl, error: tErr } = await admin
     .from("book_templates")
     .select(
-      "id,name,css,cover_html,front_matter_html,toc_html,header_html,footer_html,page_size,page_margin_mm"
+      "id,name,css,cover_html,front_matter_html,toc_html,header_html,footer_html,page_size,page_margin_mm,toc_depth"
     )
     .eq("id", templateId)
     .eq("is_active", true)
-    .maybeSingle();
+    .maybeSingle<TemplateRow>();
 
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
   if (!tpl) return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
+
+  // ✅ normalize toc_depth (1..6), default 1
+  const tocDepth = Number.isFinite(Number(tpl.toc_depth))
+    ? Math.min(6, Math.max(1, Number(tpl.toc_depth)))
+    : 1;
 
   // 5) create render job
   const { data: render, error: rInsErr } = await admin
@@ -374,11 +395,11 @@ export async function POST(req: NextRequest) {
         .replaceAll("{{YEAR}}", esc(year))
         .replaceAll("{{CHAPTER_TITLE}}", "");
 
-    const cover = token(tpl.cover_html);
-    const front = token(tpl.front_matter_html);
-    const toc = token(tpl.toc_html);
-    const header = token(tpl.header_html);
-    const footer = token(tpl.footer_html);
+    const cover = token(tpl.cover_html || "");
+    const front = token(tpl.front_matter_html || "");
+    const toc = token(tpl.toc_html || "");
+    const header = token(tpl.header_html || "");
+    const footer = token(tpl.footer_html || "");
 
     // 3) MAIN HTML
     const main = nodes
@@ -410,12 +431,14 @@ export async function POST(req: NextRequest) {
       })
       .join("\n");
 
-    // 4) TOC list
+    // 4) TOC list — ✅ số cấp do template quyết định (toc_depth)
     const tocList = nodes
+      .filter((n) => n.depth >= 1 && n.depth <= tocDepth)
       .map((n) => {
-        const pad = Math.max(0, (n.depth - 1) * 14);
+        const pad = tocDepth > 1 ? Math.max(0, (n.depth - 1) * 14) : 0;
+        const padAttr = pad ? ` style="padding-left:${pad}px"` : "";
         return `
-<li style="padding-left:${pad}px">
+<li${padAttr}>
   <a href="#${esc(n.id)}">${esc(n.title)}</a>
   <span class="dots"></span>
   <span class="page" data-toc-target="#${esc(n.id)}"></span>
@@ -429,7 +452,7 @@ export async function POST(req: NextRequest) {
 <head>
   <meta charset="utf-8"/>
   <title>${esc(book.title)} – v${version.version_no}</title>
-  <style>${tpl.css}</style>
+  <style>${tpl.css || ""}</style>
 </head>
 <body>
   ${cover || ""}
