@@ -588,35 +588,37 @@ ${cssWithAbsoluteFonts}
     });
     
     await page.setContent(html, { waitUntil: "load" });
-    await page
-      .evaluate(async () => {
-        try {
-          // @ts-ignore
-          if (document.fonts?.ready) {
-            // @ts-ignore
-            await document.fonts.ready;
-          }
-        } catch (e) {
-          // bỏ qua
+    await page.evaluate(async () => {
+      try {
+        if (document.fonts?.ready) {
+          await document.fonts.ready;
         }
-      })
-      .catch(() => {});
+      } catch (e) {
+        
+      }
+    })
+  .catch(() => {
+    
+  });
 
     await page
       .waitForNetworkIdle({ idleTime: 500, timeout: 30000 })
       .catch(() => {});
 
-    await page
-      .waitForFunction(
+    try {
+      await page.waitForFunction(
         () =>
           (window as any).__PAGED_DONE__ === true ||
-          (window as any).__pagedjs__done === true ||
           (window as any).Paged !== undefined,
         { timeout: 120000 }
-      )
-      .catch(() => {
-      
+      );
+    } catch (e) {
+      await page.evaluate(() => {
+        const html = document.documentElement;
+        html.classList.remove("pagedjs-loading", "pagedjs-rendering");
+        (document.body as any).style.visibility = "visible";
       });
+    }
 
     const pdfBuffer = await page.pdf({
       format: "A4",
