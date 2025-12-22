@@ -17,7 +17,7 @@ type FormState = {
   description: string;
   page_size: string;
   page_margin_mm: Margin;
-  toc_depth: number; // ✅ NEW: số cấp mục lục
+  toc_depth: number; // ✅ số cấp mục lục
   css: string;
   cover_html: string;
   front_matter_html: string;
@@ -189,7 +189,7 @@ export default function NewTemplatePage() {
     description: "Template sách A4, serif, có TOC in + header/footer theo chương",
     page_size: "A4",
     page_margin_mm: { ...DEFAULT_MARGIN },
-    toc_depth: 2, // ✅ default: 2 cấp (Chương + Mục). Đổi tùy ý
+    toc_depth: 2, // default
     css: DEFAULT_CSS,
     cover_html: DEFAULT_COVER,
     front_matter_html: DEFAULT_FRONT,
@@ -229,7 +229,6 @@ export default function NewTemplatePage() {
     }));
   }
 
-  // ✅ clamp toc depth 1..6
   function updateTocDepth(value: string) {
     const n = parseInt(value, 10);
     const v = Number.isFinite(n) ? Math.min(6, Math.max(1, n)) : 1;
@@ -243,7 +242,6 @@ export default function NewTemplatePage() {
       return;
     }
 
-    // ✅ đảm bảo toc_depth gửi đúng (phòng user xóa input)
     const safePayload = {
       ...form,
       toc_depth: Math.min(6, Math.max(1, Number(form.toc_depth) || 1)),
@@ -300,7 +298,7 @@ export default function NewTemplatePage() {
           <div className="space-y-1">
             <label className="text-sm font-medium">Tên template</label>
             <input
-              className="w-full border rounded-lg px-3 py-2 text-sm"
+              className="w-full border rounded-lg px-3 py-2 text-sm h-10"
               value={form.name}
               onChange={(e) => updateField("name", e.target.value)}
               placeholder="Ví dụ: A4 – Serif – Chuẩn sách"
@@ -318,11 +316,12 @@ export default function NewTemplatePage() {
             />
           </div>
 
-          <div className="flex flex-wrap gap-4">
+          {/* ✅ FIX: canh hàng thẳng bằng grid + items-end */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
             <div className="space-y-1">
               <label className="text-sm font-medium">Khổ giấy</label>
               <select
-                className="border rounded-lg px-3 py-2 text-sm"
+                className="w-full border rounded-lg px-3 py-2 text-sm h-10"
                 value={form.page_size}
                 onChange={(e) => updateField("page_size", e.target.value)}
               >
@@ -331,27 +330,21 @@ export default function NewTemplatePage() {
               </select>
             </div>
 
-            {/* ✅ NEW: TOC depth */}
             <div className="space-y-1">
               <label className="text-sm font-medium">Số cấp mục lục (toc_depth)</label>
-              <div className="flex items-center gap-3">
-                <input
-                  type="number"
-                  min={1}
-                  max={6}
-                  className="w-28 border rounded-lg px-3 py-2 text-sm"
-                  value={form.toc_depth}
-                  onChange={(e) => updateTocDepth(e.target.value)}
-                />
-                <p className="text-xs text-gray-500">
-                  1 = chỉ Chương, 2 = Chương + Mục, 3+ = sâu hơn (tối đa 6).
-                </p>
-              </div>
+              <input
+                type="number"
+                min={1}
+                max={6}
+                className="w-full border rounded-lg px-3 py-2 text-sm h-10"
+                value={form.toc_depth}
+                onChange={(e) => updateTocDepth(e.target.value)}
+              />
             </div>
 
             <div className="space-y-1">
               <label className="text-sm font-medium">Kích hoạt (is_active)</label>
-              <div className="flex items-center gap-2 text-sm">
+              <div className="h-10 flex items-center gap-2 text-sm">
                 <input
                   id="is_active"
                   type="checkbox"
