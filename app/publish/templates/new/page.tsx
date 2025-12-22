@@ -17,6 +17,7 @@ type FormState = {
   description: string;
   page_size: string;
   page_margin_mm: Margin;
+  toc_depth: number; // ✅ NEW: số cấp mục lục
   css: string;
   cover_html: string;
   front_matter_html: string;
@@ -188,6 +189,7 @@ export default function NewTemplatePage() {
     description: "Template sách A4, serif, có TOC in + header/footer theo chương",
     page_size: "A4",
     page_margin_mm: { ...DEFAULT_MARGIN },
+    toc_depth: 2, // ✅ default: 2 cấp (Chương + Mục). Đổi tùy ý
     css: DEFAULT_CSS,
     cover_html: DEFAULT_COVER,
     front_matter_html: DEFAULT_FRONT,
@@ -227,6 +229,13 @@ export default function NewTemplatePage() {
     }));
   }
 
+  // ✅ clamp toc depth 1..6
+  function updateTocDepth(value: string) {
+    const n = parseInt(value, 10);
+    const v = Number.isFinite(n) ? Math.min(6, Math.max(1, n)) : 1;
+    setForm((prev) => ({ ...prev, toc_depth: v }));
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.name.trim()) {
@@ -234,12 +243,18 @@ export default function NewTemplatePage() {
       return;
     }
 
+    // ✅ đảm bảo toc_depth gửi đúng (phòng user xóa input)
+    const safePayload = {
+      ...form,
+      toc_depth: Math.min(6, Math.max(1, Number(form.toc_depth) || 1)),
+    };
+
     try {
       setSaving(true);
       const res = await fetch("/api/book-templates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify(safePayload),
       });
       const j = await res.json().catch(() => ({} as any));
       if (!res.ok) {
@@ -314,6 +329,24 @@ export default function NewTemplatePage() {
                 <option value="A4">A4</option>
                 <option value="A5">A5</option>
               </select>
+            </div>
+
+            {/* ✅ NEW: TOC depth */}
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Số cấp mục lục (toc_depth)</label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={1}
+                  max={6}
+                  className="w-28 border rounded-lg px-3 py-2 text-sm"
+                  value={form.toc_depth}
+                  onChange={(e) => updateTocDepth(e.target.value)}
+                />
+                <p className="text-xs text-gray-500">
+                  1 = chỉ Chương, 2 = Chương + Mục, 3+ = sâu hơn (tối đa 6).
+                </p>
+              </div>
             </div>
 
             <div className="space-y-1">
@@ -460,7 +493,7 @@ export default function NewTemplatePage() {
             <label className="text-sm font-medium">
               Mục lục (toc_html – cần có{" "}
               <code className="px-1 rounded bg-gray-200 text-[11px]">
-                {"<ol id=\"toc-list\">"}
+                {'<ol id="toc-list">'}
               </code>
               )
             </label>
