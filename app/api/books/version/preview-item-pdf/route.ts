@@ -13,7 +13,7 @@ export const maxDuration = 300;
 const BUCKET_PREVIEW = "pdf_previews";
 const SIGNED_EXPIRES_SEC = 60 * 10;
 
-// ✅ Body mới: version_id + toc_item_id
+// Body: preview đúng 1 chương (toc_item)
 type Body = { version_id?: string; toc_item_id?: string };
 
 function esc(s: string) {
@@ -31,7 +31,7 @@ type TocItemRow = {
   title: string;
   slug: string;
   order_index: number;
-  book_version_id?: string; // (optional) nếu bạn select thêm để check
+  book_version_id?: string;
 };
 
 type TocContentRow = {
@@ -45,7 +45,7 @@ type RenderNode = {
   toc_item_id: string;
   title: string;
   slug: string;
-  depth: number; // 1 = root preview item
+  depth: number; // root preview item => 1
   chapterTitle: string;
   html: string;
 };
@@ -68,11 +68,15 @@ function makeAnchor(tocItemId: string, slug: string) {
 
 /**
  * =========================
- * Pagination helpers (giữ nguyên như render-pdf)
+ * Pagination helpers (fix 1000 rows cap)
  * =========================
  */
 
-async function fetchAllTocItemsByVersion(admin: any, versionId: string): Promise<TocItemRow[]> {
+/** Fetch ALL toc_items for a version using pagination (.range) */
+async function fetchAllTocItemsByVersion(
+  admin: any,
+  versionId: string
+): Promise<TocItemRow[]> {
   const PAGE = 1000;
   let from = 0;
   const all: TocItemRow[] = [];
@@ -98,11 +102,18 @@ async function fetchAllTocItemsByVersion(admin: any, versionId: string): Promise
   return all;
 }
 
-async function fetchAllTocContentsByItemIds(admin: any, tocItemIds: string[]): Promise<TocContentRow[]> {
+/**
+ * Fetch toc_contents by item ids, in batches + pagination.
+ */
+async function fetchAllTocContentsByItemIds(
+  admin: any,
+  tocItemIds: string[]
+): Promise<TocContentRow[]> {
   if (!tocItemIds.length) return [];
 
   const ID_CHUNK = 500;
   const PAGE = 1000;
+
   const all: TocContentRow[] = [];
 
   for (let i = 0; i < tocItemIds.length; i += ID_CHUNK) {
@@ -132,10 +143,14 @@ async function fetchAllTocContentsByItemIds(admin: any, tocItemIds: string[]): P
 
 /**
  * ✅ Build nodes CHỈ cho subtree của toc_item_id
- * - depth tính lại từ root (toc_item_id) => root depth=1
+ * - depth tính lại từ root => root depth=1
  * - chapterTitle = root.title
  */
-async function buildNodesForSubtree(admin: any, versionId: string, rootItemId: string): Promise<RenderNode[]> {
+async function buildNodesForSubtree(
+  admin: any,
+  versionId: string,
+  rootItemId: string
+): Promise<RenderNode[]> {
   const tocItems = await fetchAllTocItemsByVersion(admin, versionId);
   if (!tocItems.length) return [];
 
@@ -143,9 +158,7 @@ async function buildNodesForSubtree(admin: any, versionId: string, rootItemId: s
   for (const it of tocItems) byId.set(it.id, it);
 
   const root = byId.get(rootItemId);
-  if (!root) {
-    throw new Error("Không tìm thấy toc_item_id trong version này");
-  }
+  if (!root) throw new Error("Không tìm thấy toc_item_id trong version này");
 
   // children map
   const children = new Map<string | null, TocItemRow[]>();
@@ -159,20 +172,16 @@ async function buildNodesForSubtree(admin: any, versionId: string, rootItemId: s
     children.set(k, arr);
   }
 
-  // collect subtree ids
-  const subtree: TocItemRow[] = [];
+  // collect subtree ids (root + descendants)
+  const subtreeIds: string[] = [];
   (function collect(id: string) {
-    const node = byId.get(id);
-    if (!node) return;
-    subtree.push(node);
+    subtreeIds.push(id);
     const kids = children.get(id) || [];
     for (const k of kids) collect(k.id);
-  })(rootItemId);
+  })(root.id);
 
-  const tocContents = await fetchAllTocContentsByItemIds(
-    admin,
-    subtree.map((x) => x.id)
-  );
+  // load contents only for subtree
+  const tocContents = await fetchAllTocContentsByItemIds(admin, subtreeIds);
 
   const contentByItem = new Map<string, TocContentRow>();
   for (const c of tocContents) contentByItem.set(c.toc_item_id, c);
@@ -180,39 +189,35 @@ async function buildNodesForSubtree(admin: any, versionId: string, rootItemId: s
   const nodes: RenderNode[] = [];
   const chapterTitle = root.title;
 
-  function walk(parentId: string | null, depth: number) {
-    const kids = parentId === null ? [root] : children.get(parentId) || [];
+  function pushNode(it: TocItemRow, depth: number) {
+    const anchor = makeAnchor(it.id, it.slug);
+    const c = contentByItem.get(it.id);
+    const cj = c?.content_json || {};
+    const html = typeof cj?.html === "string" ? cj.html : "";
+
+    nodes.push({
+      id: anchor,
+      toc_item_id: it.id,
+      title: it.title,
+      slug: it.slug,
+      depth,
+      chapterTitle,
+      html: html || "",
+    });
+  }
+
+  function walkFrom(parentId: string, depth: number) {
+    const kids = children.get(parentId) || [];
     for (const it of kids) {
-      const anchor = makeAnchor(it.id, it.slug);
-
-      const c = contentByItem.get(it.id);
-      const cj = c?.content_json || {};
-      const html = typeof cj?.html === "string" ? cj.html : "";
-
-      nodes.push({
-        id: anchor,
-        toc_item_id: it.id,
-        title: it.title,
-        slug: it.slug,
-        depth,
-        chapterTitle,
-        html: html || "",
-      });
-
-      // con của rootItemId trở đi
-      const nextKids = children.get(it.id) || [];
-      if (nextKids.length) {
-        for (const k of nextKids) {
-          // walk children explicitly (để depth tăng đều)
-        }
-        // gọi lại walk với parent=it.id
-        walk(it.id, depth + 1);
-      }
+      // chỉ đi trong subtree (dù kids đã thuộc subtree theo collect)
+      pushNode(it, depth);
+      walkFrom(it.id, depth + 1);
     }
   }
 
-  // root depth=1
-  walk(null, 1);
+  // ✅ Root depth=1, children start depth=2
+  pushNode(root, 1);
+  walkFrom(root.id, 2);
 
   return nodes;
 }
@@ -257,10 +262,16 @@ export async function POST(req: NextRequest) {
   const tocItemId = (body.toc_item_id || "").toString().trim();
 
   if (!versionId) {
-    return NextResponse.json({ error: "version_id là bắt buộc" }, { status: 400 });
+    return NextResponse.json(
+      { error: "version_id là bắt buộc" },
+      { status: 400 }
+    );
   }
   if (!tocItemId) {
-    return NextResponse.json({ error: "toc_item_id là bắt buộc" }, { status: 400 });
+    return NextResponse.json(
+      { error: "toc_item_id là bắt buộc" },
+      { status: 400 }
+    );
   }
 
   // 1) load version + book_id + template_id
@@ -271,9 +282,13 @@ export async function POST(req: NextRequest) {
     .maybeSingle<VersionRow>();
 
   if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 });
-  if (!version) return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
+  if (!version)
+    return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
   if (!version.template_id) {
-    return NextResponse.json({ error: "Phiên bản sách chưa được gán template" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Phiên bản sách chưa được gán template" },
+      { status: 400 }
+    );
   }
 
   const templateId = version.template_id;
@@ -299,16 +314,29 @@ export async function POST(req: NextRequest) {
       .in("role", ["author", "editor"])
       .maybeSingle();
 
-    if (permErr) return NextResponse.json({ error: permErr.message }, { status: 500 });
+    if (permErr) {
+      return NextResponse.json({ error: permErr.message }, { status: 500 });
+    }
     canRender = !!perm;
 
-    // ✅ (OPTION) Nếu bạn có bảng phân công theo toc_item, bạn thêm check ở đây.
-    // Ví dụ (đổi đúng tên bảng/field của bạn):
-    // if (perm?.role === "author") { check assignment tocItemId }
+    // ✅ OPTIONAL: nếu bạn có bảng phân công theo toc_item thì check ở đây
+    // Ví dụ:
+    // if (perm?.role === "author") {
+    //   const { data: asg } = await supabase
+    //     .from("toc_assignments")
+    //     .select("id")
+    //     .eq("toc_item_id", tocItemId)
+    //     .eq("user_id", user.id)
+    //     .maybeSingle();
+    //   if (!asg) canRender = false;
+    // }
   }
 
   if (!canRender) {
-    return NextResponse.json({ error: "Bạn không có quyền preview PDF" }, { status: 403 });
+    return NextResponse.json(
+      { error: "Bạn không có quyền preview PDF" },
+      { status: 403 }
+    );
   }
 
   // 3) load book
@@ -319,20 +347,24 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
 
   if (bErr) return NextResponse.json({ error: bErr.message }, { status: 500 });
-  if (!book) return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
+  if (!book)
+    return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
 
   // 4) load template
   const { data: tpl, error: tErr } = await admin
     .from("book_templates")
-    .select("id,name,css,cover_html,front_matter_html,toc_html,header_html,footer_html,page_size,page_margin_mm")
+    .select(
+      "id,name,css,cover_html,front_matter_html,toc_html,header_html,footer_html,page_size,page_margin_mm"
+    )
     .eq("id", templateId)
     .eq("is_active", true)
     .maybeSingle();
 
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
-  if (!tpl) return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
+  if (!tpl)
+    return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
 
-  // 5) create render job (giữ log giống route cũ)
+  // 5) create render job (log)
   const { data: render, error: rInsErr } = await admin
     .from("book_renders")
     .insert({
@@ -341,7 +373,6 @@ export async function POST(req: NextRequest) {
       template_id: tpl.id,
       status: "rendering",
       created_by: user.id,
-      // nếu bảng có cột "kind"/"scope" thì bạn thêm vào ở đây
     })
     .select("id")
     .maybeSingle();
@@ -356,9 +387,9 @@ export async function POST(req: NextRequest) {
   const renderId = render.id;
 
   try {
-    // 1) Build nodes chỉ subtree chương đang mở
+    // 1) nodes chỉ subtree của tocItemId
     const nodes = await buildNodesForSubtree(admin, versionId, tocItemId);
-    if (!nodes.length) throw new Error("Chương này không có TOC node để render");
+    if (!nodes.length) throw new Error("Chương này không có node để render");
 
     const chapterTitle = nodes[0]?.chapterTitle || nodes[0]?.title || "";
 
@@ -370,7 +401,7 @@ export async function POST(req: NextRequest) {
         .replaceAll("{{YEAR}}", esc(year))
         .replaceAll("{{CHAPTER_TITLE}}", esc(chapterTitle || ""));
 
-    const cover = token(tpl.cover_html); // (có thể bỏ cover/front cho preview, nhưng bạn có thể muốn giữ style)
+    const cover = token(tpl.cover_html);
     const front = token(tpl.front_matter_html);
     const toc = token(tpl.toc_html);
     const header = token(tpl.header_html);
@@ -379,10 +410,10 @@ export async function POST(req: NextRequest) {
     // 3) MAIN HTML (chỉ nodes của chương)
     const main = nodes
       .map((n) => {
-        const isChapter = n.depth === 1;
+        const isRoot = n.depth === 1;
         const tag = n.depth === 1 ? "h1" : n.depth === 2 ? "h2" : "h3";
 
-        const runningChapter = isChapter
+        const runningChapter = isRoot
           ? `<div class="runningHeaderRight" style="position: running(runningHeaderRight);">${esc(
               n.title
             )}</div>`
@@ -394,13 +425,13 @@ export async function POST(req: NextRequest) {
             : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
 
         return `
-<section class="${isChapter ? "chapter" : "section"}" id="${esc(
+<section class="${isRoot ? "chapter" : "section"}" id="${esc(
           n.id
         )}" data-toc-item="${esc(n.toc_item_id)}" data-depth="${n.depth}" data-chapter-title="${esc(
           n.chapterTitle
         )}">
   ${runningChapter}
-  <${tag} class="${isChapter ? "chapter-title" : ""}">${esc(n.title)}</${tag}>
+  <${tag} class="${isRoot ? "chapter-title" : ""}">${esc(n.title)}</${tag}>
   ${bodyHtml}
 </section>`;
       })
@@ -420,7 +451,6 @@ export async function POST(req: NextRequest) {
       .join("\n");
 
     // 5) HTML tổng
-    // ✅ Bạn có thể bỏ cover/front nếu muốn preview "nhẹ", nhưng để giữ layout giống thật, mình giữ nguyên.
     const html = `<!doctype html>
 <html>
 <head>
@@ -475,11 +505,12 @@ export async function POST(req: NextRequest) {
 </body>
 </html>`;
 
-    // 6) Launch chromium + render PDF
+    // 6) Launch Chromium
     const browser = await launchBrowser();
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "load" });
 
+    // chờ Paged.js paginate xong
     await page.waitForFunction(() => (window as any).__PAGED_DONE__ === true, {
       timeout: 120000,
     });
@@ -493,7 +524,7 @@ export async function POST(req: NextRequest) {
 
     await browser.close();
 
-    // 7) Upload preview (path có tocItemId để không đè lẫn nhau)
+    // 7) Upload preview (path theo tocItem để không đè)
     const pdf_path = `item/${book.id}/version/${version.id}/toc/${tocItemId}/render/${renderId}.pdf`;
 
     const { error: upErr } = await admin.storage
