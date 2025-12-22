@@ -37,6 +37,7 @@ export default function PublishPage() {
 
   const [previewUrl, setPreviewUrl] = useState<string>("");
   const [rendering, setRendering] = useState(false);
+  const [exportingDocx, setExportingDocx] = useState(false); // mới
   const [publishing, setPublishing] = useState(false);
   const [message, setMessage] = useState<string>("");
   const [error, setError] = useState<string>("");
@@ -128,17 +129,17 @@ export default function PublishPage() {
       });
 
       const j = await res.json().catch(() => ({}));
-      if (!res.ok || j.error) {
-        console.error("render error:", j.error || res.status);
+      if (!res.ok || (j as any).error) {
+        console.error("render error:", (j as any).error || res.status);
         setError(
-          j.error ||
+          (j as any).error ||
             "Render PDF thất bại. Vui lòng kiểm tra lại nội dung và thử lại."
         );
         return;
       }
 
-      if (j.preview_url) {
-        setPreviewUrl(j.preview_url);
+      if ((j as any).preview_url) {
+        setPreviewUrl((j as any).preview_url);
         setMessage("Render thành công. Xem bản xem thử bên dưới.");
       } else {
         setMessage("Render thành công nhưng không có preview_url trả về.");
@@ -148,6 +149,64 @@ export default function PublishPage() {
       setError("Lỗi kết nối khi gọi API render-pdf.");
     } finally {
       setRendering(false);
+    }
+  }
+
+  /** Xuất Word (DOCX) dùng API render-docx */
+  async function handleExportDocx() {
+    setError("");
+    setMessage("");
+
+    if (!selectedVersionId || !selectedTemplateId) {
+      setError("Hãy chọn đầy đủ Sách, Phiên bản và Template trước khi xuất Word.");
+      return;
+    }
+
+    setExportingDocx(true);
+    try {
+      const res = await fetch("/api/books/version/render-docx", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          version_id: selectedVersionId,
+          template_id: selectedTemplateId,
+        }),
+      });
+
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        console.error("render-docx error:", (j as any).error || res.status);
+        setError(
+          (j as any).error ||
+            "Xuất Word thất bại. Vui lòng kiểm tra lại nội dung và thử lại."
+        );
+        return;
+      }
+
+      const blob = await res.blob();
+      // cố gắng lấy tên file từ header nếu có
+      const disposition = res.headers.get("content-disposition") || "";
+      let filename = "book.docx";
+      const match = disposition.match(/filename="(.+?)"/i);
+      if (match && match[1]) {
+        filename = match[1];
+      }
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      setMessage("Đã xuất file Word (DOCX). Vui lòng kiểm tra file tải xuống.");
+    } catch (e: any) {
+      console.error(e);
+      setError("Lỗi kết nối khi gọi API render-docx.");
+    } finally {
+      setExportingDocx(false);
     }
   }
 
@@ -178,15 +237,18 @@ export default function PublishPage() {
       });
 
       const j = await res.json().catch(() => ({}));
-      if (!res.ok || j.error) {
-        console.error("publish error:", j.error || res.status);
+      if (!res.ok || (j as any).error) {
+        console.error("publish error:", (j as any).error || res.status);
         setError(
-          j.error || "Publish thất bại. Vui lòng kiểm tra file PDF và thử lại."
+          (j as any).error ||
+            "Publish thất bại. Vui lòng kiểm tra file PDF và thử lại."
         );
         return;
       }
 
-      setMessage("Publish thành công. Bạn có thể ra trang Xem tài liệu để kiểm tra.");
+      setMessage(
+        "Publish thành công. Bạn có thể ra trang Xem tài liệu để kiểm tra."
+      );
     } catch (e: any) {
       console.error(e);
       setError("Lỗi kết nối khi gọi API publish.");
@@ -311,7 +373,7 @@ export default function PublishPage() {
         </div>
       </div>
 
-      {/* Nút Render */}
+      {/* Nút Render + Xuất Word */}
       <div className="flex items-center gap-3">
         <button
           type="button"
@@ -320,6 +382,15 @@ export default function PublishPage() {
           className="inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50"
         >
           {rendering ? "Đang render..." : "Render PDF xem thử"}
+        </button>
+
+        <button
+          type="button"
+          onClick={handleExportDocx}
+          disabled={exportingDocx || !selectedVersionId || !selectedTemplateId}
+          className="inline-flex items-center px-4 py-2 rounded-lg border border-indigo-600 text-indigo-600 text-sm font-semibold hover:bg-indigo-50 disabled:opacity-50"
+        >
+          {exportingDocx ? "Đang xuất Word..." : "Xuất Word (DOCX)"}
         </button>
       </div>
 
