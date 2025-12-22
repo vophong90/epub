@@ -1,14 +1,9 @@
-// app/api/books/version/render-docx/route.ts
+// app/api/books/version/render-doc/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getRouteClient } from "@/lib/supabaseServer";
 import { getAdminClient } from "@/lib/supabase-admin";
-
 import fs from "fs";
 import path from "path";
-
-// ❗ Dùng require vì html-to-docx là CommonJS
-// (TypeScript vẫn build OK trong môi trường Next Node.js)
-const HTMLtoDOCX = require("html-to-docx");
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,10 +11,8 @@ export const maxDuration = 300;
 
 type Body = {
   version_id?: string;
-  template_id?: string; // cho phép override khi cần (giống render-pdf)
+  template_id?: string; // cho phép override
 };
-
-const BUCKET_PREVIEW = "pdf_previews"; // không dùng ở đây, chỉ giữ cho đồng nhất
 
 function esc(s: string) {
   return s
@@ -60,12 +53,12 @@ function loadCJKFontBase64() {
     const buf = fs.readFileSync(fontPath);
     return buf.toString("base64");
   } catch (e) {
-    console.error("❌ Load CJK font failed (DOCX):", e);
+    console.error("❌ Load CJK font failed (DOC):", e);
     return null;
   }
 }
 
-/** DB row types */
+/** DB types */
 type TocItemRow = {
   id: string;
   parent_id: string | null;
@@ -120,9 +113,7 @@ function makeAnchor(tocItemId: string, slug: string) {
   return `toc-${tocItemId}${safeSlug ? "-" + safeSlug : ""}`;
 }
 
-/* =========================
- * Helpers: lấy toàn bộ TOC + content
- * ========================= */
+/* ========== Helpers: TOC + content với pagination ========== */
 
 async function fetchAllTocItemsByVersion(
   admin: any,
@@ -247,13 +238,11 @@ async function buildNodesFromDB(
 
   walk(null, 1, "");
 
-  console.log("[render-docx] nodes count:", nodes.length);
+  console.log("[render-doc] nodes count:", nodes.length);
   return nodes;
 }
 
-/* =========================
- * MAIN HANDLER
- * ========================= */
+/* ========== MAIN HANDLER ========== */
 
 export async function POST(req: NextRequest) {
   const supabase = getRouteClient();
@@ -300,7 +289,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Ưu tiên template_id từ body nếu có
+  // Ưu tiên template từ body
   let templateId = (body.template_id || "").toString().trim();
   if (!templateId) {
     templateId = version.template_id || "";
@@ -312,7 +301,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Quyền: admin hoặc author/editor của book
+  // Quyền: admin hoặc author/editor
   const { data: profile, error: pErr } = await supabase
     .from("profiles")
     .select("id,system_role")
@@ -342,7 +331,7 @@ export async function POST(req: NextRequest) {
 
   if (!canRender) {
     return NextResponse.json(
-      { error: "Bạn không có quyền xuất DOCX" },
+      { error: "Bạn không có quyền xuất Word" },
       { status: 403 }
     );
   }
@@ -383,7 +372,6 @@ export async function POST(req: NextRequest) {
     : 1;
 
   try {
-    // 1) Build nodes
     const nodes = await buildNodesFromDB(admin, versionId);
 
     const year = new Date().getFullYear().toString();
@@ -401,13 +389,11 @@ export async function POST(req: NextRequest) {
 
     const origin = getSiteOrigin(req);
 
-    // Patch font URLs trong CSS template
     const patchedCss = (tpl.css || "")
       .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
-      .replaceAll("url('/fonts/", `url(\"${origin}/fonts/`)
+      .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
       .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
 
-    // CJK fallback
     const cjkBase64 = loadCJKFontBase64();
     const cjkInlineCSS = cjkBase64
       ? `
@@ -427,7 +413,6 @@ body, body * {
 }
 `;
 
-    // 2) MAIN – giống render-pdf để giữ cấu trúc chương
     let chapterCounter = 0;
     const tocItems: string[] = [];
 
@@ -442,7 +427,6 @@ body, body * {
           label = `${chapterCounter}. ${label}`;
         }
 
-        // TOC entry cho DOCX (nếu có dùng)
         if (n.depth >= 1 && n.depth <= tocDepth) {
           const pad = tocDepth > 1 ? Math.max(0, (n.depth - 1) * 14) : 0;
           const padAttr = pad ? ` style="padding-left:${pad}px"` : "";
@@ -464,9 +448,7 @@ body, body * {
         )}" data-depth="${n.depth}" data-chapter-title="${esc(
           n.chapterTitle
         )}">
-  <${tag} class="${
-          isChapter ? "chapter-title" : ""
-        }">${label}</${tag}>
+  <${tag} class="${isChapter ? "chapter-title" : ""}">${label}</${tag}>
   ${bodyHtml}
 </section>`;
       })
@@ -474,7 +456,6 @@ body, body * {
 
     const tocList = tocItems.join("\n");
 
-    // 3) HTML tổng – dùng cho html-to-docx
     const html = `<!doctype html>
 <html>
 <head>
@@ -505,27 +486,23 @@ body, body * {
 </body>
 </html>`;
 
-    // 4) Gọi html-to-docx – chỉ 1 tham số để tránh lỗi
-    const docxBuffer = await HTMLtoDOCX(html);
-
     const filenameSafe = book.title.replace(/[^a-zA-Z0-9\-_.]+/g, "_");
     const filename = `${filenameSafe || "book"}_v${
       version.version_no
-    }.docx`;
+    }.doc`;
 
-    return new NextResponse(docxBuffer as any, {
+    return new NextResponse(html, {
       status: 200,
       headers: {
-        "Content-Type":
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "Content-Type": "application/msword; charset=utf-8",
         "Content-Disposition": `attachment; filename="${filename}"`,
       },
     });
   } catch (e: any) {
-    console.error("Render DOCX failed:", e);
+    console.error("Render DOC failed:", e);
     return NextResponse.json(
       {
-        error: "Render DOCX failed",
+        error: "Render DOC failed",
         detail: e?.message || String(e),
       },
       { status: 500 }
