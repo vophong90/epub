@@ -271,49 +271,49 @@ export default function TocItemPage() {
 
   /** LOAD TREE (multi-level) */
   async function loadTree(rootId: string) {
-  setSubLoading(true);
-  try {
-    // ✅ 1 call: tree + content map
-    const res = await fetch(
-      `/api/toc/subsections?root_id=${encodeURIComponent(
-        rootId
-      )}&include_content=1`
-    );
+    setSubLoading(true);
+    try {
+      // ✅ 1 call: tree + content map
+      const res = await fetch(
+        `/api/toc/subsections?root_id=${encodeURIComponent(
+          rootId
+        )}&include_content=1`
+      );
 
-    const j = (await res.json().catch(() => ({}))) as SubsectionsTreeResponse;
+      const j = (await res.json().catch(() => ({}))) as SubsectionsTreeResponse;
 
-    if (!res.ok || (j as any).error || !j.ok) {
-      console.error("load toc tree error:", (j as any).error || res.status);
-      setTocTreeRoot(null);
-      return;
-    }
-
-    const root = (j.root || null) as TocTreeNode | null;
-    setTocTreeRoot(root);
-
-    // ✅ Fill htmlById từ contents map (không fetch /api/toc/item từng node nữa)
-    const map = (j.contents || null) as TocContentMap | null;
-    if (!map) return;
-
-    setHtmlById((prev) => {
-      const next = { ...prev };
-      for (const [id, c] of Object.entries(map)) {
-        // chỉ set nếu chưa có (giữ các thay đổi chưa lưu trên client)
-        if (typeof next[id] !== "string") {
-          next[id] = parseContentJson(c?.content_json);
-        }
+      if (!res.ok || (j as any).error || !j.ok) {
+        console.error("load toc tree error:", (j as any).error || res.status);
+        setTocTreeRoot(null);
+        return;
       }
-      // đảm bảo rootId cũng có (trường hợp root thiếu trong map vì chưa có content row)
-      if (typeof next[rootId] !== "string") next[rootId] = "<p></p>";
-      return next;
-    });
-  } catch (e) {
-    console.error("load toc tree failed:", e);
-    setTocTreeRoot(null);
-  } finally {
-    setSubLoading(false);
+
+      const root = (j.root || null) as TocTreeNode | null;
+      setTocTreeRoot(root);
+
+      // ✅ Fill htmlById từ contents map (không fetch /api/toc/item từng node nữa)
+      const map = (j.contents || null) as TocContentMap | null;
+      if (!map) return;
+
+      setHtmlById((prev) => {
+        const next = { ...prev };
+        for (const [id, c] of Object.entries(map)) {
+          // chỉ set nếu chưa có (giữ các thay đổi chưa lưu trên client)
+          if (typeof next[id] !== "string") {
+            next[id] = parseContentJson(c?.content_json);
+          }
+        }
+        // đảm bảo rootId cũng có (trường hợp root thiếu trong map vì chưa có content row)
+        if (typeof next[rootId] !== "string") next[rootId] = "<p></p>";
+        return next;
+      });
+    } catch (e) {
+      console.error("load toc tree failed:", e);
+      setTocTreeRoot(null);
+    } finally {
+      setSubLoading(false);
+    }
   }
-}
 
   async function reloadAll() {
     if (!tocItemId) return;
@@ -494,9 +494,7 @@ export default function TocItemPage() {
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j.error) {
-        setErrorMsg(
-          j.error || "Không đánh dấu được ghi chú là đã giải quyết"
-        );
+        setErrorMsg(j.error || "Không đánh dấu được ghi chú là đã giải quyết");
       } else {
         await loadMain(tocItemId);
       }
@@ -571,9 +569,7 @@ export default function TocItemPage() {
     try {
       const res = await fetch(
         `/api/toc/subsections?id=${encodeURIComponent(id)}`,
-        {
-          method: "DELETE",
-        }
+        { method: "DELETE" }
       );
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j.error) {
@@ -695,13 +691,9 @@ export default function TocItemPage() {
               <ul className="space-y-1 text-sm">
                 {data.assignments.map((a) => {
                   const isMe = user && a.user_id === user.id;
-                  const label =
-                    a.profile?.name || a.profile?.email || a.user_id;
+                  const label = a.profile?.name || a.profile?.email || a.user_id;
                   return (
-                    <li
-                      key={a.id}
-                      className="flex flex-wrap items-center gap-2"
-                    >
+                    <li key={a.id} className="flex flex-wrap items-center gap-2">
                       <span className="font-medium">
                         {label}
                         {isMe ? " (Bạn)" : ""}
@@ -720,10 +712,7 @@ export default function TocItemPage() {
         <div className="flex flex-col items-end gap-2 text-xs text-gray-500">
           {data.content?.updated_at && (
             <div>
-              Cập nhật lần cuối:{" "}
-              {new Date(
-                data.content.updated_at
-              ).toLocaleString()}
+              Cập nhật lần cuối: {new Date(data.content.updated_at).toLocaleString()}
             </div>
           )}
           <button className={BTN} onClick={() => router.back()}>
@@ -742,9 +731,7 @@ export default function TocItemPage() {
       {/* Ghi chú editor */}
       <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 space-y-3">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-gray-800">
-            Ghi chú của editor
-          </h3>
+          <h3 className="text-sm font-semibold text-gray-800">Ghi chú của editor</h3>
           {data.content?.editor_note && (
             <span
               className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${
@@ -836,6 +823,7 @@ export default function TocItemPage() {
               versionId={data.item.book_version_id}
               templateId={templateId ?? undefined}
               onChange={updateActiveHtml}
+              tocItemId={tocItemId} // ✅ FIX: required prop for preview-chapter API
             />
 
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -848,10 +836,7 @@ export default function TocItemPage() {
                   ? "Đang lưu phần này..."
                   : "Lưu nội dung phần đang chọn"}
               </button>
-              <button
-                className={BTN}
-                onClick={() => setActiveSectionId("root")}
-              >
+              <button className={BTN} onClick={() => setActiveSectionId("root")}>
                 Về chương chính
               </button>
             </div>
@@ -859,8 +844,8 @@ export default function TocItemPage() {
             {/* Cảnh báo nếu version chưa được gán template */}
             {!templateId && (
               <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
-                Phiên bản sách hiện tại{" "}
-                <b>chưa được gán template dàn trang</b>. <br />
+                Phiên bản sách hiện tại <b>chưa được gán template dàn trang</b>.
+                <br />
                 Bạn vẫn có thể soạn nội dung bình thường, nhưng{" "}
                 <strong>không thể render PDF</strong> cho đến khi admin chọn
                 template cho phiên bản này ở trang xuất bản.
@@ -902,9 +887,7 @@ export default function TocItemPage() {
             onClick={handleGPTCheckChapter}
             disabled={checkingGPT}
           >
-            {checkingGPT
-              ? "GPT đang kiểm tra chương..."
-              : "GPT kiểm tra chương"}
+            {checkingGPT ? "GPT đang kiểm tra chương..." : "GPT kiểm tra chương"}
           </button>
         </div>
 
