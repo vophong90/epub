@@ -154,61 +154,55 @@ export default function PublishPage() {
 
   /** Xuất Word (DOCX) dùng API render-docx */
   async function handleExportDocx() {
-    setError("");
-    setMessage("");
+  setError("");
+  setMessage("");
 
-    if (!selectedVersionId || !selectedTemplateId) {
-      setError("Hãy chọn đầy đủ Sách, Phiên bản và Template trước khi xuất Word.");
+  if (!selectedVersionId || !selectedTemplateId) {
+    setError("Hãy chọn đầy đủ Sách, Phiên bản và Template trước khi xuất Word.");
+    return;
+  }
+
+  setExportingDocx(true);
+  try {
+    const res = await fetch("/api/books/version/render-doc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        version_id: selectedVersionId,
+        template_id: selectedTemplateId,
+      }),
+    });
+
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      console.error("render-doc error:", j.error || res.status, j.detail);
+      setError(j.error || "Xuất Word thất bại. Vui lòng thử lại.");
       return;
     }
 
-    setExportingDocx(true);
-    try {
-      const res = await fetch("/api/books/version/render-docx", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          version_id: selectedVersionId,
-          template_id: selectedTemplateId,
-        }),
-      });
+    const blob = await res.blob();
+    const disposition = res.headers.get("content-disposition") || "";
+    let filename = "book.doc";
+    const match = disposition.match(/filename="(.+?)"/i);
+    if (match && match[1]) filename = match[1];
 
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        console.error("render-docx error:", (j as any).error || res.status);
-        setError(
-          (j as any).error ||
-            "Xuất Word thất bại. Vui lòng kiểm tra lại nội dung và thử lại."
-        );
-        return;
-      }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
 
-      const blob = await res.blob();
-      // cố gắng lấy tên file từ header nếu có
-      const disposition = res.headers.get("content-disposition") || "";
-      let filename = "book.docx";
-      const match = disposition.match(/filename="(.+?)"/i);
-      if (match && match[1]) {
-        filename = match[1];
-      }
-
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-
-      setMessage("Đã xuất file Word (DOCX). Vui lòng kiểm tra file tải xuống.");
-    } catch (e: any) {
-      console.error(e);
-      setError("Lỗi kết nối khi gọi API render-docx.");
-    } finally {
-      setExportingDocx(false);
-    }
+    setMessage("Đã xuất file Word (.doc). Vui lòng kiểm tra file tải xuống.");
+  } catch (e: any) {
+    console.error(e);
+    setError("Lỗi kết nối khi gọi API render-doc.");
+  } finally {
+    setExportingDocx(false);
   }
+}
 
   /** Publish: upload file PDF final lên publish API */
   async function handlePublish() {
@@ -390,7 +384,7 @@ export default function PublishPage() {
           disabled={exportingDocx || !selectedVersionId || !selectedTemplateId}
           className="inline-flex items-center px-4 py-2 rounded-lg border border-indigo-600 text-indigo-600 text-sm font-semibold hover:bg-indigo-50 disabled:opacity-50"
         >
-          {exportingDocx ? "Đang xuất Word..." : "Xuất Word (DOCX)"}
+          {exportingDocx ? "Đang xuất Word..." : "Xuất Word (DOC)"}
         </button>
       </div>
 
