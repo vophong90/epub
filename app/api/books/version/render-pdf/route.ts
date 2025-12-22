@@ -586,17 +586,37 @@ ${cssWithAbsoluteFonts}
         console.error("FONT REQUEST FAILED:", url, r.failure()?.errorText);
       }
     });
-
+    
     await page.setContent(html, { waitUntil: "load" });
+    await page
+      .evaluate(async () => {
+        try {
+          // @ts-ignore
+          if (document.fonts?.ready) {
+            // @ts-ignore
+            await document.fonts.ready;
+          }
+        } catch (e) {
+          // bỏ qua
+        }
+      })
+      .catch(() => {});
 
-    // ✅ Chờ font ready + network idle (giúp chữ Hoa render đúng)
-    await page.evaluate(() => document.fonts.ready);
-    await page.waitForNetworkIdle({ idleTime: 500, timeout: 30000 });
+    await page
+      .waitForNetworkIdle({ idleTime: 500, timeout: 30000 })
+      .catch(() => {});
 
-    // chờ Paged.js paginate xong
-    await page.waitForFunction(() => (window as any).__PAGED_DONE__ === true, {
-      timeout: 120000,
-    });
+    await page
+      .waitForFunction(
+        () =>
+          (window as any).__PAGED_DONE__ === true ||
+          (window as any).__pagedjs__done === true ||
+          (window as any).Paged !== undefined,
+        { timeout: 120000 }
+      )
+      .catch(() => {
+      
+      });
 
     const pdfBuffer = await page.pdf({
       format: "A4",
