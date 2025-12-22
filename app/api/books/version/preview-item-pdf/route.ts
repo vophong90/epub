@@ -419,22 +419,38 @@ export async function POST(req: NextRequest) {
     const origin = getSiteOrigin(req);
     const cjkBase64 = loadCJKFontBase64();
     const cjkInlineCSS = cjkBase64
-      ? `
-      @font-face {
-        font-family: "CJK-Fallback";
-        src: url(data:font/opentype;base64,${cjkBase64}) format("opentype");
-        font-weight: normal;
-        font-style: normal;
-      }
-      `
-      : "";
+  ? `
+@font-face {
+  font-family: "CJK-Fallback";
+  src: url("data:font/opentype;base64,${cjkBase64}") format("opentype");
+  font-weight: normal;
+  font-style: normal;
+}
+`
+  : "";
 
-    const cssWithAbsoluteFonts =
-      cjkInlineCSS +
-      (tpl.css || "")
-        .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
-        .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
-        .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
+// Patch lại url font trong CSS template
+const patchedTplCss =
+  (tpl.css || "")
+    .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
+    .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
+    .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
+
+// ⚠️ Quan trọng: ép body/p/li/... dùng CJK-Fallback làm fallback
+const cjkFallbackPatch = cjkBase64
+  ? `
+body, p, span, li, td, th, h1, h2, h3, h4, h5, h6 {
+  font-family: "Times New Roman", "CJK-Fallback", serif;
+}
+`
+  : "";
+
+// CSS cuối cùng đưa vào HTML
+const cssWithAbsoluteFonts = `
+${cjkInlineCSS}
+${patchedTplCss}
+${cjkFallbackPatch}
+`;
 
     // 3) MAIN HTML (chỉ nodes của chương, giữ layout 2 cột)
     const main = nodes
