@@ -472,20 +472,32 @@ export async function POST(req: NextRequest) {
       })
       .join("\n");
 
-    const tocList = nodes
-      .filter((n) => n.depth >= 1 && n.depth <= tocDepth)
-      .map((n) => {
-        const pad = tocDepth > 1 ? Math.max(0, (n.depth - 1) * 14) : 0;
-        const padAttr = pad ? ` style="padding-left:${pad}px"` : "";
-        // TẠM THỜI: chưa có số trang -> để trống span.page
-        return `
+// 4) TOC list — số cấp do template quyết định (toc_depth)
+    let chapterCounter = 0;
+    const tocItems: string[] = [];
+
+    for (const n of nodes) {
+      if (n.depth < 1 || n.depth > tocDepth) continue;
+
+      const pad = tocDepth > 1 ? Math.max(0, (n.depth - 1) * 14) : 0;
+      const padAttr = pad ? ` style="padding-left:${pad}px"` : "";
+
+      // Nhãn hiển thị trong MỤC LỤC
+      let label = esc(n.title);
+      if (n.depth === 1) {
+        chapterCounter += 1;
+        label = `${chapterCounter}. ${label}`; // ví dụ: "1. SỐT"
+      }
+
+      tocItems.push(`
 <li${padAttr}>
-  <a href="#${esc(n.id)}">${esc(n.title)}</a>
+  <a href="#${esc(n.id)}">${label}</a>
   <span class="dots"></span>
-  <span class="page"></span>
-</li>`;
-      })
-      .join("\n");
+  <span class="page" data-toc-target="#${esc(n.id)}"></span>
+</li>`);
+    }
+
+    const tocList = tocItems.join("\n");
 
     const html = `<!doctype html>
 <html>
