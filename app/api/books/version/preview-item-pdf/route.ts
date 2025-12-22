@@ -2,9 +2,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRouteClient } from "@/lib/supabaseServer";
 import { getAdminClient } from "@/lib/supabase-admin";
-
 import chromium from "@sparticuz/chromium-min";
 import puppeteer from "puppeteer-core";
+import fs from "fs";
+import path from "path";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,6 +46,21 @@ function getSiteOrigin(req: NextRequest) {
     new URL(req.url).host;
 
   return `${proto}://${host}`.replace(/\/+$/, "");
+}
+
+function loadCJKFontBase64() {
+  try {
+    const fontPath = path.join(
+      process.cwd(),
+      "public",
+      "fonts",
+      "NotoSerifCJKsc-Regular.otf"
+    );
+    return fs.readFileSync(fontPath).toString("base64");
+  } catch (e) {
+    console.error("❌ Load CJK font failed", e);
+    return null;
+  }
 }
 
 /** DB row types tối giản */
@@ -421,7 +437,21 @@ export async function POST(req: NextRequest) {
 
     // ✅ FONT FIX: đổi url(/fonts/...) => absolute để chromium serverless load được
     const origin = getSiteOrigin(req);
-    const cssWithAbsoluteFonts = (tpl.css || "")
+    const cjkBase64 = loadCJKFontBase64();
+    const cjkInlineCSS = cjkBase64
+      ? `
+      @font-face {
+      font-family: "CJK-Fallback";
+      src: url(data:font/opentype;base64,${cjkBase64}) format("opentype");
+      font-weight: normal;
+      font-style: normal;
+      }
+      `
+      : "";
+    
+    const cssWithAbsoluteFonts =
+      cjkInlineCSS +
+      (tpl.css || "")
       .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
       .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
       .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
