@@ -161,7 +161,7 @@ export function TocEditor({
     editor.chain().focus().setImage({ src: url.trim() }).run();
   };
 
-  async function openPreview(force = false) {
+    async function openPreview(force = false) {
     setPreviewErr(null);
 
     // ❗ Guard: version chưa có template thì không cho gọi API
@@ -190,20 +190,26 @@ export function TocEditor({
 
     setPreviewLoading(true);
     try {
-      // ✅ NEW: API riêng cho preview chương
       const res = await fetch("/api/books/version/preview-item-pdf", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ version_id: versionId, toc_item_id: tocItemId }),
       });
 
-      const j = await res.json().catch(() => ({} as any));
-
-      if (!res.ok || !j?.ok) {
-        throw new Error(j?.error || j?.detail || `HTTP ${res.status}`);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
       }
 
-      setPreviewUrl(j.preview_url || null);
+      // 🚀 Lấy PDF dạng blob, tạo object URL để nhúng vào iframe
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+
+      // nếu trước đó đã có URL cũ thì revoke cho đỡ rò bộ nhớ
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+
+      setPreviewUrl(url);
     } catch (e: any) {
       setPreviewErr(e?.message || "Preview lỗi");
     } finally {
