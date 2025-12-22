@@ -6,19 +6,14 @@ import { getAdminClient } from "@/lib/supabase-admin";
 import chromium from "@sparticuz/chromium-min";
 import puppeteer from "puppeteer-core";
 
-// ✅ PATCH: embed font CJK via base64 (serverless-safe)
-import fs from "fs";
-import path from "path";
-
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-// Cho job render chạy lâu hơn một chút
 export const maxDuration = 300;
 
 const BUCKET_PREVIEW = "pdf_previews";
 const SIGNED_EXPIRES_SEC = 60 * 10;
 
-// ❗ Body mới: version_id + (optional) template_id
+// Body: version + template (ưu tiên template chọn ở UI)
 type Body = { version_id?: string; template_id?: string };
 
 function esc(s: string) {
@@ -30,19 +25,16 @@ function esc(s: string) {
 }
 
 function getSiteOrigin(req: NextRequest) {
-  // ưu tiên env (nếu bạn đã set)
   const env =
     process.env.NEXT_PUBLIC_SITE_URL ||
     process.env.SITE_URL ||
     process.env.VERCEL_URL;
 
   if (env) {
-    // VERCEL_URL thường là domain không có https
     if (env.startsWith("http")) return env.replace(/\/+$/, "");
     return `https://${env}`.replace(/\/+$/, "");
   }
 
-  // fallback theo headers proxy
   const proto = req.headers.get("x-forwarded-proto") || "https";
   const host =
     req.headers.get("x-forwarded-host") ||
@@ -50,27 +42,6 @@ function getSiteOrigin(req: NextRequest) {
     new URL(req.url).host;
 
   return `${proto}://${host}`.replace(/\/+$/, "");
-}
-
-/**
- * ✅ PATCH: Read CJK font from /public/fonts and embed as base64
- * - Fix: Puppeteer serverless often cannot reliably load /fonts via http(s) (404/proxy/cors)
- * - Keep all existing behavior; only adds inline @font-face.
- */
-function loadCJKFontBase64() {
-  try {
-    const fontPath = path.join(
-      process.cwd(),
-      "public",
-      "fonts",
-      "NotoSerifCJKsc-Regular.otf"
-    );
-    const buf = fs.readFileSync(fontPath);
-    return buf.toString("base64");
-  } catch (e) {
-    console.error("❌ Load CJK font failed:", e);
-    return null;
-  }
 }
 
 /** DB row types tối giản */
@@ -105,7 +76,6 @@ type VersionRow = {
   template_id: string | null;
 };
 
-// ✅ Template row type (có toc_depth)
 type TemplateRow = {
   id: string;
   name: string | null;
@@ -129,13 +99,8 @@ function makeAnchor(tocItemId: string, slug: string) {
   return `toc-${tocItemId}${safeSlug ? "-" + safeSlug : ""}`;
 }
 
-/**
- * =========================
- * Pagination helpers (fix 1000 rows cap)
- * =========================
- */
+/** ===== Pagination helpers ===== */
 
-/** Fetch ALL toc_items for a version using pagination (.range) */
 async function fetchAllTocItemsByVersion(
   admin: any,
   versionId: string
@@ -150,7 +115,7 @@ async function fetchAllTocItemsByVersion(
       .select("id,parent_id,title,slug,order_index")
       .eq("book_version_id", versionId)
       .order("order_index", { ascending: true })
-      .order("id", { ascending: true }) // stable order across pages
+      .order("id", { ascending: true })
       .range(from, from + PAGE - 1);
 
     if (error) throw new Error("Load toc_items failed: " + error.message);
@@ -165,18 +130,14 @@ async function fetchAllTocItemsByVersion(
   return all;
 }
 
-/**
- * Fetch toc_contents by item ids, in batches + pagination.
- */
 async function fetchAllTocContentsByItemIds(
   admin: any,
   tocItemIds: string[]
 ): Promise<TocContentRow[]> {
   if (!tocItemIds.length) return [];
 
-  const ID_CHUNK = 500; // safe chunk for IN list
+  const ID_CHUNK = 500;
   const PAGE = 1000;
-
   const all: TocContentRow[] = [];
 
   for (let i = 0; i < tocItemIds.length; i += ID_CHUNK) {
@@ -204,21 +165,13 @@ async function fetchAllTocContentsByItemIds(
   return all;
 }
 
-/**
- * Build ordered toc tree nodes + attach content_html from toc_contents.content_json.html
- */
 async function buildNodesFromDB(
   admin: any,
   versionId: string
 ): Promise<RenderNode[]> {
-  // 1) load all toc items (FIX: pagination)
   const tocItems = await fetchAllTocItemsByVersion(admin, versionId);
+  if (!tocItems.length) return [];
 
-  if (!tocItems.length) {
-    return [];
-  }
-
-  // 2) load all contents (FIX: chunk + pagination)
   const tocContents = await fetchAllTocContentsByItemIds(
     admin,
     tocItems.map((x) => x.id)
@@ -227,7 +180,6 @@ async function buildNodesFromDB(
   const contentByItem = new Map<string, TocContentRow>();
   for (const c of tocContents) contentByItem.set(c.toc_item_id, c);
 
-  // 3) build children map & sort
   const children = new Map<string | null, TocItemRow[]>();
   for (const it of tocItems) {
     const key = it.parent_id ?? null;
@@ -241,16 +193,12 @@ async function buildNodesFromDB(
 
   const nodes: RenderNode[] = [];
 
-  function walk(
-    parentId: string | null,
-    depth: number,
-    currentChapterTitle: string
-  ) {
+  function walk(parentId: string | null, depth: number, chapterTitle: string) {
     const kids = children.get(parentId) || [];
     for (const it of kids) {
       const anchor = makeAnchor(it.id, it.slug);
       const isChapter = depth === 1;
-      const chapterTitle = isChapter ? it.title : currentChapterTitle;
+      const newChapterTitle = isChapter ? it.title : chapterTitle;
 
       const c = contentByItem.get(it.id);
       const cj = c?.content_json || {};
@@ -262,20 +210,19 @@ async function buildNodesFromDB(
         title: it.title,
         slug: it.slug,
         depth,
-        chapterTitle,
+        chapterTitle: newChapterTitle,
         html: html || "",
       });
 
-      walk(it.id, depth + 1, chapterTitle);
+      walk(it.id, depth + 1, newChapterTitle);
     }
   }
 
   walk(null, 1, "");
-
   return nodes;
 }
 
-/** Launch browser dùng puppeteer-core + @sparticuz/chromium (serverless-friendly) */
+/** ===== Launch Chromium ===== */
 async function launchBrowser() {
   const executablePath = await chromium.executablePath(
     "https://github.com/Sparticuz/chromium/releases/download/v141.0.0/chromium-v141.0.0-pack.x64.tar"
@@ -321,7 +268,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 1) load version + book_id + template_id
+  // 1) load version
   const { data: version, error: vErr } = await admin
     .from("book_versions")
     .select("id,book_id,version_no,template_id")
@@ -338,7 +285,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ✅ Ưu tiên template_id do UI gửi lên, nếu không có thì fallback version.template_id
+  // ✅ ưu tiên template từ UI, fallback version.template_id
   const templateId = bodyTemplateId || version.template_id;
   if (!templateId) {
     return NextResponse.json(
@@ -347,7 +294,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 2) quyền: admin OR (author/editor trên book)
+  // 2) quyền
   const { data: profile, error: pErr } = await supabase
     .from("profiles")
     .select("id,system_role")
@@ -371,7 +318,6 @@ export async function POST(req: NextRequest) {
     if (permErr) {
       return NextResponse.json({ error: permErr.message }, { status: 500 });
     }
-
     canRender = !!perm;
   }
 
@@ -393,7 +339,7 @@ export async function POST(req: NextRequest) {
   if (!book)
     return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
 
-  // 4) load template (theo templateId đã chọn)
+  // 4) load template
   const { data: tpl, error: tErr } = await admin
     .from("book_templates")
     .select(
@@ -410,18 +356,17 @@ export async function POST(req: NextRequest) {
       { status: 404 }
     );
 
-  // ✅ normalize toc_depth (1..6), default 1
   const tocDepth = Number.isFinite(Number(tpl.toc_depth))
     ? Math.min(6, Math.max(1, Number(tpl.toc_depth)))
     : 1;
 
-  // 5) create render job
+  // 5) tạo job render
   const { data: render, error: rInsErr } = await admin
     .from("book_renders")
     .insert({
       book_id: book.id,
       version_id: version.id,
-      template_id: tpl.id, // lưu đúng template đang render
+      template_id: tpl.id,
       status: "rendering",
       created_by: user.id,
     })
@@ -438,17 +383,16 @@ export async function POST(req: NextRequest) {
   const renderId = render.id;
 
   try {
-    // 1) Build nodes từ DB (FIX 1000-row cap)
+    // 1) build nodes
     const nodes = await buildNodesFromDB(admin, versionId);
 
-    // ✅ Nếu không có node nào thì coi như lỗi, tránh PDF trắng
     if (!nodes.length) {
       throw new Error(
-        "Không có TOC items nào cho version này (toc_items rỗng hoặc sai book_version_id)."
+        "Không có TOC items cho version này (toc_items rỗng hoặc sai book_version_id)."
       );
     }
 
-    // 2) Token replace cho template
+    // 2) token & css
     const year = new Date().getFullYear().toString();
     const token = (s?: string) =>
       (s || "")
@@ -462,28 +406,13 @@ export async function POST(req: NextRequest) {
     const header = token(tpl.header_html || "");
     const footer = token(tpl.footer_html || "");
 
-    // ✅ FONT FIX (cũ): biến url(/fonts/...) => absolute để chromium serverless load được
     const origin = getSiteOrigin(req);
     const cssWithAbsoluteFonts = (tpl.css || "")
       .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
       .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
       .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
 
-    // ✅ PATCH (mới): embed CJK font base64 (ổn định 100% dù absolute-fonts bị fail)
-    const cjkBase64 = loadCJKFontBase64();
-    const inlineFontCSS = cjkBase64
-      ? `
-/* ===== Embedded CJK fallback font (serverless-safe) ===== */
-@font-face {
-  font-family: "CJK-Fallback";
-  src: url(data:font/opentype;base64,${cjkBase64}) format("opentype");
-  font-weight: 400;
-  font-style: normal;
-}
-`
-      : "";
-
-    // 3) MAIN HTML
+    // 3) main sections
     const main = nodes
       .map((n) => {
         const isChapter = n.depth === 1;
@@ -517,7 +446,7 @@ export async function POST(req: NextRequest) {
       })
       .join("\n");
 
-    // 4) TOC list — ✅ số cấp do template quyết định (toc_depth)
+    // 4) TOC list
     const tocList = nodes
       .filter((n) => n.depth >= 1 && n.depth <= tocDepth)
       .map((n) => {
@@ -539,7 +468,6 @@ export async function POST(req: NextRequest) {
   <meta charset="utf-8"/>
   <title>${esc(book.title)} – v${version.version_no}</title>
   <style>
-${inlineFontCSS}
 ${cssWithAbsoluteFonts}
   </style>
 </head>
@@ -561,7 +489,6 @@ ${cssWithAbsoluteFonts}
     ${main}
   </main>
 
-  <!-- Định nghĩa PagedConfig.before/after trước khi load pagedjs -->
   <script>
     window.PagedConfig = window.PagedConfig || {};
     window.PagedConfig.after = function(flow){
@@ -587,16 +514,17 @@ ${cssWithAbsoluteFonts}
     };
   </script>
 
-  <!-- Load pagedjs từ CDN để tránh phải đọc file bằng fs -->
   <script src="https://unpkg.com/pagedjs/dist/paged.polyfill.js"></script>
 </body>
 </html>`;
 
-    // 6) Launch Chromium
+    // 6) Puppeteer
     const browser = await launchBrowser();
     const page = await browser.newPage();
 
-    // ✅ Debug font load fail (rất hữu ích để biết còn bị 404/blocked không)
+    // dùng media "screen" cho Paged.js
+    await page.emulateMediaType("screen");
+
     page.on("requestfailed", (r) => {
       const url = r.url();
       if (url.includes("/fonts/")) {
@@ -606,7 +534,6 @@ ${cssWithAbsoluteFonts}
 
     await page.setContent(html, { waitUntil: "load" });
 
-    // chờ fonts (nếu hỗ trợ)
     await page
       .evaluate(async () => {
         try {
@@ -617,21 +544,20 @@ ${cssWithAbsoluteFonts}
       })
       .catch(() => {});
 
-    // chờ network rảnh 1 nhịp
     await page
       .waitForNetworkIdle({ idleTime: 500, timeout: 30000 })
       .catch(() => {});
 
-    // ✅ CHÍNH: chờ Paged.js render xong (__PAGED_DONE__),
-    // nếu vì lý do gì không có thì bỏ qua, vẫn render DOM hiện tại
+    // chờ Paged.js tạo trang hoặc timeout
     await page
       .waitForFunction(
-        () => (window as any).__PAGED_DONE__ === true,
+        () =>
+          (window as any).__PAGED_DONE__ === true ||
+          document.querySelectorAll(".pagedjs_page").length > 0,
         { timeout: 120000 }
       )
       .catch(() => {});
 
-    // đảm bảo không bị class ẩn nội dung
     await page.evaluate(() => {
       document.documentElement.classList.remove(
         "pagedjs-loading",
@@ -640,7 +566,6 @@ ${cssWithAbsoluteFonts}
       (document.body as any).style.visibility = "visible";
     });
 
-    // (tùy chọn) debug nhanh nếu vẫn bị trắng
     const dbg = await page.evaluate(() => {
       const pages = document.querySelectorAll(
         ".pagedjs_page, .pagedjs_pages"
@@ -663,7 +588,7 @@ ${cssWithAbsoluteFonts}
 
     await browser.close();
 
-    // 7) Upload preview
+    // 7) Upload
     const pdf_path = `book/${book.id}/version/${version.id}/render/${renderId}.pdf`;
 
     const { error: upErr } = await admin.storage
