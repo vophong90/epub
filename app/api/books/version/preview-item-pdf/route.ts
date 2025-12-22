@@ -45,6 +45,7 @@ function getSiteOrigin(req: NextRequest) {
   return `${proto}://${host}`.replace(/\/+$/, "");
 }
 
+// Giữ lại hàm này để không thay đổi cấu trúc file, dù hiện tại không dùng nữa
 function loadCJKFontBase64() {
   try {
     const fontPath = path.join(
@@ -414,39 +415,39 @@ export async function POST(req: NextRequest) {
 
     const header = token(tpl.header_html);
     const footer = token(tpl.footer_html);
-    
+
     const origin = getSiteOrigin(req);
-    const cjkBase64 = loadCJKFontBase64();
-    const cjkInlineCSS = cjkBase64
-      ? `
-      @font-face {
-      font-family: "CJK-Fallback";
-      src: url("data:font/opentype;base64,${cjkBase64}") format("opentype");
-      font-weight: normal;
-      font-style: normal;
-      }
-      `
-      : "";
-    
+
+    // Dùng URL tuyệt đối tới font trong /public/fonts thay vì base64
+    const fontUrl = `${origin}/fonts/NotoSerifCJKsc-Regular.otf`;
+
+    const cjkInlineCSS = `
+@font-face {
+  font-family: "CJK-Fallback";
+  src: url("${fontUrl}") format("opentype");
+  font-weight: normal;
+  font-style: normal;
+}
+`;
+
     // Patch lại url font trong CSS template
     const patchedTplCss = (tpl.css || "")
       .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
       .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
       .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
-    
-    const cjkFallbackPatch = cjkBase64
-      ? `
-      html, body, p, span, li, td, th, h1, h2, h3, h4, h5, h6, em, i, strong, b {
-      font-family: "Times New Roman", "CJK-Fallback", serif !important;
-      }
-      `
-      : "";
-    
+
+    // Ép fallback font cho toàn bộ nội dung
+    const cjkFallbackPatch = `
+body, body * {
+  font-family: "Times New Roman", "CJK-Fallback", serif !important;
+}
+`;
+
     const cssWithAbsoluteFonts = `
-    ${cjkInlineCSS}
-    ${patchedTplCss}
-    ${cjkFallbackPatch}
-    `;
+${cjkInlineCSS}
+${patchedTplCss}
+${cjkFallbackPatch}
+`;
 
     // 3) MAIN HTML (chỉ nodes của chương, giữ layout 2 cột)
     const main = nodes
@@ -528,12 +529,16 @@ export async function POST(req: NextRequest) {
     await page.evaluate(() => (document as any).fonts?.ready);
     await page.waitForNetworkIdle({ idleTime: 500, timeout: 30000 });
 
-    await page.waitForFunction(
-      () => (window as any).Paged !== undefined || (window as any).__pagedjs__done,
-      { timeout: 120000 }
-    ).catch(() => {
-      // Nếu không bắt được flag, vẫn tiếp tục; Paged.js thường hoàn thành khá nhanh.
-    });
+    await page
+      .waitForFunction(
+        () =>
+          (window as any).Paged !== undefined ||
+          (window as any).__pagedjs__done,
+        { timeout: 120000 }
+      )
+      .catch(() => {
+        // Nếu không bắt được flag, vẫn tiếp tục; Paged.js thường hoàn thành khá nhanh.
+      });
 
     const pdfBuffer = await page.pdf({
       format: "A4",
@@ -555,7 +560,6 @@ export async function POST(req: NextRequest) {
         "Content-Disposition": `inline; filename="${filename}"`,
       },
     });
-
   } catch (e: any) {
     console.error("Preview item PDF failed:", e);
     return NextResponse.json(
