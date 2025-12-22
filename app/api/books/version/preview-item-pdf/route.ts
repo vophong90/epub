@@ -2,8 +2,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRouteClient } from "@/lib/supabaseServer";
 import { getAdminClient } from "@/lib/supabase-admin";
+
 import chromium from "@sparticuz/chromium-min";
 import puppeteer from "puppeteer-core";
+
 import fs from "fs";
 import path from "path";
 
@@ -23,19 +25,16 @@ function esc(s: string) {
 }
 
 function getSiteOrigin(req: NextRequest) {
-  // ưu tiên env (nếu bạn đã set)
   const env =
     process.env.NEXT_PUBLIC_SITE_URL ||
     process.env.SITE_URL ||
     process.env.VERCEL_URL;
 
   if (env) {
-    // VERCEL_URL thường là domain không có https
     if (env.startsWith("http")) return env.replace(/\/+$/, "");
     return `https://${env}`.replace(/\/+$/, "");
   }
 
-  // fallback theo headers proxy
   const proto = req.headers.get("x-forwarded-proto") || "https";
   const host =
     req.headers.get("x-forwarded-host") ||
@@ -45,7 +44,6 @@ function getSiteOrigin(req: NextRequest) {
   return `${proto}://${host}`.replace(/\/+$/, "");
 }
 
-// Giữ lại hàm này để không thay đổi cấu trúc file, dù hiện tại không dùng nữa
 function loadCJKFontBase64() {
   try {
     const fontPath = path.join(
@@ -54,9 +52,10 @@ function loadCJKFontBase64() {
       "fonts",
       "NotoSerifCJKsc-Regular.otf"
     );
-    return fs.readFileSync(fontPath).toString("base64");
+    const buf = fs.readFileSync(fontPath);
+    return buf.toString("base64");
   } catch (e) {
-    console.error("❌ Load CJK font failed", e);
+    console.error("❌ Load CJK font failed:", e);
     return null;
   }
 }
@@ -103,13 +102,11 @@ function makeAnchor(tocItemId: string, slug: string) {
   return `toc-${tocItemId}${safeSlug ? "-" + safeSlug : ""}`;
 }
 
-/**
- * =========================
- * Pagination helpers (fix 1000 rows cap)
- * =========================
- */
+/* =========================
+ * Pagination helpers
+ * ========================= */
 
-/** Fetch ALL toc_items for a version using pagination (.range) */
+/** Fetch ALL toc_items cho 1 version (tránh cap 1000 rows của Supabase) */
 async function fetchAllTocItemsByVersion(
   admin: any,
   versionId: string
@@ -139,9 +136,7 @@ async function fetchAllTocItemsByVersion(
   return all;
 }
 
-/**
- * Fetch toc_contents by item ids, in batches + pagination.
- */
+/** Fetch ALL toc_contents theo list item ids (batches + pagination) */
 async function fetchAllTocContentsByItemIds(
   admin: any,
   tocItemIds: string[]
@@ -179,7 +174,7 @@ async function fetchAllTocContentsByItemIds(
 }
 
 /**
- * ✅ Build nodes CHỈ cho subtree của toc_item_id
+ * Build nodes CHỈ cho subtree của toc_item_id
  * - depth tính lại từ root => root depth=1
  * - chapterTitle = root.title
  */
@@ -251,7 +246,7 @@ async function buildNodesForSubtree(
     }
   }
 
-  // ✅ Root depth=1, children start depth=2
+  // Root depth=1, children start depth=2
   pushNode(root, 1);
   walkFrom(root.id, 2);
 
@@ -267,7 +262,6 @@ async function launchBrowser() {
   const browser = await puppeteer.launch({
     args: chromium.args,
     executablePath,
-    // headless: "new", // nếu cần ép headless rõ ràng
   });
 
   return browser;
@@ -405,7 +399,7 @@ export async function POST(req: NextRequest) {
 
     const chapterTitle = nodes[0]?.chapterTitle || nodes[0]?.title || "";
 
-    // 2) Token replace (chỉ cho header/footer, không dùng cover/front/toc)
+    // 2) Token replace (header/footer)
     const year = new Date().getFullYear().toString();
     const token = (s?: string) =>
       (s || "")
@@ -418,45 +412,41 @@ export async function POST(req: NextRequest) {
 
     const origin = getSiteOrigin(req);
 
-    // Dùng URL tuyệt đối tới font trong /public/fonts thay vì base64
-    const fontUrl = `${origin}/fonts/NotoSerifCJKsc-Regular.otf`;
-
-    const cjkBase64 = loadCJKFontBase64();
-    const cjkInlineCSS = cjkBase64
-      ? `
-      @font-face {
-      font-family: "CJK-Fallback";
-      src: url("data:font/opentype;base64,${cjkBase64}") format("opentype");
-      font-weight: normal;
-      font-style: normal;
-      }
-      `
-      : "";
-
-    // Patch lại url font trong CSS template
-    const patchedTplCss = (tpl.css || "")
+    const cssWithAbsoluteFonts = (tpl.css || "")
       .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
       .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
       .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
 
-    // Ép fallback font cho toàn bộ nội dung
-    const cjkFallbackPatch = `
-body, body * {
-  font-family: "Times New Roman", "CJK-Fallback", serif !important;
+    const cjkBase64 = loadCJKFontBase64();
+    const inlineFontCSS = cjkBase64
+      ? `
+@font-face {
+  font-family: "CJK-Fallback";
+  src: url(data:font/opentype;base64,${cjkBase64}) format("opentype");
+  font-weight: 400;
+  font-style: normal;
 }
+`
+      : "";
+
+    const cssAll = `
+${inlineFontCSS}
+${cssWithAbsoluteFonts}
 `;
 
-    const cssWithAbsoluteFonts = `
-${cjkInlineCSS}
-${patchedTplCss}
-${cjkFallbackPatch}
-`;
+    // 3) MAIN HTML (chỉ nodes của chương, thêm đánh số chương depth=1)
+    let chapterCounter = 0;
 
-    // 3) MAIN HTML (chỉ nodes của chương, giữ layout 2 cột)
     const main = nodes
       .map((n) => {
         const isRoot = n.depth === 1;
-        const tag = n.depth === 1 ? "h1" : n.depth === 2 ? "h2" : "h3";
+        const tag = isRoot ? "h1" : n.depth === 2 ? "h2" : "h3";
+
+        let title = esc(n.title);
+        if (isRoot) {
+          chapterCounter += 1;
+          title = `${chapterCounter}. ${title}`;
+        }
 
         const runningChapter = isRoot
           ? `<div class="runningHeaderRight" style="position: running(runningHeaderRight);">${esc(
@@ -478,13 +468,13 @@ ${cjkFallbackPatch}
           n.chapterTitle
         )}">
   ${runningChapter}
-  <${tag} class="${isRoot ? "chapter-title" : ""}">${esc(n.title)}</${tag}>
+  <${tag} class="${isRoot ? "chapter-title" : ""}">${title}</${tag}>
   ${bodyHtml}
 </section>`;
       })
       .join("\n");
 
-    // 4) HTML tổng – ❌ không cover, không front matter, không TOC
+    // 4) HTML tổng – không cover, không front matter, không TOC
     const safeChapterForTitle = chapterTitle || book.title;
     const html = `<!doctype html>
 <html>
@@ -495,7 +485,9 @@ ${cjkFallbackPatch}
   )} – v${version.version_no} – Preview chương: ${esc(
       safeChapterForTitle
     )}</title>
-  <style>${cssWithAbsoluteFonts}</style>
+  <style>
+${cssAll}
+  </style>
 </head>
 <body>
   ${header || ""}
@@ -504,24 +496,23 @@ ${cjkFallbackPatch}
   <main id="book-content">
     ${main}
   </main>
-  
-  <script>
-  window.PagedConfig = window.PagedConfig || {};
-  window.PagedConfig.after = function () {
-  window.__pagedjs__done = true;
-  };
-  </script>
-  
-  <script src="https://unpkg.com/pagedjs/dist/paged.polyfill.js"></script>
-
 </body>
 </html>`;
 
-    // 5) Launch Chromium & render PDF
+    // 5) Launch Chromium & render PDF (giống pipeline render-pdf)
     const browser = await launchBrowser();
     const page = await browser.newPage();
 
-    // Debug font nếu cần
+    // log console trong page nếu cần debug
+    page.on("console", (msg) => {
+      try {
+        console.log("[preview-item-pdf][browser]", msg.type(), msg.text());
+      } catch {
+        console.log("[preview-item-pdf][browser]", msg.text());
+      }
+    });
+
+    // Nếu muốn debug font fail:
     page.on("requestfailed", (r) => {
       const url = r.url();
       if (url.includes("/fonts/")) {
@@ -530,32 +521,24 @@ ${cjkFallbackPatch}
     });
 
     await page.setContent(html, { waitUntil: "load" });
-    await page.evaluate(async () => {
-      if (document.fonts && document.fonts.ready) {
-        await document.fonts.ready;
-      }
-      return document.fonts?.status || "no-fonts-api";
-    })
-      .catch(() => {
-        
-      });
-    
-    await page.waitForFunction(() => {
-      return !document.fonts || document.fonts.status === "loaded";
-    }, { timeout: 30000 })
-      .catch(() => {
-        
-      });
-    
-    await page.waitForNetworkIdle({ idleTime: 500, timeout: 30000 });
-    await page.waitForFunction(
-      () => (window as any).__pagedjs__done === true,
-      { timeout: 120000 }
-    )
-      .catch(() => {
-        
-      });
-    
+
+    // Đợi fonts/layout ổn định (không dùng Paged.js)
+    await page
+      .evaluate(async () => {
+        if (document.fonts?.ready) {
+          await document.fonts.ready;
+        }
+        return (document as any).fonts?.status || "no-fonts-api";
+      })
+      .catch(() => {});
+
+    await page
+      .waitForNetworkIdle({ idleTime: 500, timeout: 30000 })
+      .catch(() => {});
+
+    // buffer thêm chút cho layout (nếu chương dài)
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+
     const pdfBuffer = await page.pdf({
       format: "A4",
       printBackground: true,
@@ -568,7 +551,6 @@ ${cjkFallbackPatch}
     // 6) Trả PDF trực tiếp, không upload, không ghi DB
     const filename = `preview-${book.id}-${version.id}-${tocItemId}.pdf`;
 
-    // Cast sang any để khỏi vướng kiểu BodyInit (runtime vẫn OK)
     return new NextResponse(pdfBuffer as any, {
       status: 200,
       headers: {
