@@ -1,6 +1,6 @@
 // app/api/toc/items/reorder/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser } from "../../_helpers";
+import { requireUser } from "../_helpers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
