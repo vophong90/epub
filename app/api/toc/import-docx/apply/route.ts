@@ -233,7 +233,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 6) Tạo mục con mới + nội dung, đảm bảo slug không trùng
+    // 6) Tạo mục con mới + nội dung, đảm bảo slug không trùng
   const createdIds: string[] = [];
 
   for (let i = 0; i < subsections.length; i++) {
@@ -249,45 +249,68 @@ export async function POST(req: NextRequest) {
       baseSlug = `sub-${Date.now()}-${i}`;
     }
 
-    // Tạo slug unique: nếu trùng -> thêm -2, -3, ...
-    let slug = baseSlug;
-    let suffix = 2;
-    while (existingSlugs.has(slug)) {
-      const suffixStr = `-${suffix}`;
-      const maxBaseLen = 80 - suffixStr.length;
-      const trimmedBase =
-        baseSlug.length > maxBaseLen ? baseSlug.slice(0, maxBaseLen) : baseSlug;
-      slug = `${trimmedBase}${suffixStr}`;
-      suffix++;
-    }
-    existingSlugs.add(slug);
+    let newId: string | null = null;
+    let attempt = 0;
 
-    // 6.1) Insert toc_item
-    const { data: newItem, error: insErr } = await supabase
-      .from("toc_items")
-      .insert({
-        book_version_id: item.book_version_id,
-        parent_id: item.id,
-        title: rawTitle,
-        slug,
-        order_index: baseOrder + i,
-      })
-      .select("id")
-      .maybeSingle();
+    // Thử tối đa 10 lần: slug, slug-2, slug-3, ...
+    while (attempt < 10 && !newId) {
+      let slug = baseSlug;
 
-    if (insErr || !newItem?.id) {
-      // nếu vẫn lỡ trùng slug do race condition, trả message dễ hiểu hơn
-      const msg =
-        insErr?.code === "23505"
-          ? `Slug bị trùng (version_slug_ux). Thử lại sau hoặc đổi tiêu đề mục con "${rawTitle}".`
-          : insErr?.message || "";
+      if (attempt > 0) {
+        const suffixStr = `-${attempt + 1}`; // attempt=0: slug, 1: slug-2, 2: slug-3...
+        const maxBaseLen = 80 - suffixStr.length;
+        const trimmedBase =
+          baseSlug.length > maxBaseLen ? baseSlug.slice(0, maxBaseLen) : baseSlug;
+        slug = `${trimmedBase}${suffixStr}`;
+      }
+
+      // Nếu trong bộ nhớ đã thấy slug này, tăng attempt luôn để tránh call DB thừa
+      if (existingSlugs.has(slug)) {
+        attempt++;
+        continue;
+      }
+
+      const { data: newItem, error: insErr } = await supabase
+        .from("toc_items")
+        .insert({
+          book_version_id: item.book_version_id,
+          parent_id: item.id,
+          title: rawTitle,
+          slug,
+          order_index: baseOrder + i,
+        })
+        .select("id")
+        .maybeSingle();
+
+      if (!insErr && newItem?.id) {
+        newId = newItem.id as string;
+        existingSlugs.add(slug);
+        break;
+      }
+
+      // Nếu DB báo trùng (23505) thì tăng attempt để thử slug-2, slug-3...
+      if (insErr?.code === "23505") {
+        attempt++;
+        continue;
+      }
+
+      // Các lỗi khác: trả về luôn
+      const msg = insErr?.message || "";
       return NextResponse.json(
         { error: `Tạo mục con "${rawTitle}" thất bại: ${msg}` },
         { status: 400 }
       );
     }
 
-    const newId = newItem.id as string;
+    if (!newId) {
+      return NextResponse.json(
+        {
+          error: `Tạo mục con "${rawTitle}" thất bại: Không tìm được slug khả dụng sau nhiều lần thử.`,
+        },
+        { status: 400 }
+      );
+    }
+
     createdIds.push(newId);
 
     // 6.2) Upsert nội dung cho mục con
