@@ -251,9 +251,10 @@ export async function POST(req: NextRequest) {
 
     let newId: string | null = null;
     let attempt = 0;
+    const maxAttempts = subsections.length + 200;
 
     // Thử tối đa 10 lần: slug, slug-2, slug-3, ...
-    while (attempt < 10 && !newId) {
+    while (attempt < maxAttempts && !newId) {
       let slug = baseSlug;
 
       if (attempt > 0) {
