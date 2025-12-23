@@ -57,15 +57,34 @@ function slugify(input: string) {
     .replace(/(^-|-$)/g, "");
 }
 
+/** Chuẩn hóa giá trị uuid có thể bị gửi là "null" / "" / undefined */
+function normalizeUuidish(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (!s || s.toLowerCase() === "null") return null;
+  return s;
+}
+
 async function requireEditorByVersionId(
   supabase: any,
   userId: string,
   versionId: string
 ) {
+  const safeVersionId = normalizeUuidish(versionId);
+  if (!safeVersionId) {
+    return {
+      ok: false,
+      res: NextResponse.json(
+        { error: "version_id không hợp lệ" },
+        { status: 400 }
+      ),
+    };
+  }
+
   const { data: version, error: vErr } = await supabase
     .from("book_versions")
     .select("id,book_id")
-    .eq("id", versionId)
+    .eq("id", safeVersionId)
     .maybeSingle();
 
   const v = version as Pick<VersionRow, "id" | "book_id"> | null;
@@ -106,7 +125,9 @@ async function requireEditorByVersionId(
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const tocItemId = searchParams.get("toc_item_id") || "";
+  const tocItemIdRaw = searchParams.get("toc_item_id");
+  const tocItemId = normalizeUuidish(tocItemIdRaw);
+
   if (!tocItemId) {
     return NextResponse.json(
       { error: "toc_item_id là bắt buộc" },
@@ -275,8 +296,8 @@ export async function POST(req: NextRequest) {
     body = {};
   }
 
-  const book_version_id = String(body.book_version_id || "");
-  const parent_id = body.parent_id ? String(body.parent_id) : null;
+  const book_version_id = normalizeUuidish(body.book_version_id);
+  const parent_id = normalizeUuidish(body.parent_id ?? null);
   const title = String(body.title || "").trim();
 
   if (!book_version_id) {
@@ -300,15 +321,20 @@ export async function POST(req: NextRequest) {
   if (!gate.ok) return (gate as any).res;
 
   // Lấy order_index tiếp theo trong cùng parent
-  const { data: last, error: lastErr } = await supabase
+  let query = supabase
     .from("toc_items")
     .select("order_index")
     .eq("book_version_id", book_version_id)
-    .eq("parent_id", parent_id)
     .order("order_index", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
 
+  if (parent_id === null) {
+    query = query.is("parent_id", null);
+  } else {
+    query = query.eq("parent_id", parent_id);
+  }
+
+  const { data: last, error: lastErr } = await query.maybeSingle();
   const lastRow = last as { order_index: number } | null;
 
   if (lastErr) {
@@ -362,7 +388,7 @@ export async function PATCH(req: NextRequest) {
     body = {};
   }
 
-  const id = String(body.id || "");
+  const id = normalizeUuidish(body.id);
   const title = String(body.title || "").trim();
 
   if (!id) {
@@ -421,7 +447,8 @@ export async function DELETE(req: NextRequest) {
   if (error) return error;
 
   const { searchParams } = new URL(req.url);
-  const id = searchParams.get("id") || "";
+  const id = normalizeUuidish(searchParams.get("id"));
+
   if (!id) {
     return NextResponse.json({ error: "id là bắt buộc" }, { status: 400 });
   }
