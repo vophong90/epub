@@ -66,9 +66,11 @@ async function requireEditorByVersionId(
     .from("book_versions")
     .select("id,book_id")
     .eq("id", versionId)
-    .maybeSingle<Pick<VersionRow, "id" | "book_id">>();
+    .maybeSingle();
 
-  if (vErr || !version?.book_id) {
+  const v = version as Pick<VersionRow, "id" | "book_id"> | null;
+
+  if (vErr || !v?.book_id) {
     return {
       ok: false,
       res: NextResponse.json(
@@ -81,11 +83,13 @@ async function requireEditorByVersionId(
   const { data: perm, error: pErr } = await supabase
     .from("book_permissions")
     .select("role")
-    .eq("book_id", version.book_id)
+    .eq("book_id", v.book_id)
     .eq("user_id", userId)
-    .maybeSingle<{ role: "viewer" | "author" | "editor" }>();
+    .maybeSingle();
 
-  if (pErr || !perm?.role || perm.role !== "editor") {
+  const p = perm as { role: "viewer" | "author" | "editor" } | null;
+
+  if (pErr || !p?.role || p.role !== "editor") {
     return {
       ok: false,
       res: NextResponse.json(
@@ -95,7 +99,7 @@ async function requireEditorByVersionId(
     };
   }
 
-  return { ok: true, book_id: version.book_id };
+  return { ok: true, book_id: v.book_id };
 }
 
 // ===== GET: lấy chi tiết 1 TOC item (đang dùng cho openEditModal) =====
@@ -118,9 +122,11 @@ export async function GET(req: NextRequest) {
     .from("toc_items")
     .select("id,book_version_id,parent_id,title,slug,order_index")
     .eq("id", tocItemId)
-    .maybeSingle<TocItemRow>();
+    .maybeSingle();
 
-  if (iErr || !item) {
+  const tocItem = item as TocItemRow | null;
+
+  if (iErr || !tocItem) {
     return NextResponse.json(
       { error: "Không tìm thấy TOC item" },
       { status: 404 }
@@ -131,10 +137,12 @@ export async function GET(req: NextRequest) {
   const { data: version, error: vErr } = await supabase
     .from("book_versions")
     .select("id,book_id,template_id")
-    .eq("id", item.book_version_id)
-    .maybeSingle<VersionRow>();
+    .eq("id", tocItem.book_version_id)
+    .maybeSingle();
 
-  if (vErr || !version?.book_id) {
+  const v = version as VersionRow | null;
+
+  if (vErr || !v?.book_id) {
     return NextResponse.json(
       { error: "Không tìm thấy phiên bản sách" },
       { status: 404 }
@@ -145,11 +153,13 @@ export async function GET(req: NextRequest) {
   const { data: perm, error: pErr } = await supabase
     .from("book_permissions")
     .select("role")
-    .eq("book_id", version.book_id)
+    .eq("book_id", v.book_id)
     .eq("user_id", user!.id)
-    .maybeSingle<{ role: "viewer" | "author" | "editor" }>();
+    .maybeSingle();
 
-  if (pErr || !perm?.role) {
+  const p = perm as { role: "viewer" | "author" | "editor" } | null;
+
+  if (pErr || !p?.role) {
     return NextResponse.json(
       { error: "Bạn không có quyền truy cập" },
       { status: 403 }
@@ -160,8 +170,10 @@ export async function GET(req: NextRequest) {
   const { data: book, error: bErr } = await supabase
     .from("books")
     .select("id,title")
-    .eq("id", version.book_id)
-    .maybeSingle<{ id: string; title: string }>();
+    .eq("id", v.book_id)
+    .maybeSingle();
+
+  const b = book as { id: string; title: string } | null;
 
   if (bErr) {
     console.error("books select error in /api/toc/item:", bErr);
@@ -174,7 +186,9 @@ export async function GET(req: NextRequest) {
       "toc_item_id,content_json,updated_at,updated_by,status,editor_note,author_resolved"
     )
     .eq("toc_item_id", tocItemId)
-    .maybeSingle<TocContentRow>();
+    .maybeSingle();
+
+  const c = content as TocContentRow | null;
 
   if (cErr) {
     return NextResponse.json({ error: cErr.message }, { status: 500 });
@@ -231,14 +245,14 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json({
-    item,
-    role: perm.role,
-    book_id: version.book_id,
-    book_title: book?.title ?? null,
-    content: content ?? null,
+    item: tocItem,
+    role: p.role,
+    book_id: v.book_id,
+    book_title: b?.title ?? null,
+    content: c ?? null,
     assignments: assignmentsWithProfiles,
     // ✅ logic mới: trả thêm template_id của version
-    version_template_id: version.template_id,
+    version_template_id: v.template_id,
   });
 }
 
@@ -293,13 +307,15 @@ export async function POST(req: NextRequest) {
     .eq("parent_id", parent_id)
     .order("order_index", { ascending: false })
     .limit(1)
-    .maybeSingle<{ order_index: number }>();
+    .maybeSingle();
+
+  const lastRow = last as { order_index: number } | null;
 
   if (lastErr) {
     return NextResponse.json({ error: lastErr.message }, { status: 400 });
   }
 
-  const nextOrder = (last?.order_index ?? 0) + 1;
+  const nextOrder = (lastRow?.order_index ?? 0) + 1;
 
   const baseSlug = slugify(title) || "muc-luc";
   const slug = `${baseSlug}-${Math.random().toString(36).slice(2, 6)}`;
@@ -314,13 +330,18 @@ export async function POST(req: NextRequest) {
       order_index: nextOrder,
     })
     .select("id,book_version_id,parent_id,title,slug,order_index")
-    .single<TocItemRow>();
+    .single();
 
-  if (insErr) {
-    return NextResponse.json({ error: insErr.message }, { status: 400 });
+  const newItem = inserted as TocItemRow | null;
+
+  if (insErr || !newItem) {
+    return NextResponse.json(
+      { error: insErr?.message || "Không tạo được TOC item" },
+      { status: 400 }
+    );
   }
 
-  return NextResponse.json({ ok: true, item: inserted });
+  return NextResponse.json({ ok: true, item: newItem });
 }
 
 // ===== PATCH: update TOC item title (UI: handleSaveToc, modalMode === "edit") =====
@@ -359,9 +380,11 @@ export async function PATCH(req: NextRequest) {
     .from("toc_items")
     .select("id,book_version_id")
     .eq("id", id)
-    .maybeSingle<{ id: string; book_version_id: string }>();
+    .maybeSingle();
 
-  if (iErr || !item?.book_version_id) {
+  const row = item as { id: string; book_version_id: string } | null;
+
+  if (iErr || !row?.book_version_id) {
     return NextResponse.json(
       { error: "Không tìm thấy TOC item" },
       { status: 404 }
@@ -371,7 +394,7 @@ export async function PATCH(req: NextRequest) {
   const gate = await requireEditorByVersionId(
     supabase,
     user!.id,
-    item.book_version_id
+    row.book_version_id
   );
   if (!gate.ok) return (gate as any).res;
 
@@ -407,9 +430,11 @@ export async function DELETE(req: NextRequest) {
     .from("toc_items")
     .select("id,book_version_id")
     .eq("id", id)
-    .maybeSingle<{ id: string; book_version_id: string }>();
+    .maybeSingle();
 
-  if (iErr || !item?.book_version_id) {
+  const row = item as { id: string; book_version_id: string } | null;
+
+  if (iErr || !row?.book_version_id) {
     return NextResponse.json(
       { error: "Không tìm thấy TOC item" },
       { status: 404 }
@@ -419,7 +444,7 @@ export async function DELETE(req: NextRequest) {
   const gate = await requireEditorByVersionId(
     supabase,
     user!.id,
-    item.book_version_id
+    row.book_version_id
   );
   if (!gate.ok) return (gate as any).res;
 
