@@ -363,6 +363,7 @@ export default function BookDetailPage() {
 
   /** MENU state cho card chương (⋯) */
   const [openMenuFor, setOpenMenuFor] = useState<string | null>(null);
+  const [rootReordering, setRootReordering] = useState(false);
 
   function toggleMenu(id: string) {
     setOpenMenuFor((cur) => (cur === id ? null : id));
@@ -568,8 +569,9 @@ export default function BookDetailPage() {
     })
   );
 
-  async function handleRootDragEnd(e: DragEndEvent) {
-    if (!version?.id) return;
+    async function handleRootDragEnd(e: DragEndEvent) {
+    if (!version?.id || rootReordering) return;
+
     const { active, over } = e;
     if (!over) return;
     if (active.id === over.id) return;
@@ -582,25 +584,30 @@ export default function BookDetailPage() {
     const next = arrayMove(prev, oldIndex, newIndex);
     setRootOrder(next); // optimistic UI
 
-    const res = await fetch("/api/toc/items/reorder", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        book_version_id: version.id,
-        parent_id: null,
-        ordered_ids: next,
-      }),
-    });
+    setRootReordering(true);
+    try {
+      const res = await fetch("/api/toc/items/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          book_version_id: version.id,
+          parent_id: null,
+          ordered_ids: next,
+        }),
+      });
 
-    if (!res.ok) {
-      console.error("reorder(root) error", await res.text());
+      if (!res.ok) {
+        console.error("reorder(root) error", await res.text());
+        alert("Không đổi thứ tự được.");
+        setRootOrder(prev); // rollback UI
+      }
+    } catch (err) {
+      console.error("reorder(root) exception", err);
       alert("Không đổi thứ tự được.");
-      setRootOrder(prev); // rollback
-      return;
+      setRootOrder(prev); // rollback nếu exception
+    } finally {
+      setRootReordering(false);
     }
-
-    // reload để đồng bộ order_index
-    await loadTocTree(version.id);
   }
 
   /** Tạo phiên bản đầu tiên (đi qua API /api/books/versions) */
