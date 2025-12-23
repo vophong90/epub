@@ -781,7 +781,7 @@ export default function BookDetailPage() {
       let currentItemId = modalItem?.id || "";
 
       if (modalMode === "create") {
-        const res = await fetch("/api/toc/items", {
+        const res = await fetch("/api/toc/item", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -798,7 +798,7 @@ export default function BookDetailPage() {
         const json = await res.json();
         currentItemId = json.item?.id;
       } else if (modalMode === "edit" && modalItem) {
-        const res = await fetch("/api/toc/items", {
+        const res = await fetch("/api/toc/item", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
