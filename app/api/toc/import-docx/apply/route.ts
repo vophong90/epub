@@ -233,7 +233,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-    // 6) Tạo mục con mới + nội dung, đảm bảo slug không trùng
+  // 6) Tạo mục con mới + nội dung, đảm bảo slug không trùng (retry nếu DB báo 23505)
   const createdIds: string[] = [];
 
   for (let i = 0; i < subsections.length; i++) {
