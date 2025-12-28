@@ -498,6 +498,7 @@ export async function POST(req: NextRequest) {
     <html>
     <head>
     <meta charset="utf-8"/>
+    <base href="${origin}/" />
     <title>${esc(book.title)} – v${version.version_no}</title>
     <style>
     ${inlineFontCSS}
