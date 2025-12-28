@@ -449,28 +449,13 @@ export async function POST(req: NextRequest) {
       .map((n) => {
         const isChapter = n.depth === 1;
         const tag = n.depth === 1 ? "h1" : n.depth === 2 ? "h2" : "h3";
-
-        const runningChapter = isChapter
-          ? `<div class="runningHeaderRight">${esc(n.title)}</div>`
-          : "";
-
-        const bodyHtml =
-          n.html && n.html.trim()
-            ? n.html
-            : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
-
         return `
-<section class="${isChapter ? "chapter" : "section"}" id="${esc(
-          n.id
-        )}" data-toc-item="${esc(
+        <section class="${isChapter ? "chapter" : "section"}" id="${esc(n.id)}" data-toc-item="${esc(
           n.toc_item_id
-        )}" data-depth="${n.depth}" data-chapter-title="${esc(
-          n.chapterTitle
-        )}">
-  ${runningChapter}
-  <${tag} class="${isChapter ? "chapter-title" : ""}">${esc(n.title)}</${tag}>
-  ${bodyHtml}
-</section>`;
+        )}" data-depth="${n.depth}" data-chapter-title="${esc(n.chapterTitle)}">
+        <${tag} class="${isChapter ? "chapter-title" : ""}">${esc(n.title)}</${tag}>
+        ${bodyHtml}
+        </section>`;
       })
       .join("\n");
 
