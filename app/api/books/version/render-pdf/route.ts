@@ -451,9 +451,7 @@ export async function POST(req: NextRequest) {
         const tag = n.depth === 1 ? "h1" : n.depth === 2 ? "h2" : "h3";
 
         const runningChapter = isChapter
-          ? `<div class="runningHeaderRight" style="position: running(runningHeaderRight);">${esc(
-              n.title
-            )}</div>`
+          ? `<div class="runningHeaderRight">${esc(n.title)}</div>`
           : "";
 
         const bodyHtml =
