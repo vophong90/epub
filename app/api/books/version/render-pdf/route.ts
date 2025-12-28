@@ -547,7 +547,11 @@ export async function POST(req: NextRequest) {
       }
     });
 
-    await page.setContent(html, { waitUntil: "networkidle0" });
+    page.setDefaultNavigationTimeout(180000);
+    page.setDefaultTimeout(180000);
+    
+    await page.setContent(html, { waitUntil: "load", timeout: 180000 });
+    await page.waitForNetworkIdle({ idleTime: 800, timeout: 60000 }).catch(() => {});
 
     // Đợi fonts/layout ổn định một chút (thay vì page.waitForTimeout)
     await page.evaluate(async () => {
