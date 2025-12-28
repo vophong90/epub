@@ -263,7 +263,7 @@ async function launchBrowser() {
       "--disable-features=LazyImageLoading,LazyFrameLoading",
     ],
     executablePath,
-    headless: chromium.headless,
+    headless: true,
   });
 
   return browser;
