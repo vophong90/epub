@@ -258,8 +258,12 @@ async function launchBrowser() {
   );
 
   const browser = await puppeteer.launch({
-    args: chromium.args,
+    args: [
+      ...chromium.args,
+      "--disable-features=LazyImageLoading,LazyFrameLoading",
+    ],
     executablePath,
+    headless: chromium.headless,
   });
 
   return browser;
@@ -551,19 +555,32 @@ export async function POST(req: NextRequest) {
     page.setDefaultTimeout(180000);
     
     await page.setContent(html, { waitUntil: "load", timeout: 180000 });
-    await page.waitForNetworkIdle({ idleTime: 800, timeout: 60000 }).catch(() => {});
-
-    // Đợi fonts/layout ổn định một chút (thay vì page.waitForTimeout)
+    await page.evaluate(() => {
+      document.querySelectorAll("img").forEach((img) => {
+        try {
+          img.loading = "eager";
+          img.decoding = "sync";
+          const src = img.getAttribute("src");
+          if (src) img.setAttribute("src", src);
+        } catch {}
+      });
+    });
+    
     await page.evaluate(async () => {
       if (document.fonts?.ready) await document.fonts.ready;
       const imgs = Array.from(document.images || []);
       await Promise.all(
-        imgs.map((img) => {
-          if ((img as any).complete) return Promise.resolve();
-          return new Promise<void>((res) => {
-            img.addEventListener("load", () => res(), { once: true });
-            img.addEventListener("error", () => res(), { once: true });
-          });
+        imgs.map(async (img: any) => {
+          if (!img) return;
+          if (!img.complete) {
+            await new Promise<void>((res) => {
+              img.addEventListener("load", () => res(), { once: true });
+              img.addEventListener("error", () => res(), { once: true });
+            });
+          }
+          if (img.decode) {
+            try { await img.decode(); } catch {}
+          }
         })
       );
     });
