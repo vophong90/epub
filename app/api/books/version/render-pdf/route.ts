@@ -535,11 +535,34 @@ export async function POST(req: NextRequest) {
         console.log("[render-pdf][browser]", msg.text());
       }
     });
+    
+    page.on("requestfailed", (r) =>
+      console.log("[render-pdf][requestfailed]", r.url(), r.failure()?.errorText)
+           );
+    
+    page.on("response", async (res) => {
+      const url = res.url();
+      if (url.includes("logo-ump.png") || url.includes("logo-square.png")) {
+        console.log("[render-pdf][logo]", res.status(), res.headers()["content-type"], url);
+      }
+    });
 
-    await page.setContent(html, { waitUntil: "load" });
+    await page.setContent(html, { waitUntil: "networkidle0" });
 
     // Đợi fonts/layout ổn định một chút (thay vì page.waitForTimeout)
-    await new Promise((resolve) => setTimeout(resolve, 8000));
+    await page.evaluate(async () => {
+      if (document.fonts?.ready) await document.fonts.ready;
+      const imgs = Array.from(document.images || []);
+      await Promise.all(
+        imgs.map((img) => {
+          if ((img as any).complete) return Promise.resolve();
+          return new Promise<void>((res) => {
+            img.addEventListener("load", () => res(), { once: true });
+            img.addEventListener("error", () => res(), { once: true });
+          });
+        })
+      );
+    });
 
     const pdfBuffer = await page.pdf({
       format: "A4",
