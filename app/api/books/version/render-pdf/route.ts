@@ -453,13 +453,14 @@ export async function POST(req: NextRequest) {
           ? n.html
           : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
         
-        return `
-        <section class="${isChapter ? "chapter" : "section"}" id="${esc(n.id)}" data-toc-item="${esc(
-          n.toc_item_id
-        )}" data-depth="${n.depth}" data-chapter-title="${esc(n.chapterTitle)}">
-        <${tag} class="${isChapter ? "chapter-title" : ""}">${esc(n.title)}</${tag}>
-        ${bodyHtml}
-        </section>`;
+       return `
+       <section class="${isChapter ? "chapter" : "section"}" id="${esc(n.id)}"
+       data-toc-item="${esc(n.toc_item_id)}"
+       data-depth="${n.depth}"
+       data-chapter-title="${esc(n.chapterTitle)}">
+       <${tag} class="${isChapter ? "chapter-title" : ""}">${esc(n.title)}</${tag}>
+       ${isChapter ? `<div class="chapter-body">${bodyHtml}</div>` : bodyHtml}
+       </section>`;
       })
       .join("\n");
 
