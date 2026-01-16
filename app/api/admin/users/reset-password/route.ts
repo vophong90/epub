@@ -80,6 +80,7 @@ export async function POST(req: NextRequest) {
   // 5) Đặt lại mật khẩu mặc định qua Supabase Admin API
   const { error: upErr } = await admin.auth.admin.updateUserById(targetId, {
     password: DEFAULT_PASSWORD,
+    email_confirm: true,
   });
 
   if (upErr) {
