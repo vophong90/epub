@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -160,10 +160,12 @@ function SortableChapterRow(props: {
   idx: number;
   childCount: number;
   isEditor: boolean;
+  isAuthor: boolean;
   isMenuOpen: boolean;
   onToggleMenu: (id: string) => void;
   onCloseMenu: () => void;
   onOpenEdit: (it: TocItem) => void;
+  onOpenCompose: (it: TocItem) => void;
   onOpenCreateChild: (parentId: string) => void;
   onMoveUpDown: (id: string, dir: "up" | "down") => void;
   bookId: string;
@@ -173,10 +175,12 @@ function SortableChapterRow(props: {
     idx,
     childCount,
     isEditor,
+    isAuthor,
     isMenuOpen,
     onToggleMenu,
     onCloseMenu,
     onOpenEdit,
+    onOpenCompose,
     onOpenCreateChild,
     onMoveUpDown,
     bookId,
@@ -220,7 +224,10 @@ function SortableChapterRow(props: {
             <button
               type="button"
               className="block w-full truncate text-left text-sm font-semibold text-gray-900 hover:underline"
-              onClick={() => onOpenEdit(it)}
+              onClick={() => {
+                if (isAuthor && !isEditor) onOpenCompose(it);
+                else onOpenEdit(it);
+              }}
             >
               {idx + 1}. {it.title}
             </button>
@@ -316,6 +323,8 @@ function SortableChapterRow(props: {
 
 export default function BookDetailPage() {
   const params = useParams();
+  const router = useRouter();
+
   const bookId =
     typeof params?.id === "string"
       ? params.id
@@ -531,6 +540,7 @@ export default function BookDetailPage() {
   }, [version?.id]);
 
   const isEditor = tocData?.role === "editor";
+  const isAuthor = tocData?.role === "author";
 
   /** Children map cho hiển thị + reorder */
   const childrenMap = useMemo(
@@ -570,7 +580,8 @@ export default function BookDetailPage() {
   );
 
     async function handleRootDragEnd(e: DragEndEvent) {
-    if (!version?.id || rootReordering) return;
+      if (!isEditor) return;
+      if (!version?.id || rootReordering) return;
 
     const { active, over } = e;
     if (!over) return;
@@ -1137,10 +1148,12 @@ export default function BookDetailPage() {
                         idx={idx}
                         childCount={childCount}
                         isEditor={isEditor}
+                        isAuthor={isAuthor} 
                         isMenuOpen={isMenuOpen}
                         onToggleMenu={toggleMenu}
                         onCloseMenu={closeMenu}
                         onOpenEdit={openEditModal}
+                        onOpenCompose={(toc) => router.push(`/books/${book.id}/toc/${toc.id}`)}
                         onOpenCreateChild={(pid) => openCreateModal(pid)}
                         onMoveUpDown={handleMoveItem}
                         bookId={book.id}
