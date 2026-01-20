@@ -503,30 +503,42 @@ export async function POST(req: NextRequest) {
 
     // 4) TOC list — số cấp do template quyết định (toc_depth)
     const tocItems: string[] = [];
-
-for (const n of nodes) {
-  // template đang toc_depth=1 => chỉ show level 1 (PHẦN + CHƯƠNG)
-  if (n.depth < 1 || n.depth > tocDepth) continue;
-
-  const isPart = n.kind === "section";
-  const isChapter = n.kind === "chapter";
-
-  // Với toc_depth=1: không cần padding. Nếu bạn tăng toc_depth sau này thì vẫn ok:
-  const pad = tocDepth > 1 ? Math.max(0, (n.depth - 1) * 14) : 0;
-  const padAttr = pad ? ` style="padding-left:${pad}px"` : "";
-
-  const cls = isPart
-    ? "toc-item toc-item--section"
-    : isChapter
-    ? "toc-item toc-item--chapter"
-    : "toc-item";
-
-  tocItems.push(`
-<li class="${cls}"${padAttr}>
-  <a href="#${esc(n.id)}">${esc(n.title)}</a>
-</li>`);
-}
+    const tocItems: string[] = [];
     
+    let partNo = 0;
+    let chapterNo = 0;
+    
+    for (const n of nodes) {
+      const isPart = n.kind === "section";
+      const isChapter = n.kind === "chapter";
+      const level = isPart ? 1 : isChapter ? 2 : 999;
+      if (level > tocDepth) continue;
+      if (!isPart && !isChapter) continue;
+      
+      if (isPart) {
+        partNo += 1;
+        chapterNo = 0;
+      }
+      if (isChapter) {
+        chapterNo += 1;
+      }
+      
+      const pad = level === 2 ? 14 : 0;
+      const padAttr = pad ? ` style="padding-left:${pad}px"` : "";
+      
+      const label = isPart
+        ? `PHẦN ${partNo}. ${esc(n.title)}`
+        : `${chapterNo}. ${esc(n.title)}`;
+      const cls = isPart
+        ? "toc-item toc-item--section"
+        : "toc-item toc-item--chapter";
+      
+      tocItems.push(`
+      <li class="${cls}"${padAttr}>
+      <a href="#${esc(n.id)}">${label}</a>
+      </li>`);
+    }
+
     const tocList = tocItems.join("\n");
     const html = `<!doctype html>
     <html>
