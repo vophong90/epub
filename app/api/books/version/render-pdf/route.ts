@@ -581,6 +581,41 @@ ${cssFinal}
     });
 
     // wait fonts + images settle BEFORE paginate
+    await page.evaluate(() => {
+  const links = Array.from(document.querySelectorAll('nav.toc a[href^="#"]')) as HTMLAnchorElement[];
+  const missing: string[] = [];
+  const ids = new Map<string, number>();
+
+  // check missing targets
+  for (const a of links) {
+    const href = a.getAttribute("href") || "";
+    const id = href.slice(1);
+    if (!id) continue;
+
+    const el = document.getElementById(id);
+    if (!el) missing.push(id);
+  }
+
+  // check duplicate ids in document
+  const allWithId = Array.from(document.querySelectorAll("[id]")) as HTMLElement[];
+  for (const el of allWithId) {
+    const id = el.id;
+    ids.set(id, (ids.get(id) || 0) + 1);
+  }
+  const dup = Array.from(ids.entries()).filter(([, n]) => n > 1).map(([id, n]) => `${id}(${n})`);
+
+  if (missing.length || dup.length) {
+    throw new Error(
+      "TOC target mismatch. Missing: " +
+        missing.slice(0, 20).join(", ") +
+        (missing.length > 20 ? ` ... (+${missing.length - 20})` : "") +
+        " | Duplicate ids: " +
+        dup.slice(0, 20).join(", ") +
+        (dup.length > 20 ? ` ... (+${dup.length - 20})` : "")
+    );
+  }
+});
+
     await page.evaluate(async () => {
       if ((document as any).fonts?.ready) await (document as any).fonts.ready;
 
