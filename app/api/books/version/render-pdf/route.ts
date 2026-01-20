@@ -602,17 +602,19 @@ ${cssFinal}
     });
 
     // ✅ run Paged.js paginate and wait done
-    await page.evaluate(async () => {
-      const w: any = window as any;
-      if (!w.Paged) throw new Error("Paged is not available on window");
-
-      w.__PAGED_DONE__ = false;
-      try {
-        await w.Paged.Preview();
-      } finally {
-        w.__PAGED_DONE__ = true;
-      }
-    });
+  await page.evaluate(async () => {
+  const w = window as any;
+  if (document.fonts?.ready) await document.fonts.ready;
+  if (w.PagedPolyfill?.preview) {
+    await w.PagedPolyfill.preview();
+    return;
+  }
+  if (w.Paged?.preview) {
+    await w.Paged.preview();
+    return;
+  }
+  throw new Error("Paged.js loaded but no preview() found (PagedPolyfill.preview / Paged.preview).");
+});
 
     await page.waitForFunction(() => (window as any).__PAGED_DONE__ === true, {
       timeout: 180000,
