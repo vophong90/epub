@@ -283,7 +283,7 @@ function MoveChaptersModal({
       <div className="w-full max-w-2xl rounded-lg bg-white p-5 shadow-xl">
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-lg font-semibold">
-            Chọn chương để đưa vào PHẦN này
+            Chọn chương để đưa vào phần này
           </h3>
           <button
             className="text-sm text-gray-500 hover:text-gray-800"
@@ -606,7 +606,7 @@ export default function TocRootList({
 
       if (!res.ok) {
         console.error("move-to-section error", await res.text());
-        alert("Không chuyển chương vào PHẦN được.");
+        alert("Không chuyển chương vào phần được.");
         return;
       }
 
@@ -614,7 +614,7 @@ export default function TocRootList({
       closeMoveChaptersModal();
     } catch (err) {
       console.error("move-to-section exception", err);
-      alert("Không chuyển chương vào PHẦN được.");
+      alert("Không chuyển chương vào phần được.");
     }
   }
 
@@ -680,7 +680,7 @@ export default function TocRootList({
               type="button"
               onClick={onOpenCreateSection}
             >
-              + Tạo PHẦN (Section)
+              + Tạo phần mới
             </button>
             <button
               className={BTN_PRIMARY}
@@ -695,7 +695,7 @@ export default function TocRootList({
 
       {rootSections.length === 0 && rootOrphanChapters.length === 0 && (
         <p className="text-sm text-gray-500">
-          Chưa có mục lục nào. Hãy tạo PHẦN hoặc chương mới.
+          Chưa có mục lục nào. Hãy tạo phần hoặc chương mới.
         </p>
       )}
 
@@ -704,7 +704,7 @@ export default function TocRootList({
         <div className="mb-4 rounded-lg border border-dashed bg-slate-50 p-3">
           <div className="flex items-center justify-between">
             <div className="text-xs font-semibold text-gray-700">
-              Các chương không thuộc PHẦN
+              Các chương không thuộc phần
             </div>
           </div>
           <ChapterList
@@ -751,7 +751,7 @@ export default function TocRootList({
                       </span>
                     </div>
                     <div className="mt-1 text-xs text-gray-600">
-                      Loại: Phần (Section) · Thứ tự: {sec.order_index} ·{" "}
+                      Loại: Phần · Thứ tự: {sec.order_index} ·{" "}
                       {chapters.length} mục con
                     </div>
                   </div>
@@ -761,7 +761,7 @@ export default function TocRootList({
                       <button
                         type="button"
                         className={ICON_BTN}
-                        title="Tác vụ PHẦN"
+                        title="Tác vụ phần"
                         onClick={(e) => {
                           e.stopPropagation();
                           toggleSectionMenu(sec.id);
@@ -783,7 +783,7 @@ export default function TocRootList({
                               onOpenEdit(sec);
                             }}
                           >
-                            Sửa tên PHẦN
+                            Sửa tên phần
                           </button>
 
                           <button
@@ -794,7 +794,7 @@ export default function TocRootList({
                               onOpenCreateChild(sec.id);
                             }}
                           >
-                            Thêm chương trong PHẦN này
+                            Thêm chương trong phần này
                           </button>
 
                           <button
@@ -805,7 +805,7 @@ export default function TocRootList({
                               openMoveChaptersModal(sec);
                             }}
                           >
-                            Chọn các chương để đưa vào PHẦN này…
+                            Chọn các chương để đưa vào phần này…
                           </button>
                         </div>
                       )}
