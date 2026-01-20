@@ -562,11 +562,8 @@ ${cssFinal}
     const page = await browser.newPage();
 
     page.on("console", (msg) => console.log("[render-pdf][browser]", msg.type(), msg.text()));
-    page.on("pageerror", (err) => console.log("[render-pdf][pageerror]", err?.message || String(err)));
-    page.on("requestfailed", (r) =>
-      console.log("[render-pdf][requestfailed]", r.url(), r.failure()?.errorText)
-    );
-
+    page.on("pageerror", (err: unknown) => {const msg = err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err); console.log("[render-pdf][pageerror]", msg);});
+    page.on("requestfailed", (r) =>console.log("[render-pdf][requestfailed]", r.url(), r.failure()?.errorText));
     page.setDefaultNavigationTimeout(180000);
     page.setDefaultTimeout(180000);
 
