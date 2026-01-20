@@ -7,6 +7,8 @@ const BTN =
   "inline-flex items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-50";
 const BTN_PRIMARY =
   "inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50";
+const BTN_SECONDARY =
+  "inline-flex items-center justify-center rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50";
 
 export type Book = {
   id: string;
@@ -42,14 +44,29 @@ export type BookTemplate = {
 
 export type BookHeaderSectionProps = {
   book: Book;
+
+  /** version đang được chọn/hiển thị (thường là latest) */
   version: BookVersion | null;
+
+  /** danh sách template */
   templates: BookTemplate[];
   templatesLoading: boolean;
   templatesError: string | null;
+
+  /** state chọn template */
   selectedTemplateId: string;
   savingTemplate: boolean;
+
+  /** state tạo version */
   creatingVersion: boolean;
+
+  /** có bản published để clone hay không (page.tsx tính giúp) */
+  hasPublishedVersion: boolean;
+
+  /** handlers */
   onCreateFirstVersion: () => void;
+  onCloneFromPublished: () => void;
+
   onChangeTemplate: (id: string) => void;
   onSaveTemplateForVersion: () => void;
 };
@@ -74,7 +91,9 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
     selectedTemplateId,
     savingTemplate,
     creatingVersion,
+    hasPublishedVersion,
     onCreateFirstVersion,
+    onCloneFromPublished,
     onChangeTemplate,
     onSaveTemplateForVersion,
   } = props;
@@ -83,6 +102,8 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
     version?.template_id && templates.length
       ? templates.find((t) => t.id === version.template_id) || null
       : null;
+
+  const canCloneNewVersion = Boolean(version) && hasPublishedVersion;
 
   return (
     <div className="space-y-4">
@@ -98,9 +119,8 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
       <div className="flex flex-col items-start justify-between gap-2 md:flex-row md:items-center">
         <div>
           <h1 className="text-2xl font-bold">{book.title}</h1>
-          <p className="text-sm text-gray-500">
-            Đơn vị: {book.unit_name || "—"}
-          </p>
+          <p className="text-sm text-gray-500">Đơn vị: {book.unit_name || "—"}</p>
+
           {version && (
             <p className="mt-1 text-sm text-gray-500">
               Phiên bản {version.version_no} –{" "}
@@ -128,6 +148,18 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
           <Link href="/books" className={BTN}>
             ← Quay lại danh sách
           </Link>
+
+          {/* ✅ Khi đã có version và có published -> cho tạo version mới bằng clone */}
+          {canCloneNewVersion ? (
+            <button
+              className={BTN_SECONDARY}
+              onClick={onCloneFromPublished}
+              disabled={creatingVersion}
+              title="Tạo phiên bản nháp mới bằng cách clone từ bản đã publish gần nhất"
+            >
+              {creatingVersion ? "Đang tạo phiên bản…" : "Tạo phiên bản mới"}
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -135,8 +167,8 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
       {!version && (
         <div className="space-y-3 rounded-lg border border-red-200 bg-red-50 p-4">
           <p className="text-sm text-red-800">
-            Sách này chưa có phiên bản nào. Bạn cần tạo phiên bản đầu tiên trước
-            khi xây dựng mục lục.
+            Sách này chưa có phiên bản nào. Bạn cần tạo phiên bản đầu tiên trước khi
+            xây dựng mục lục.
           </p>
           <button
             className={BTN_PRIMARY}
@@ -164,8 +196,7 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
                   ? templatesError
                   : selectedTemplateId
                   ? `Đã chọn: ${
-                      templates.find((x) => x.id === selectedTemplateId)?.name ||
-                      "—"
+                      templates.find((x) => x.id === selectedTemplateId)?.name || "—"
                     }`
                   : "Chưa chọn template"}
               </div>
@@ -188,9 +219,7 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
                 ))}
               </select>
               {templatesError ? (
-                <div className="mt-1 text-[11px] text-red-600">
-                  {templatesError}
-                </div>
+                <div className="mt-1 text-[11px] text-red-600">{templatesError}</div>
               ) : null}
             </div>
 
@@ -206,6 +235,14 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
               </button>
             </div>
           </div>
+
+          {/* Hint nhỏ khi chưa có published để clone */}
+          {!hasPublishedVersion ? (
+            <div className="mt-3 text-xs text-gray-500">
+              * Chỉ hiện nút “Tạo phiên bản mới” khi sách có ít nhất 1 phiên bản ở trạng thái{" "}
+              <span className="font-medium">published</span>.
+            </div>
+          ) : null}
         </div>
       )}
     </div>
