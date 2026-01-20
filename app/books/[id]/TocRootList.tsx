@@ -28,6 +28,7 @@ const ICON_BTN =
 const MENU_ITEM = "w-full text-left px-3 py-2 text-sm hover:bg-gray-50";
 
 export type BookRole = "viewer" | "author" | "editor";
+export type TocKind = "section" | "chapter" | "heading";
 
 export type TocItem = {
   id: string;
@@ -36,6 +37,7 @@ export type TocItem = {
   title: string;
   slug: string;
   order_index: number;
+  kind: TocKind;
   created_at?: string | null;
 };
 
@@ -50,9 +52,10 @@ type SortableChapterRowProps = {
   onCloseMenu: () => void;
   onOpenEdit: (it: TocItem) => void;
   onOpenCompose: (it: TocItem) => void;
-  onOpenCreateChild: (parentId: string) => void;
+  onOpenCreateChild: (parent: TocItem) => void;
   onMoveUpDown: (id: string, dir: "up" | "down") => void;
   bookId: string;
+  sectionNumber?: number | null;
 };
 
 function SortableChapterRow({
@@ -69,6 +72,7 @@ function SortableChapterRow({
   onOpenCreateChild,
   onMoveUpDown,
   bookId,
+  sectionNumber,
 }: SortableChapterRowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: it.id });
@@ -79,11 +83,15 @@ function SortableChapterRow({
     opacity: isDragging ? 0.6 : 1,
   };
 
+  const isSection = it.kind === "section";
+
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className="relative rounded-md border border-gray-200 bg-white px-2 py-2 hover:bg-gray-50"
+      className={`relative rounded-md border bg-white px-2 py-2 hover:bg-gray-50 ${
+        isSection ? "border-indigo-300 bg-indigo-50/70" : "border-gray-200"
+      }`}
     >
       <div className="flex items-start justify-between gap-3">
         {/* LEFT */}
@@ -107,17 +115,33 @@ function SortableChapterRow({
           <div className="min-w-0 flex-1">
             <button
               type="button"
-              className="block w-full truncate text-left text-sm font-semibold text-gray-900 hover:underline"
+              className={`block w-full truncate text-left text-sm font-semibold ${
+                isSection ? "text-indigo-900" : "text-gray-900"
+              } hover:underline`}
               onClick={() => {
                 if (isAuthor && !isEditor) onOpenCompose(it);
                 else onOpenEdit(it);
               }}
             >
-              {idx + 1}. {it.title}
+              {isSection ? (
+                <>
+                  PHẦN {sectionNumber ?? "?"}. {it.title}
+                </>
+              ) : (
+                <>
+                  {idx + 1}. {it.title}
+                </>
+              )}
             </button>
 
             <div className="mt-1 text-xs text-gray-500">
-              Thứ tự: {it.order_index}
+              Loại:{" "}
+              {isSection
+                ? "Phần (Section)"
+                : it.kind === "chapter"
+                ? "Chương"
+                : "Mục con"}
+              {" · "}Thứ tự: {it.order_index}
               {childCount > 0 ? ` · ${childCount} mục con` : ""}
             </div>
           </div>
@@ -159,10 +183,12 @@ function SortableChapterRow({
                   className={MENU_ITEM}
                   onClick={() => {
                     onCloseMenu();
-                    onOpenCreateChild(it.id);
+                    onOpenCreateChild(it);
                   }}
                 >
-                  Thêm mục con
+                  {it.kind === "section"
+                    ? "Thêm chương trong PHẦN này"
+                    : "Thêm mục con"}
                 </button>
 
                 <Link
@@ -215,7 +241,7 @@ export type TocRootListProps = {
   onToggleMenu: (id: string) => void;
   onCloseMenu: () => void;
   onOpenEdit: (it: TocItem) => void;
-  onOpenCreateChild: (parentId: string | null) => void;
+  onOpenCreateChild: (parent: TocItem) => void;
   onMoveUpDown: (id: string, dir: "up" | "down") => void;
   rootOrder: string[];
   onRootReorder: (next: string[], prev: string[]) => void;
@@ -261,9 +287,22 @@ export function TocRootList({
   if (!rootItemsOrdered.length) {
     return (
       <p className="text-sm text-gray-500">
-        Chưa có chương nào. Nhấn “Tạo chương mới” để bắt đầu.
+        Chưa có chương hay PHẦN nào. Nhấn “Tạo PHẦN” hoặc “Tạo chương mới” để
+        bắt đầu.
       </p>
     );
+  }
+
+  // Đánh số PHẦN dựa trên thứ tự các root có kind = 'section'
+  const sectionOrderMap = new Map<string, number>();
+  {
+    let counter = 0;
+    for (const it of rootItemsOrdered) {
+      if (it.kind === "section") {
+        counter += 1;
+        sectionOrderMap.set(it.id, counter);
+      }
+    }
   }
 
   return (
@@ -280,6 +319,7 @@ export function TocRootList({
           {rootItemsOrdered.map((it, idx) => {
             const childCount = childrenMap.get(it.id)?.length || 0;
             const isMenuOpen = openMenuFor === it.id;
+            const sectionNumber = sectionOrderMap.get(it.id) ?? null;
 
             return (
               <SortableChapterRow
@@ -294,12 +334,12 @@ export function TocRootList({
                 onCloseMenu={onCloseMenu}
                 onOpenEdit={onOpenEdit}
                 onOpenCompose={(toc) =>
-                  // tác giả vào thẳng trang biên soạn
                   (window.location.href = `/books/${bookId}/toc/${toc.id}`)
                 }
-                onOpenCreateChild={(pid) => onOpenCreateChild(pid)}
+                onOpenCreateChild={onOpenCreateChild}
                 onMoveUpDown={onMoveUpDown}
                 bookId={bookId}
+                sectionNumber={sectionNumber}
               />
             );
           })}
