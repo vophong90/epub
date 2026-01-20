@@ -46,25 +46,33 @@ export type BookHeaderSectionProps = {
   book: Book;
   version: BookVersion | null;
 
-  // ✅ NEW: danh sách versions để chọn
+  // ✅ Versions dropdown
   versions: BookVersion[];
   selectedVersionId: string;
-  onSelectVersion: (id: string) => void;
+  onSelectVersion: (id: string) => void | Promise<void>;
 
-  // ✅ NEW: xóa version đang chọn
+  // ✅ Delete selected version
   canDeleteSelectedVersion: boolean;
   deletingVersion: boolean;
-  onDeleteSelectedVersion: () => void;
+  onDeleteSelectedVersion: () => void | Promise<void>;
 
+  // ✅ Clone button control
+  hasPublishedVersion: boolean;
+  onCloneFromPublished: () => void | Promise<void>;
+
+  // ✅ Templates
   templates: BookTemplate[];
   templatesLoading: boolean;
   templatesError: string | null;
   selectedTemplateId: string;
   savingTemplate: boolean;
+
+  // ✅ Creating version (first/clone)
   creatingVersion: boolean;
-  onCreateFirstVersion: () => void;
+  onCreateFirstVersion: () => void | Promise<void>;
+
   onChangeTemplate: (id: string) => void;
-  onSaveTemplateForVersion: () => void;
+  onSaveTemplateForVersion: () => void | Promise<void>;
 };
 
 function formatDateTime(dt: string | null | undefined) {
@@ -85,17 +93,23 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
     versions,
     selectedVersionId,
     onSelectVersion,
+
     canDeleteSelectedVersion,
     deletingVersion,
     onDeleteSelectedVersion,
+
+    hasPublishedVersion,
+    onCloneFromPublished,
 
     templates,
     templatesLoading,
     templatesError,
     selectedTemplateId,
     savingTemplate,
+
     creatingVersion,
     onCreateFirstVersion,
+
     onChangeTemplate,
     onSaveTemplateForVersion,
   } = props;
@@ -119,9 +133,7 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
       <div className="flex flex-col items-start justify-between gap-2 md:flex-row md:items-center">
         <div>
           <h1 className="text-2xl font-bold">{book.title}</h1>
-          <p className="text-sm text-gray-500">
-            Đơn vị: {book.unit_name || "—"}
-          </p>
+          <p className="text-sm text-gray-500">Đơn vị: {book.unit_name || "—"}</p>
 
           {version && (
             <p className="mt-1 text-sm text-gray-500">
@@ -170,9 +182,10 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
         </div>
       )}
 
-      {/* ✅ Chọn phiên bản + Xóa phiên bản */}
+      {/* Khi đã có version */}
       {version && (
         <div className="rounded-lg border bg-white p-4 shadow-sm space-y-3">
+          {/* Versions row */}
           <div className="flex flex-col gap-3 md:flex-row md:items-center">
             <div className="min-w-0 flex-1">
               <div className="text-sm font-semibold text-gray-900">Phiên bản</div>
@@ -186,7 +199,7 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
                 className={SELECT}
                 value={selectedVersionId}
                 onChange={(e) => onSelectVersion(e.target.value)}
-                disabled={deletingVersion}
+                disabled={deletingVersion || creatingVersion}
               >
                 {versions.map((v) => (
                   <option key={v.id} value={v.id}>
@@ -198,10 +211,22 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
             </div>
 
             <div className="shrink-0 flex gap-2">
+              {/* Clone button (chỉ khi có published & được phép hiển thị ở page.tsx) */}
+              {hasPublishedVersion ? (
+                <button
+                  className={BTN}
+                  onClick={onCloneFromPublished}
+                  disabled={creatingVersion || deletingVersion}
+                  title="Tạo phiên bản nháp mới bằng cách clone từ bản published gần nhất"
+                >
+                  {creatingVersion ? "Đang tạo…" : "Tạo nháp từ Published"}
+                </button>
+              ) : null}
+
               <button
                 className={BTN_DANGER}
                 onClick={onDeleteSelectedVersion}
-                disabled={!canDeleteSelectedVersion || deletingVersion}
+                disabled={!canDeleteSelectedVersion || deletingVersion || creatingVersion}
                 title={
                   canDeleteSelectedVersion
                     ? "Xóa phiên bản đang chọn"
@@ -226,8 +251,7 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
                   ? templatesError
                   : selectedTemplateId
                   ? `Đã chọn: ${
-                      templates.find((x) => x.id === selectedTemplateId)?.name ||
-                      "—"
+                      templates.find((x) => x.id === selectedTemplateId)?.name || "—"
                     }`
                   : "Chưa chọn template"}
               </div>
@@ -238,7 +262,7 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
                 className={SELECT}
                 value={selectedTemplateId}
                 onChange={(e) => onChangeTemplate(e.target.value)}
-                disabled={templatesLoading || savingTemplate || deletingVersion}
+                disabled={templatesLoading || savingTemplate || deletingVersion || creatingVersion}
               >
                 <option value="">(Chưa chọn / None)</option>
                 {templates.map((t) => (
@@ -248,10 +272,9 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
                   </option>
                 ))}
               </select>
+
               {templatesError ? (
-                <div className="mt-1 text-[11px] text-red-600">
-                  {templatesError}
-                </div>
+                <div className="mt-1 text-[11px] text-red-600">{templatesError}</div>
               ) : null}
             </div>
 
@@ -259,7 +282,7 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
               <button
                 className={BTN_PRIMARY}
                 onClick={onSaveTemplateForVersion}
-                disabled={savingTemplate || templatesLoading || deletingVersion}
+                disabled={savingTemplate || templatesLoading || deletingVersion || creatingVersion}
                 title="Lưu template"
               >
                 {savingTemplate ? "Đang lưu…" : "Lưu template"}
