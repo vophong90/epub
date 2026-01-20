@@ -226,30 +226,36 @@ async function buildNodesFromDB(
   ) {
     const kids = children.get(parentId) || [];
     for (const it of kids) {
-      const anchor = makeAnchor(it.id, it.slug);
-      const kind =
-        it.kind === "section" || it.kind === "chapter" || it.kind === "heading"
-        ? it.kind
-        : depth === 1
-        ? "chapter"
-        : "heading";
-      
-      const chapterTitle =
-        kind === "chapter" ? it.title : kind === "section" ? "" : currentChapterTitle;
-      
-      nodes.push({
-        id: anchor,
-        toc_item_id: it.id,
-        title: it.title,
-        slug: it.slug,
-        kind,
-        depth,
-        chapterTitle,
-        html: html || "",
-      });
+  const anchor = makeAnchor(it.id, it.slug);
 
-      walk(it.id, depth + 1, chapterTitle);
-    }
+  // ✅ lấy html từ toc_contents
+  const c = contentByItem.get(it.id);
+  const cj = c?.content_json || {};
+  const html = typeof cj?.html === "string" ? cj.html : "";
+
+  const kind =
+    it.kind === "section" || it.kind === "chapter" || it.kind === "heading"
+      ? it.kind
+      : depth === 1
+      ? "chapter"
+      : "heading";
+
+  const chapterTitle =
+    kind === "chapter" ? it.title : kind === "section" ? "" : currentChapterTitle;
+
+  nodes.push({
+    id: anchor,
+    toc_item_id: it.id,
+    title: it.title,
+    slug: it.slug,
+    kind,
+    depth,
+    chapterTitle,
+    html: html || "",
+  });
+
+  walk(it.id, depth + 1, chapterTitle);
+}
   }
 
   walk(null, 1, "");
