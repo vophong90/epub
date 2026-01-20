@@ -1,12 +1,13 @@
 // components/AuthProvider.tsx
 "use client";
 
-import {
+import React, {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
-  ReactNode,
+  type ReactNode,
 } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -21,41 +22,70 @@ type AuthContextValue = {
   user: any;
   profile: Profile | null;
   loading: boolean;
+  refresh: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue>({
   user: null,
   profile: null,
   loading: true,
+  refresh: async () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
+
+  // loading chỉ nên "true" ở lần init hoặc khi thực sự đổi user
   const [loading, setLoading] = useState(true);
+  const initializedRef = useRef(false);
+  const lastUserIdRef = useRef<string | null>(null);
 
-  async function loadSessionAndProfile() {
-    setLoading(true);
+  async function loadSessionAndProfile(opts?: { force?: boolean }) {
+    const force = opts?.force ?? false;
 
+    // Lấy user hiện tại
     const {
-      data: { user },
+      data: { user: u },
       error,
     } = await supabase.auth.getUser();
 
-    if (error || !user) {
+    if (error || !u) {
+      // nếu trước đó đã có user thì mới cần setLoading để UI chuyển trạng thái
+      if (!initializedRef.current || lastUserIdRef.current !== null) {
+        setLoading(true);
+      }
+
       setUser(null);
       setProfile(null);
+      lastUserIdRef.current = null;
+
+      initializedRef.current = true;
       setLoading(false);
       return;
     }
 
-    setUser(user);
+    const nextUserId = u.id;
+    const userChanged = lastUserIdRef.current !== nextUserId;
 
-    // ⚠️ CHỈ lấy các cột có thật trong bảng profiles
+    // Chỉ bật loading khi lần đầu, hoặc user thật sự đổi, hoặc force refresh
+    if (!initializedRef.current || userChanged || force) {
+      setLoading(true);
+    }
+
+    // Nếu user không đổi và không force thì thôi (tránh “nhấp tab” bị reset UI)
+    if (initializedRef.current && !userChanged && !force) {
+      return;
+    }
+
+    setUser(u);
+    lastUserIdRef.current = nextUserId;
+
+    // Lấy profile (chỉ cột có thật)
     const { data: p, error: pErr } = await supabase
       .from("profiles")
       .select("id,email,name,system_role")
-      .eq("id", user.id)
+      .eq("id", nextUserId)
       .maybeSingle();
 
     if (!pErr && p) {
@@ -68,34 +98,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } else {
       // fallback tối thiểu, tránh vỡ UI
       setProfile({
-        id: user.id,
-        email: user.email ?? null,
-        name: (user.user_metadata as any)?.full_name ?? null,
+        id: nextUserId,
+        email: u.email ?? null,
+        name: (u.user_metadata as any)?.full_name ?? null,
         system_role: null,
       });
     }
 
+    initializedRef.current = true;
     setLoading(false);
   }
 
   useEffect(() => {
-    // load lần đầu
-    loadSessionAndProfile();
+    // init lần đầu
+    loadSessionAndProfile({ force: true });
 
-    // lắng nghe thay đổi auth
+    // Chỉ phản ứng với event “có ý nghĩa”, tránh refresh khi đổi tab/focus
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, _session) => {
-      loadSessionAndProfile();
+    } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "USER_UPDATED") {
+        loadSessionAndProfile({ force: true });
+      }
+      // BỎ QUA các event kiểu TOKEN_REFRESHED / INITIAL_SESSION (tùy phiên bản)
+      // để tránh nhấp tab lại bị reset UI
     });
 
-    return () => {
-      subscription.unsubscribe();
-    };
+    return () => subscription.unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        profile,
+        loading,
+        refresh: () => loadSessionAndProfile({ force: true }),
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );
