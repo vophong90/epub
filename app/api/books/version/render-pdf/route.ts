@@ -503,7 +503,6 @@ export async function POST(req: NextRequest) {
 
     // 4) TOC list — số cấp do template quyết định (toc_depth)
     const tocItems: string[] = [];
-    const tocItems: string[] = [];
     
     let partNo = 0;
     let chapterNo = 0;
