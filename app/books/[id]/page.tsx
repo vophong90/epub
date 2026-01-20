@@ -583,7 +583,7 @@ export default function BookDetailPage() {
     setModalParentId(item.parent_id);
     setModalItem(item as any);
     setModalTitle(item.title);
-    setModalKind(item.kind);
+    setModalKind((item.kind ?? "chapter") as TocKind);
     setModalSelectedAuthors([]);
     setModalOriginalAuthors([]);
     setUserSearchQuery("");
