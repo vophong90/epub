@@ -47,6 +47,8 @@ export type BookRole = "viewer" | "author" | "editor";
 
 export type TocItemKind = "section" | "chapter" | "heading" | null;
 
+export type TocKind = "section" | "chapter";
+
 export type TocItem = {
   id: string;
   book_version_id: string;
