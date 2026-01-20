@@ -222,6 +222,7 @@ export default function BookDetailPage() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [creatingVersion, setCreatingVersion] = useState(false);
+  const [hasPublishedVersion, setHasPublishedVersion] = useState(false);
 
   /** Templates */
   const [templates, setTemplates] = useState<BookTemplate[]>([]);
@@ -336,6 +337,7 @@ export default function BookDetailPage() {
         }
 
         const versions = json.versions || [];
+        setHasPublishedVersion(versions.some((v) => v.status === "published"));
         if (versions.length > 0) {
           const latest = versions[versions.length - 1];
           setVersion(latest);
@@ -351,6 +353,7 @@ export default function BookDetailPage() {
         } else {
           setVersion(null);
           setSelectedTemplateId("");
+          setHasPublishedVersion(false);
         }
       } catch (e: any) {
         if (!cancelled) setErrorMsg(e?.message || "Lỗi khi tải dữ liệu.");
@@ -507,6 +510,48 @@ export default function BookDetailPage() {
       setCreatingVersion(false);
     }
   }
+
+  /** Tạo phiên bản mới bằng cách clone từ bản published gần nhất */
+async function handleCloneFromPublished() {
+  if (!bookId) return;
+
+  setCreatingVersion(true);
+  setErrorMsg(null);
+
+  try {
+    const res = await fetch("/api/books/version/clone", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ book_id: bookId }),
+    });
+
+    const json = await res.json().catch(() => ({} as any));
+    if (!res.ok || !json?.ok || !json?.new_version) {
+      console.error("clone version error:", json);
+      setErrorMsg(json?.error || "Không clone được phiên bản mới.");
+      return;
+    }
+
+    const v = json.new_version as BookVersion;
+
+    // set version mới + sync template (nếu clone có template_id thì tự ăn, còn không thì "")
+    setVersion(v);
+    setSelectedTemplateId(v.template_id || "");
+
+    // reload TOC + members + templates
+    await loadTocTree(v.id);
+    await loadMembers(v.id);
+    await loadTemplates();
+
+    // sau khi clone thì chắc chắn có published (vì clone từ published)
+    setHasPublishedVersion(true);
+  } catch (e: any) {
+    console.error("handleCloneFromPublished error:", e);
+    setErrorMsg(e?.message || "Lỗi khi clone phiên bản mới.");
+  } finally {
+    setCreatingVersion(false);
+  }
+}
 
   /** Lưu template cho version hiện tại */
   async function handleSaveTemplateForVersion() {
@@ -945,7 +990,9 @@ export default function BookDetailPage() {
         selectedTemplateId={selectedTemplateId}
         savingTemplate={savingTemplate}
         creatingVersion={creatingVersion}
+        hasPublishedVersion={hasPublishedVersion && isEditor}
         onCreateFirstVersion={handleCreateFirstVersion}
+        onCloneFromPublished={handleCloneFromPublished}
         onChangeTemplate={setSelectedTemplateId}
         onSaveTemplateForVersion={handleSaveTemplateForVersion}
       />
