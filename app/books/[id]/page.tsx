@@ -5,7 +5,7 @@ import {
   useEffect,
   useMemo,
   useState,
-  type CSSProperties, // vẫn import cho đủ, dù ít dùng
+  type CSSProperties,
 } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
@@ -21,6 +21,7 @@ import {
   TocRootList,
   type TocItem as TocItemRoot,
   type BookRole,
+  type TocKind,
 } from "./TocRootList";
 
 import {
@@ -30,13 +31,11 @@ import {
   type MemberProfile as ModalMemberProfile,
 } from "./TocModal";
 
-/** UI helpers riêng cho trang (nút dùng ngoài header / modal) */
+/** UI helpers riêng cho trang */
 const BTN =
   "inline-flex items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-50";
 const BTN_PRIMARY =
   "inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50";
-const BTN_DANGER =
-  "inline-flex items-center justify-center rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50";
 
 /** API response types */
 type VersionsApiResponse = {
@@ -110,7 +109,7 @@ export default function BookDetailPage() {
   const [templatesError, setTemplatesError] = useState<string | null>(null);
 
   /** Template selection UI */
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(""); // "" nghĩa là chưa chọn/None
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
   const [savingTemplate, setSavingTemplate] = useState(false);
 
   /** Modal state cho tạo / sửa TOC */
@@ -121,6 +120,7 @@ export default function BookDetailPage() {
   const [modalTitle, setModalTitle] = useState("");
   const [modalSaving, setModalSaving] = useState(false);
   const [modalDeleting, setModalDeleting] = useState(false);
+  const [modalKind, setModalKind] = useState<TocKind>("chapter");
 
   const [modalSelectedAuthors, setModalSelectedAuthors] = useState<string[]>([]);
   const [modalOriginalAuthors, setModalOriginalAuthors] = useState<string[]>([]);
@@ -406,11 +406,25 @@ export default function BookDetailPage() {
   }
 
   /** Modal helpers */
-  function openCreateModal(parentId: string | null = null) {
+
+  // Tạo modal tạo mới: nếu không truyền kind thì:
+  //  - parent = null  -> chapter
+  //  - parent != null -> heading
+  function openCreateModal(
+    parentId: string | null = null,
+    forcedKind?: TocKind
+  ) {
     setModalMode("create");
     setModalParentId(parentId);
     setModalItem(null);
     setModalTitle("");
+
+    if (forcedKind) {
+      setModalKind(forcedKind);
+    } else {
+      setModalKind(parentId === null ? "chapter" : "heading");
+    }
+
     setModalSelectedAuthors([]);
     setModalOriginalAuthors([]);
     setUserSearchQuery("");
@@ -419,11 +433,23 @@ export default function BookDetailPage() {
     setModalOpen(true);
   }
 
+  // Tạo riêng function cho Section
+  function openCreateSectionModal() {
+    openCreateModal(null, "section");
+  }
+
+  // Khi bấm "Thêm mục con" ở card: nếu parent là section -> tạo chapter; nếu chapter -> heading
+  function handleOpenCreateChild(parent: TocItemRoot) {
+    const childKind: TocKind = parent.kind === "section" ? "chapter" : "heading";
+    openCreateModal(parent.id, childKind);
+  }
+
   async function openEditModal(item: TocItemRoot) {
     setModalMode("edit");
     setModalParentId(item.parent_id);
     setModalItem(item as any);
     setModalTitle(item.title);
+    setModalKind(item.kind);
     setModalSelectedAuthors([]);
     setModalOriginalAuthors([]);
     setUserSearchQuery("");
@@ -510,6 +536,7 @@ export default function BookDetailPage() {
             book_version_id: version.id,
             parent_id: modalParentId,
             title: modalTitle.trim(),
+            kind: modalKind,
           }),
         });
         if (!res.ok) {
@@ -526,6 +553,7 @@ export default function BookDetailPage() {
           body: JSON.stringify({
             id: modalItem.id,
             title: modalTitle.trim(),
+            // không cho đổi kind ở đây, giữ nguyên loại
           }),
         });
         if (!res.ok) {
@@ -585,7 +613,6 @@ export default function BookDetailPage() {
     }
     setModalDeleting(true);
     try {
-      // dùng /api/toc/item theo route bạn đã gửi
       const res = await fetch(`/api/toc/item?id=${modalItem.id}`, {
         method: "DELETE",
       });
@@ -737,7 +764,7 @@ export default function BookDetailPage() {
       {version && (
         <div className="space-y-4">
           <div className="rounded-lg border bg-white p-4 shadow-sm">
-            <div className="mb-3 flex items-center justify-between">
+            <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
                 <h2 className="text-lg font-semibold">
                   Mục lục (TOC) của phiên bản này
@@ -747,12 +774,20 @@ export default function BookDetailPage() {
                 </p>
               </div>
               {isEditor && (
-                <button
-                  className={BTN_PRIMARY}
-                  onClick={() => openCreateModal(null)}
-                >
-                  + Tạo chương mới
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    className={BTN_PRIMARY}
+                    onClick={openCreateSectionModal}
+                  >
+                    + Tạo PHẦN (Section)
+                  </button>
+                  <button
+                    className={BTN}
+                    onClick={() => openCreateModal(null, "chapter")}
+                  >
+                    + Tạo chương mới
+                  </button>
+                </div>
               )}
             </div>
 
@@ -766,7 +801,7 @@ export default function BookDetailPage() {
               onToggleMenu={toggleMenu}
               onCloseMenu={closeMenu}
               onOpenEdit={openEditModal}
-              onOpenCreateChild={(parentId) => openCreateModal(parentId)}
+              onOpenCreateChild={handleOpenCreateChild}
               onMoveUpDown={handleMoveItem}
               rootOrder={rootOrder}
               onRootReorder={handleRootReorder}
@@ -780,9 +815,10 @@ export default function BookDetailPage() {
         open={modalOpen}
         mode={modalMode}
         parentId={modalParentId}
-        currentItem={modalItem as any}
+        currentItem={modalItem}
         title={modalTitle}
         onTitleChange={setModalTitle}
+        kind={modalKind}
         bookId={book.id}
         loadingAssignments={modalLoadingAssignments}
         members={members}
