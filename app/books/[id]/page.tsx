@@ -556,7 +556,7 @@ export default function BookDetailPage() {
     if (forcedKind) {
       setModalKind(forcedKind);
     } else {
-      setModalKind(parentId === null ? "chapter" : "heading");
+      setModalKind("chapter");
     }
 
     setModalSelectedAuthors([]);
