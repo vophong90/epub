@@ -54,6 +54,7 @@ type SortableChapterRowProps = {
   onOpenCompose: (it: TocItem) => void;
   onOpenCreateChild: (parent: TocItem) => void;
   onMoveUpDown: (id: string, dir: "up" | "down") => void;
+  onOpenAssignToSection: (section: TocItem) => void; // ⭐ mới
   bookId: string;
   sectionNumber?: number | null;
 };
@@ -71,6 +72,7 @@ function SortableChapterRow({
   onOpenCompose,
   onOpenCreateChild,
   onMoveUpDown,
+  onOpenAssignToSection,
   bookId,
   sectionNumber,
 }: SortableChapterRowProps) {
@@ -164,7 +166,7 @@ function SortableChapterRow({
 
             {isMenuOpen && (
               <div
-                className="absolute right-0 mt-1 w-52 overflow-hidden rounded-md border bg-white shadow-lg z-20"
+                className="absolute right-0 mt-1 w-56 overflow-hidden rounded-md border bg-white shadow-lg z-20"
                 onClick={(e) => e.stopPropagation()}
               >
                 <button
@@ -190,6 +192,19 @@ function SortableChapterRow({
                     ? "Thêm chương trong PHẦN này"
                     : "Thêm mục con"}
                 </button>
+
+                {isSection && (
+                  <button
+                    type="button"
+                    className={MENU_ITEM}
+                    onClick={() => {
+                      onCloseMenu();
+                      onOpenAssignToSection(it);
+                    }}
+                  >
+                    Chọn chương có sẵn đưa vào PHẦN này
+                  </button>
+                )}
 
                 <Link
                   href={`/books/${bookId}/toc/${it.id}`}
@@ -243,6 +258,7 @@ export type TocRootListProps = {
   onOpenEdit: (it: TocItem) => void;
   onOpenCreateChild: (parent: TocItem) => void;
   onMoveUpDown: (id: string, dir: "up" | "down") => void;
+  onOpenAssignToSection: (section: TocItem) => void; // ⭐ mới
   rootOrder: string[];
   onRootReorder: (next: string[], prev: string[]) => void;
 };
@@ -259,6 +275,7 @@ export function TocRootList({
   onOpenEdit,
   onOpenCreateChild,
   onMoveUpDown,
+  onOpenAssignToSection,
   rootOrder,
   onRootReorder,
 }: TocRootListProps) {
@@ -338,6 +355,7 @@ export function TocRootList({
                 }
                 onOpenCreateChild={onOpenCreateChild}
                 onMoveUpDown={onMoveUpDown}
+                onOpenAssignToSection={onOpenAssignToSection}
                 bookId={bookId}
                 sectionNumber={sectionNumber}
               />
