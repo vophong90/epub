@@ -73,6 +73,7 @@ type TocItemRow = {
   title: string;
   slug: string;
   order_index: number;
+  kind: "section" | "chapter" | "heading" | null;
 };
 
 type TocContentRow = {
@@ -86,6 +87,7 @@ type RenderNode = {
   toc_item_id: string;
   title: string;
   slug: string;
+  kind: "section" | "chapter" | "heading";
   depth: number; // 1 = chapter
   chapterTitle: string;
   html: string;
@@ -136,7 +138,7 @@ async function fetchAllTocItemsByVersion(
   while (true) {
     const { data, error } = await admin
       .from("toc_items")
-      .select("id,parent_id,title,slug,order_index")
+      .select("id,parent_id,title,slug,order_index,kind")
       .eq("book_version_id", versionId)
       .order("order_index", { ascending: true })
       .order("id", { ascending: true })
@@ -225,18 +227,22 @@ async function buildNodesFromDB(
     const kids = children.get(parentId) || [];
     for (const it of kids) {
       const anchor = makeAnchor(it.id, it.slug);
-      const isChapter = depth === 1;
-      const chapterTitle = isChapter ? it.title : currentChapterTitle;
-
-      const c = contentByItem.get(it.id);
-      const cj = c?.content_json || {};
-      const html = typeof cj?.html === "string" ? cj.html : "";
-
+      const kind =
+        it.kind === "section" || it.kind === "chapter" || it.kind === "heading"
+        ? it.kind
+        : depth === 1
+        ? "chapter"
+        : "heading";
+      
+      const chapterTitle =
+        kind === "chapter" ? it.title : kind === "section" ? "" : currentChapterTitle;
+      
       nodes.push({
         id: anchor,
         toc_item_id: it.id,
         title: it.title,
         slug: it.slug,
+        kind,
         depth,
         chapterTitle,
         html: html || "",
