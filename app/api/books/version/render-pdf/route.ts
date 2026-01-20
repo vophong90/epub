@@ -464,12 +464,12 @@ export async function POST(req: NextRequest) {
 
     const tag =
       n.kind === "section"
-        ? "h1"
-        : n.depth === 1
-        ? "h1"
-        : n.depth === 2
-        ? "h2"
-        : "h3";
+      ? "h1"
+      : isChapter
+      ? "h1"
+      : n.depth === 2
+      ? "h2"
+      : "h3";
 
     const bodyHtml =
       n.html && n.html.trim()
@@ -516,7 +516,6 @@ export async function POST(req: NextRequest) {
       
       if (isPart) {
         partNo += 1;
-        chapterNo = 0;
       }
       if (isChapter) {
         chapterNo += 1;
