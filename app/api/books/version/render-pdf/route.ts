@@ -16,7 +16,6 @@ export const maxDuration = 300;
 const BUCKET_PREVIEW = "pdf_previews";
 const SIGNED_EXPIRES_SEC = 60 * 10;
 
-// Body: cho phép override template_id từ UI publish
 type Body = {
   version_id?: string;
   template_id?: string;
@@ -66,10 +65,6 @@ function loadCJKFontBase64() {
   }
 }
 
-/**
- * Paged.js v0.4.3: file có thể nằm ở các tên khác nhau tùy build.
- * Ta cố đọc từ node_modules để nhúng inline (không cần /public)
- */
 function loadPagedJSInline() {
   const candidates = [
     path.join(process.cwd(), "node_modules", "pagedjs", "dist", "paged.polyfill.js"),
@@ -86,34 +81,37 @@ function loadPagedJSInline() {
   return null;
 }
 
-/**
- * Bổ sung CSS để TOC hiện số trang dựa trên target-counter().
- * Paged.js sẽ phân trang → target-counter mới có giá trị.
- */
 function injectPagedTocCSS(css: string) {
+  // ✅ cách ít lỗi hơn leader()
   return `
 ${css}
 
-/* ===== TOC page numbers via Paged.js ===== */
-nav.toc a{
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
+/* ===== TOC page numbers (Paged.js) ===== */
+nav.toc li a{
+  display:flex;
+  align-items:baseline;
+  gap:8px;
 }
-nav.toc a::before{
-  content: "";
-  flex: 1;
+nav.toc li a::after{
+  content: target-counter(attr(href), page);
+  margin-left:auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* dotted leader (ổn định hơn leader()) */
+nav.toc li a::before{
+  content:"";
+  flex:1;
   border-bottom: 1px dotted rgba(0,0,0,.35);
   margin: 0 8px;
   transform: translateY(-2px);
 }
-nav.toc a::after{
-  content: target-counter(attr(href), page);
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-}
 
-/* Nếu có link không resolve được thì vẫn không crash */
+/* khi pagedjs render pages, tắt column-count để không xung đột pagination */
+.pagedjs_pages #book-content{
+  column-count: auto !important;
+  -webkit-column-count: auto !important;
+}
 `;
 }
 
@@ -134,12 +132,12 @@ type TocContentRow = {
 };
 
 type RenderNode = {
-  id: string; // anchor id
+  id: string;
   toc_item_id: string;
   title: string;
   slug: string;
   kind: "section" | "chapter" | "heading";
-  depth: number; // 1 = chapter
+  depth: number;
   chapterTitle: string;
   html: string;
 };
@@ -178,10 +176,7 @@ function makeAnchor(tocItemId: string, slug: string) {
  * Pagination helpers
  * ========================= */
 
-async function fetchAllTocItemsByVersion(
-  admin: any,
-  versionId: string
-): Promise<TocItemRow[]> {
+async function fetchAllTocItemsByVersion(admin: any, versionId: string): Promise<TocItemRow[]> {
   const PAGE = 1000;
   let from = 0;
   const all: TocItemRow[] = [];
@@ -203,14 +198,10 @@ async function fetchAllTocItemsByVersion(
     if (batch.length < PAGE) break;
     from += PAGE;
   }
-
   return all;
 }
 
-async function fetchAllTocContentsByItemIds(
-  admin: any,
-  tocItemIds: string[]
-): Promise<TocContentRow[]> {
+async function fetchAllTocContentsByItemIds(admin: any, tocItemIds: string[]): Promise<TocContentRow[]> {
   if (!tocItemIds.length) return [];
 
   const ID_CHUNK = 500;
@@ -242,17 +233,11 @@ async function fetchAllTocContentsByItemIds(
   return all;
 }
 
-async function buildNodesFromDB(
-  admin: any,
-  versionId: string
-): Promise<RenderNode[]> {
+async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNode[]> {
   const tocItems = await fetchAllTocItemsByVersion(admin, versionId);
   if (!tocItems.length) return [];
 
-  const tocContents = await fetchAllTocContentsByItemIds(
-    admin,
-    tocItems.map((x) => x.id)
-  );
+  const tocContents = await fetchAllTocContentsByItemIds(admin, tocItems.map((x) => x.id));
 
   const contentByItem = new Map<string, TocContentRow>();
   for (const c of tocContents) contentByItem.set(c.toc_item_id, c);
@@ -270,16 +255,11 @@ async function buildNodesFromDB(
 
   const nodes: RenderNode[] = [];
 
-  function walk(
-    parentId: string | null,
-    depth: number,
-    currentChapterTitle: string
-  ) {
+  function walk(parentId: string | null, depth: number, currentChapterTitle: string) {
     const kids = children.get(parentId) || [];
     for (const it of kids) {
       const anchor = makeAnchor(it.id, it.slug);
 
-      // lấy html từ toc_contents
       const c = contentByItem.get(it.id);
       const cj = c?.content_json || {};
       const html = typeof cj?.html === "string" ? cj.html : "";
@@ -310,7 +290,6 @@ async function buildNodesFromDB(
   }
 
   walk(null, 1, "");
-
   console.log("[render-pdf] nodes count:", nodes.length);
   return nodes;
 }
@@ -336,26 +315,14 @@ export async function POST(req: NextRequest) {
   const supabase = getRouteClient();
   const admin = getAdminClient();
 
-  const {
-    data: { user },
-    error: uErr,
-  } = await supabase.auth.getUser();
-
-  if (uErr || !user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const { data: { user }, error: uErr } = await supabase.auth.getUser();
+  if (uErr || !user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   let body: Body = {};
-  try {
-    body = await req.json();
-  } catch {
-    body = {};
-  }
+  try { body = await req.json(); } catch { body = {}; }
 
   const versionId = (body.version_id || "").toString().trim();
-  if (!versionId) {
-    return NextResponse.json({ error: "version_id là bắt buộc" }, { status: 400 });
-  }
+  if (!versionId) return NextResponse.json({ error: "version_id là bắt buộc" }, { status: 400 });
 
   const { data: version, error: vErr } = await admin
     .from("book_versions")
@@ -366,14 +333,11 @@ export async function POST(req: NextRequest) {
   if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 });
   if (!version) return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
 
-  // Ưu tiên template từ body, nếu không có thì fallback version.template_id
   let templateId = (body.template_id || "").toString().trim();
   if (!templateId) templateId = version.template_id || "";
-  if (!templateId) {
-    return NextResponse.json({ error: "Chưa xác định được template cho phiên bản này" }, { status: 400 });
-  }
+  if (!templateId) return NextResponse.json({ error: "Chưa xác định được template cho phiên bản này" }, { status: 400 });
 
-  // Quyền
+  // quyền
   const { data: profile, error: pErr } = await supabase
     .from("profiles")
     .select("id,system_role")
@@ -398,11 +362,8 @@ export async function POST(req: NextRequest) {
     canRender = !!perm;
   }
 
-  if (!canRender) {
-    return NextResponse.json({ error: "Bạn không có quyền render PDF" }, { status: 403 });
-  }
+  if (!canRender) return NextResponse.json({ error: "Bạn không có quyền render PDF" }, { status: 403 });
 
-  // book
   const { data: book, error: bErr } = await admin
     .from("books")
     .select("id,title,unit_name")
@@ -412,7 +373,6 @@ export async function POST(req: NextRequest) {
   if (bErr) return NextResponse.json({ error: bErr.message }, { status: 500 });
   if (!book) return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
 
-  // template
   const { data: tpl, error: tErr } = await admin
     .from("book_templates")
     .select("id,name,css,cover_html,front_matter_html,toc_html,header_html,footer_html,page_size,page_margin_mm,toc_depth")
@@ -441,12 +401,23 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
 
   if (rInsErr || !render?.id) {
-    return NextResponse.json({ error: "Không tạo được render job", detail: rInsErr?.message }, { status: 500 });
+    return NextResponse.json(
+      { error: "Không tạo được render job", detail: rInsErr?.message },
+      { status: 500 }
+    );
   }
 
   const renderId = render.id;
 
   try {
+    const origin = getSiteOrigin(req);
+
+    // ✅ load Paged.js bundle (inline)
+    const pagedInline = loadPagedJSInline();
+    if (!pagedInline) {
+      throw new Error("Paged.js not found in node_modules. Ensure dependency `pagedjs` is installed.");
+    }
+
     const nodes = await buildNodesFromDB(admin, versionId);
 
     const year = new Date().getFullYear().toString();
@@ -462,17 +433,14 @@ export async function POST(req: NextRequest) {
     const header = token(tpl.header_html || "");
     const footer = token(tpl.footer_html || "");
 
-    const origin = getSiteOrigin(req);
+    // css: absolute fonts + inject TOC page num css
+    const cssAbs = (tpl.css || "")
+      .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
+      .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
+      .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
 
-    // CSS: fonts absolute + inject TOC target-counter
-    const cssWithAbsoluteFonts = injectPagedTocCSS(
-      (tpl.css || "")
-        .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
-        .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
-        .replaceAll("url(/fonts/", `url(${origin}/fonts/`)
-    );
+    const cssFinal = injectPagedTocCSS(cssAbs);
 
-    // Inline CJK fallback
     const cjkBase64 = loadCJKFontBase64();
     const inlineFontCSS = cjkBase64
       ? `
@@ -485,13 +453,6 @@ export async function POST(req: NextRequest) {
 `
       : "";
 
-    // Inline paged.js
-    const pagedInline = loadPagedJSInline();
-    if (!pagedInline) {
-      throw new Error("Paged.js not found in node_modules. Ensure `pagedjs` is installed.");
-    }
-
-    // Main content
     const main = nodes
       .map((n) => {
         const isPart = n.kind === "section";
@@ -511,7 +472,6 @@ export async function POST(req: NextRequest) {
             ? n.html
             : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
 
-        // PHẦN: trang riêng, không render body
         if (isPart) {
           return `
 <section class="part" id="${esc(n.id)}"
@@ -537,18 +497,26 @@ export async function POST(req: NextRequest) {
 
     // TOC list
     const tocItems: string[] = [];
+    let partNo = 0;
+    let chapterNo = 0;
+
     for (const n of nodes) {
       const isPart = n.kind === "section";
       const isChapter = n.kind === "chapter";
-
       const level = isPart ? 1 : isChapter ? 2 : 999;
       if (level > tocDepth) continue;
       if (!isPart && !isChapter) continue;
 
+      if (isPart) partNo += 1;
+      if (isChapter) chapterNo += 1;
+
       const pad = level === 2 ? 14 : 0;
       const padAttr = pad ? ` style="padding-left:${pad}px"` : "";
       const label = esc(n.title);
-      const cls = isPart ? "toc-item toc-item--section" : "toc-item toc-item--chapter";
+
+      const cls = isPart
+        ? "toc-item toc-item--section"
+        : "toc-item toc-item--chapter";
 
       tocItems.push(`
 <li class="${cls}"${padAttr}>
@@ -561,18 +529,14 @@ export async function POST(req: NextRequest) {
     const html = `<!doctype html>
 <html>
 <head>
-  <meta charset="utf-8"/>
-  <base href="${origin}/" />
-  <title>${esc(book.title)} – v${version.version_no}</title>
-
-  <style>
+<meta charset="utf-8"/>
+<base href="${origin}/" />
+<title>${esc(book.title)} – v${version.version_no}</title>
+<style>
 ${inlineFontCSS}
-${cssWithAbsoluteFonts}
-  </style>
-
-  <script>
-${pagedInline}
-  </script>
+${cssFinal}
+</style>
+<script>${pagedInline}</script>
 </head>
 <body>
   ${cover || ""}
@@ -597,14 +561,8 @@ ${pagedInline}
     const browser = await launchBrowser();
     const page = await browser.newPage();
 
-    page.on("console", (msg) => {
-      try {
-        console.log("[render-pdf][browser]", msg.type(), msg.text());
-      } catch {
-        console.log("[render-pdf][browser]", msg.text());
-      }
-    });
-
+    page.on("console", (msg) => console.log("[render-pdf][browser]", msg.type(), msg.text()));
+    page.on("pageerror", (err) => console.log("[render-pdf][pageerror]", err?.message || String(err)));
     page.on("requestfailed", (r) =>
       console.log("[render-pdf][requestfailed]", r.url(), r.failure()?.errorText)
     );
@@ -612,10 +570,12 @@ ${pagedInline}
     page.setDefaultNavigationTimeout(180000);
     page.setDefaultTimeout(180000);
 
-    // 1) load DOM
+    // Paged.js paginate là “screen”, rồi PDF in ra DOM đã paginate
+    await page.emulateMediaType("screen");
+
     await page.setContent(html, { waitUntil: "load", timeout: 180000 });
 
-    // 2) force eager images
+    // force eager images
     await page.evaluate(() => {
       document.querySelectorAll("img").forEach((img) => {
         try {
@@ -627,7 +587,7 @@ ${pagedInline}
       });
     });
 
-    // 3) wait fonts + images decode
+    // wait fonts + images settle BEFORE paginate
     await page.evaluate(async () => {
       if ((document as any).fonts?.ready) await (document as any).fonts.ready;
 
@@ -635,39 +595,40 @@ ${pagedInline}
       await Promise.all(
         imgs.map(async (img: any) => {
           if (!img) return;
-
           if (!img.complete) {
             await new Promise<void>((res) => {
               img.addEventListener("load", () => res(), { once: true });
               img.addEventListener("error", () => res(), { once: true });
             });
           }
-
           if (img.decode) {
-            try {
-              await img.decode();
-            } catch {}
+            try { await img.decode(); } catch {}
           }
         })
       );
     });
 
-    // 4) ✅ paginate Paged.js (TOC target-counter sẽ có số trang)
+    // ✅ run Paged.js paginate and wait done
     await page.evaluate(async () => {
-      const w = window as any;
-      const Paged = w.Paged;
-      if (!Paged) throw new Error("Paged not available on window");
+      const w: any = window as any;
+      if (!w.Paged) throw new Error("Paged is not available on window");
 
       w.__PAGED_DONE__ = false;
-      await Paged.Preview(); // build paged flow
-      w.__PAGED_DONE__ = true;
+      try {
+        await w.Paged.Preview();
+      } finally {
+        w.__PAGED_DONE__ = true;
+      }
     });
 
     await page.waitForFunction(() => (window as any).__PAGED_DONE__ === true, {
       timeout: 180000,
     });
 
-    // 5) export PDF
+    // extra: ensure pages exist
+    await page.waitForSelector(".pagedjs_pages", { timeout: 180000 });
+
+    // Now export PDF from paginated DOM
     const pdfBuffer = await page.pdf({
       format: "A4",
       printBackground: true,
@@ -712,6 +673,8 @@ ${pagedInline}
       preview_url: signed.signedUrl,
     });
   } catch (e: any) {
+    console.error("[render-pdf] ERROR:", e);
+
     await admin
       .from("book_renders")
       .update({
