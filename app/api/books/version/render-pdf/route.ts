@@ -450,46 +450,76 @@ export async function POST(req: NextRequest) {
 }
 `
       : "";
-
+    
     const main = nodes
-      .map((n) => {
-        const isChapter = n.depth === 1;
-        const tag = n.depth === 1 ? "h1" : n.depth === 2 ? "h2" : "h3";
-        const bodyHtml = n.html && n.html.trim()
-          ? n.html
-          : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
-        
-       return `
-       <section class="${isChapter ? "chapter" : "section"}" id="${esc(n.id)}"
-       data-toc-item="${esc(n.toc_item_id)}"
-       data-depth="${n.depth}"
-       data-chapter-title="${esc(n.chapterTitle)}">
-       <${tag} class="${isChapter ? "chapter-title" : ""}">${esc(n.title)}</${tag}>
-       ${isChapter ? `<div class="chapter-body">${bodyHtml}</div>` : bodyHtml}
-       </section>`;
-      })
-      .join("\n");
+  .map((n) => {
+    const isPart = n.kind === "section";
+    const isChapter = n.kind === "chapter";
+
+    const tag =
+      n.kind === "section"
+        ? "h1"
+        : n.depth === 1
+        ? "h1"
+        : n.depth === 2
+        ? "h2"
+        : "h3";
+
+    const bodyHtml =
+      n.html && n.html.trim()
+        ? n.html
+        : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
+
+    // ✅ PHẦN: chỉ render title trang riêng, KHÔNG render body
+    if (isPart) {
+      return `
+<section class="part" id="${esc(n.id)}"
+  data-toc-item="${esc(n.toc_item_id)}"
+  data-kind="section"
+  data-depth="${n.depth}"
+  data-chapter-title="">
+  <h1 class="part-title">${esc(n.title)}</h1>
+</section>`;
+    }
+
+    // Chapter/heading bình thường
+    return `
+<section class="${isChapter ? "chapter" : "heading"}" id="${esc(n.id)}"
+  data-toc-item="${esc(n.toc_item_id)}"
+  data-kind="${esc(n.kind)}"
+  data-depth="${n.depth}"
+  data-chapter-title="${esc(n.chapterTitle)}">
+  <${tag} class="${isChapter ? "chapter-title" : ""}">${esc(n.title)}</${tag}>
+  ${isChapter ? `<div class="chapter-body">${bodyHtml}</div>` : bodyHtml}
+</section>`;
+  })
+  .join("\n");
 
     // 4) TOC list — số cấp do template quyết định (toc_depth)
-    let chapterCounter = 0;
     const tocItems: string[] = [];
-    
-    for (const n of nodes) {
-      if (n.depth < 1 || n.depth > tocDepth) continue;
-      
-      const pad = tocDepth > 1 ? Math.max(0, (n.depth - 1) * 14) : 0;
-      const padAttr = pad ? ` style="padding-left:${pad}px"` : "";
-      
-      let label = esc(n.title);
-      if (n.depth === 1) {
-        chapterCounter += 1;
-        label = `${chapterCounter}. ${label}`; // Ví dụ: "1. SỐT"
-      }
-      tocItems.push(`
-      <li${padAttr}>
-      <a href="#${esc(n.id)}">${label}</a>
-      </li>`);
-    }
+
+for (const n of nodes) {
+  // template đang toc_depth=1 => chỉ show level 1 (PHẦN + CHƯƠNG)
+  if (n.depth < 1 || n.depth > tocDepth) continue;
+
+  const isPart = n.kind === "section";
+  const isChapter = n.kind === "chapter";
+
+  // Với toc_depth=1: không cần padding. Nếu bạn tăng toc_depth sau này thì vẫn ok:
+  const pad = tocDepth > 1 ? Math.max(0, (n.depth - 1) * 14) : 0;
+  const padAttr = pad ? ` style="padding-left:${pad}px"` : "";
+
+  const cls = isPart
+    ? "toc-item toc-item--section"
+    : isChapter
+    ? "toc-item toc-item--chapter"
+    : "toc-item";
+
+  tocItems.push(`
+<li class="${cls}"${padAttr}>
+  <a href="#${esc(n.id)}">${esc(n.title)}</a>
+</li>`);
+}
     
     const tocList = tocItems.join("\n");
     const html = `<!doctype html>
