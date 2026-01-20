@@ -17,8 +17,7 @@ import {
   type BookTemplate,
 } from "./BookHeaderSection";
 
-import {
-  TocRootList,
+import TocRootList, {
   type TocItem as TocItemRoot,
   type BookRole,
   type TocKind,
