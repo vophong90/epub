@@ -7,8 +7,8 @@ const BTN =
   "inline-flex items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-50";
 const BTN_PRIMARY =
   "inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50";
-const BTN_SECONDARY =
-  "inline-flex items-center justify-center rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50";
+const BTN_DANGER =
+  "inline-flex items-center justify-center rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50";
 
 export type Book = {
   id: string;
@@ -45,25 +45,26 @@ export type BookTemplate = {
 export type BookHeaderSectionProps = {
   book: Book;
   version: BookVersion | null;
+
+  // ✅ NEW: danh sách versions để chọn
+  versions: BookVersion[];
+  selectedVersionId: string;
+  onSelectVersion: (id: string) => void;
+
+  // ✅ NEW: xóa version đang chọn
+  canDeleteSelectedVersion: boolean;
+  deletingVersion: boolean;
+  onDeleteSelectedVersion: () => void;
+
   templates: BookTemplate[];
   templatesLoading: boolean;
   templatesError: string | null;
   selectedTemplateId: string;
   savingTemplate: boolean;
   creatingVersion: boolean;
-  hasPublishedVersion: boolean;
   onCreateFirstVersion: () => void;
-  onCloneFromPublished: () => void;
   onChangeTemplate: (id: string) => void;
   onSaveTemplateForVersion: () => void;
-  versions: BookVersion[];
-  selectedVersionId: string;
-  switchingVersion: boolean;
-  deletingVersion: boolean;
-  canDeleteSelectedVersion: boolean;
-  onChangeVersion: (id: string) => void;
-  onDeleteSelectedVersion: () => void;
-
 };
 
 function formatDateTime(dt: string | null | undefined) {
@@ -80,33 +81,29 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
   const {
     book,
     version,
+
+    versions,
+    selectedVersionId,
+    onSelectVersion,
+    canDeleteSelectedVersion,
+    deletingVersion,
+    onDeleteSelectedVersion,
+
     templates,
     templatesLoading,
     templatesError,
     selectedTemplateId,
     savingTemplate,
     creatingVersion,
-    hasPublishedVersion,
     onCreateFirstVersion,
-    onCloneFromPublished,
     onChangeTemplate,
     onSaveTemplateForVersion,
-    versions,
-    selectedVersionId,
-    switchingVersion,
-    deletingVersion,
-    canDeleteSelectedVersion,
-    onChangeVersion,
-    onDeleteSelectedVersion,
-
   } = props;
 
   const currentTemplate =
     version?.template_id && templates.length
       ? templates.find((t) => t.id === version.template_id) || null
       : null;
-
-  const canCloneNewVersion = Boolean(version) && hasPublishedVersion;
 
   return (
     <div className="space-y-4">
@@ -122,106 +119,9 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
       <div className="flex flex-col items-start justify-between gap-2 md:flex-row md:items-center">
         <div>
           <h1 className="text-2xl font-bold">{book.title}</h1>
-          <p className="text-sm text-gray-500">Đơn vị: {book.unit_name || "—"}</p>
-
-          {version && (
-  <div className="rounded-lg border bg-white p-4 shadow-sm space-y-4">
-    {/* ✅ Version selector */}
-    <div className="flex flex-col gap-3 md:flex-row md:items-center">
-      <div className="min-w-0 flex-1">
-        <div className="text-sm font-semibold text-gray-900">Phiên bản</div>
-        <div className="text-xs text-gray-500 truncate">
-          Chọn phiên bản để xem mục lục và biên soạn nội dung theo đúng phiên bản.
-        </div>
-      </div>
-
-      <div className="w-full md:w-[520px]">
-        <select
-          className={SELECT}
-          value={selectedVersionForward
-          }
-          onChange={(e) => onChangeVersion(e.target.value)}
-          disabled={switchingVersion || savingTemplate || templatesLoading || deletingVersion}
-        >
-          {versions.map((v) => (
-            <option key={v.id} value={v.id}>
-              Phiên bản {v.version_no} · {v.status}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="shrink-0 flex gap-2">
-        <button
-          className={BTN}
-          onClick={onDeleteSelectedVersion}
-          disabled={!canDeleteSelectedVersion || deletingVersion || switchingVersion}
-          title={
-            canDeleteSelectedVersion
-              ? "Xóa phiên bản đang chọn"
-              : "Bạn không có quyền xóa phiên bản này"
-          }
-        >
-          {deletingVersion ? "Đang xóa..." : "Xóa phiên bản"}
-        </button>
-      </div>
-    </div>
-
-    {/* ✅ Template selector (giữ nguyên block của bạn, chỉ bọc vào đây) */}
-    <div className="flex flex-col gap-3 md:flex-row md:items-center">
-      {/* Left: title */}
-      <div className="min-w-0 flex-1">
-        <div className="text-sm font-semibold text-gray-900">
-          Template cho phiên bản
-        </div>
-        <div className="text-xs text-gray-500 truncate">
-          {templatesLoading
-            ? "Đang tải templates…"
-            : templatesError
-            ? templatesError
-            : selectedTemplateId
-            ? `Đã chọn: ${
-                templates.find((x) => x.id === selectedTemplateId)?.name || "—"
-              }`
-            : "Chưa chọn template"}
-        </div>
-      </div>
-
-      {/* Middle: select */}
-      <div className="w-full md:w-[520px]">
-        <select
-          className={SELECT}
-          value={selectedTemplateId}
-          onChange={(e) => onChangeTemplate(e.target.value)}
-          disabled={templatesLoading || savingTemplate || switchingVersion || deletingVersion}
-        >
-          <option value="">(Chưa chọn / None)</option>
-          {templates.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-              {t.page_size ? ` · ${t.page_size}` : ""}
-            </option>
-          ))}
-        </select>
-        {templatesError ? (
-          <div className="mt-1 text-[11px] text-red-600">{templatesError}</div>
-        ) : null}
-      </div>
-
-      {/* Right: save */}
-      <div className="shrink-0">
-        <button
-          className={BTN_PRIMARY}
-          onClick={onSaveTemplateForVersion}
-          disabled={savingTemplate || templatesLoading || switchingVersion || deletingVersion}
-          title="Lưu template"
-        >
-          {savingTemplate ? "Đang lưu…" : "Lưu template"}
-        </button>
-      </div>
-    </div>
-  </div>
-)}
+          <p className="text-sm text-gray-500">
+            Đơn vị: {book.unit_name || "—"}
+          </p>
 
           {version && (
             <p className="mt-1 text-sm text-gray-500">
@@ -250,18 +150,6 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
           <Link href="/books" className={BTN}>
             ← Quay lại danh sách
           </Link>
-
-          {/* ✅ Khi đã có version và có published -> cho tạo version mới bằng clone */}
-          {canCloneNewVersion ? (
-            <button
-              className={BTN_SECONDARY}
-              onClick={onCloneFromPublished}
-              disabled={creatingVersion}
-              title="Tạo phiên bản nháp mới bằng cách clone từ bản đã publish gần nhất"
-            >
-              {creatingVersion ? "Đang tạo phiên bản…" : "Tạo phiên bản mới"}
-            </button>
-          ) : null}
         </div>
       </div>
 
@@ -269,8 +157,8 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
       {!version && (
         <div className="space-y-3 rounded-lg border border-red-200 bg-red-50 p-4">
           <p className="text-sm text-red-800">
-            Sách này chưa có phiên bản nào. Bạn cần tạo phiên bản đầu tiên trước khi
-            xây dựng mục lục.
+            Sách này chưa có phiên bản nào. Bạn cần tạo phiên bản đầu tiên trước
+            khi xây dựng mục lục.
           </p>
           <button
             className={BTN_PRIMARY}
@@ -282,11 +170,51 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
         </div>
       )}
 
-      {/* Khi đã có version → selector template */}
+      {/* ✅ Chọn phiên bản + Xóa phiên bản */}
       {version && (
-        <div className="rounded-lg border bg-white p-4 shadow-sm">
+        <div className="rounded-lg border bg-white p-4 shadow-sm space-y-3">
           <div className="flex flex-col gap-3 md:flex-row md:items-center">
-            {/* Left: title */}
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-semibold text-gray-900">Phiên bản</div>
+              <div className="text-xs text-gray-500 truncate">
+                Chọn phiên bản để xem mục lục và biên soạn nội dung.
+              </div>
+            </div>
+
+            <div className="w-full md:w-[420px]">
+              <select
+                className={SELECT}
+                value={selectedVersionId}
+                onChange={(e) => onSelectVersion(e.target.value)}
+                disabled={deletingVersion}
+              >
+                {versions.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    Phiên bản {v.version_no} · {v.status}
+                    {v.created_at ? ` · ${formatDateTime(v.created_at)}` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="shrink-0 flex gap-2">
+              <button
+                className={BTN_DANGER}
+                onClick={onDeleteSelectedVersion}
+                disabled={!canDeleteSelectedVersion || deletingVersion}
+                title={
+                  canDeleteSelectedVersion
+                    ? "Xóa phiên bản đang chọn"
+                    : "Bạn không có quyền xóa phiên bản này"
+                }
+              >
+                {deletingVersion ? "Đang xóa…" : "Xóa phiên bản"}
+              </button>
+            </div>
+          </div>
+
+          {/* Template selector */}
+          <div className="flex flex-col gap-3 md:flex-row md:items-center">
             <div className="min-w-0 flex-1">
               <div className="text-sm font-semibold text-gray-900">
                 Template cho phiên bản
@@ -298,19 +226,19 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
                   ? templatesError
                   : selectedTemplateId
                   ? `Đã chọn: ${
-                      templates.find((x) => x.id === selectedTemplateId)?.name || "—"
+                      templates.find((x) => x.id === selectedTemplateId)?.name ||
+                      "—"
                     }`
                   : "Chưa chọn template"}
               </div>
             </div>
 
-            {/* Middle: select */}
             <div className="w-full md:w-[520px]">
               <select
                 className={SELECT}
                 value={selectedTemplateId}
                 onChange={(e) => onChangeTemplate(e.target.value)}
-                disabled={templatesLoading || savingTemplate}
+                disabled={templatesLoading || savingTemplate || deletingVersion}
               >
                 <option value="">(Chưa chọn / None)</option>
                 {templates.map((t) => (
@@ -321,30 +249,23 @@ export function BookHeaderSection(props: BookHeaderSectionProps) {
                 ))}
               </select>
               {templatesError ? (
-                <div className="mt-1 text-[11px] text-red-600">{templatesError}</div>
+                <div className="mt-1 text-[11px] text-red-600">
+                  {templatesError}
+                </div>
               ) : null}
             </div>
 
-            {/* Right: save */}
             <div className="shrink-0">
               <button
                 className={BTN_PRIMARY}
                 onClick={onSaveTemplateForVersion}
-                disabled={savingTemplate || templatesLoading}
+                disabled={savingTemplate || templatesLoading || deletingVersion}
                 title="Lưu template"
               >
                 {savingTemplate ? "Đang lưu…" : "Lưu template"}
               </button>
             </div>
           </div>
-
-          {/* Hint nhỏ khi chưa có published để clone */}
-          {!hasPublishedVersion ? (
-            <div className="mt-3 text-xs text-gray-500">
-              * Chỉ hiện nút “Tạo phiên bản mới” khi sách có ít nhất 1 phiên bản ở trạng thái{" "}
-              <span className="font-medium">published</span>.
-            </div>
-          ) : null}
         </div>
       )}
     </div>
