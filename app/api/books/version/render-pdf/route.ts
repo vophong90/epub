@@ -524,10 +524,7 @@ export async function POST(req: NextRequest) {
       
       const pad = level === 2 ? 14 : 0;
       const padAttr = pad ? ` style="padding-left:${pad}px"` : "";
-      
-      const label = isPart
-        ? `PHẦN ${partNo}. ${esc(n.title)}`
-        : `${chapterNo}. ${esc(n.title)}`;
+      const label = esc(n.title);
       const cls = isPart
         ? "toc-item toc-item--section"
         : "toc-item toc-item--chapter";
