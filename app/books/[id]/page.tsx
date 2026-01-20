@@ -85,6 +85,126 @@ function buildChildrenMap(items: TocItemRoot[]) {
   return m;
 }
 
+/** Modal chọn nhiều chương để đưa vào PHẦN */
+type AssignChaptersModalProps = {
+  open: boolean;
+  sectionTitle: string;
+  availableChapters: TocItemRoot[];
+  selectedChapterIds: string[];
+  assigning: boolean;
+  onChangeSelected: (ids: string[]) => void;
+  onClose: () => void;
+  onConfirm: () => void;
+};
+
+function AssignChaptersModal({
+  open,
+  sectionTitle,
+  availableChapters,
+  selectedChapterIds,
+  assigning,
+  onChangeSelected,
+  onClose,
+  onConfirm,
+}: AssignChaptersModalProps) {
+  if (!open) return null;
+
+  function toggleChapter(id: string, checked: boolean) {
+    if (checked) {
+      if (!selectedChapterIds.includes(id)) {
+        onChangeSelected([...selectedChapterIds, id]);
+      }
+    } else {
+      onChangeSelected(selectedChapterIds.filter((x) => x !== id));
+    }
+  }
+
+  const noneAvailable = availableChapters.length === 0;
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30">
+      <div
+        className="w-full max-w-xl rounded-lg bg-white p-5 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-semibold">
+            Chọn chương đưa vào PHẦN: {sectionTitle}
+          </h3>
+          <button
+            className="text-sm text-gray-500 hover:text-gray-800"
+            onClick={onClose}
+            disabled={assigning}
+          >
+            ✕
+          </button>
+        </div>
+
+        {noneAvailable ? (
+          <p className="text-sm text-gray-600">
+            Hiện không có chương root nào (Chương cấp 1, không thuộc PHẦN) để
+            đưa vào PHẦN này.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-gray-600">
+              Chọn các chương cấp 1 (đang là chương lẻ) để chuyển vào PHẦN này.
+              Khi xác nhận, các chương sẽ được đặt ở cuối danh sách trong
+              PHẦN.
+            </p>
+
+            <div className="max-h-64 space-y-1 overflow-auto rounded border p-2">
+              {availableChapters.map((ch, idx) => (
+                <label
+                  key={ch.id}
+                  className="flex items-center justify-between gap-2 rounded px-2 py-1 text-sm hover:bg-gray-50"
+                >
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4"
+                      checked={selectedChapterIds.includes(ch.id)}
+                      onChange={(e) => toggleChapter(ch.id, e.target.checked)}
+                    />
+                    <span>
+                      {idx + 1}. {ch.title}
+                    </span>
+                  </div>
+                  <span className="text-xs text-gray-400">
+                    Thứ tự hiện tại: {ch.order_index}
+                  </span>
+                </label>
+              ))}
+            </div>
+
+            <p className="text-xs text-gray-500">
+              Thứ tự sau khi chuyển sẽ được sắp ở cuối PHẦN, theo thứ tự bạn tick
+              ở đây.
+            </p>
+          </div>
+        )}
+
+        <div className="mt-5 flex items-center justify-between">
+          <button
+            className={BTN}
+            onClick={onClose}
+            disabled={assigning}
+          >
+            Hủy
+          </button>
+          <button
+            className={BTN_PRIMARY}
+            onClick={onConfirm}
+            disabled={assigning || selectedChapterIds.length === 0}
+          >
+            {assigning ? "Đang chuyển..." : "Chuyển chương vào PHẦN"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function BookDetailPage() {
   const params = useParams();
 
@@ -138,6 +258,12 @@ export default function BookDetailPage() {
   /** Reorder root */
   const [rootOrder, setRootOrder] = useState<string[]>([]);
   const [rootReordering, setRootReordering] = useState(false);
+
+  /** Modal chuyển chương vào PHẦN */
+  const [assignModalOpen, setAssignModalOpen] = useState(false);
+  const [assignSection, setAssignSection] = useState<TocItemRoot | null>(null);
+  const [assignSelectedChapterIds, setAssignSelectedChapterIds] = useState<string[]>([]);
+  const [assignSaving, setAssignSaving] = useState(false);
 
   function toggleMenu(id: string) {
     setOpenMenuFor((cur) => (cur === id ? null : id));
@@ -335,6 +461,15 @@ export default function BookDetailPage() {
     const missing = rootItems.filter((x) => !rootOrder.includes(x.id));
     return [...ordered, ...missing];
   }, [rootItems, rootOrder]);
+
+  /** Các chương root (chapter cấp 1, không thuộc PHẦN) – dùng cho assign modal */
+  const rootChaptersAlone = useMemo(
+    () =>
+      rootItems.filter(
+        (it) => it.kind === "chapter" && it.parent_id === null
+      ),
+    [rootItems]
+  );
 
   /** Tạo phiên bản đầu tiên */
   async function handleCreateFirstVersion() {
@@ -705,6 +840,61 @@ export default function BookDetailPage() {
     return found?.title || "";
   }
 
+  /** Mở modal chọn chương cho PHẦN */
+  function handleOpenAssignToSection(section: TocItemRoot) {
+    setAssignSection(section);
+    setAssignSelectedChapterIds([]);
+    setAssignModalOpen(true);
+  }
+
+  function handleCloseAssignModal() {
+    if (assignSaving) return;
+    setAssignModalOpen(false);
+    setAssignSection(null);
+    setAssignSelectedChapterIds([]);
+  }
+
+  async function handleAssignChapters() {
+    if (!version || !assignSection) return;
+    if (assignSelectedChapterIds.length === 0) {
+      alert("Vui lòng chọn ít nhất 1 chương.");
+      return;
+    }
+    setAssignSaving(true);
+    try {
+      const res = await fetch("/api/toc/move-to-section", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          book_version_id: version.id,
+          section_id: assignSection.id,
+          chapter_ids: assignSelectedChapterIds,
+        }),
+      });
+
+      if (!res.ok) {
+        console.error("move-to-section error", await res.text());
+        alert("Không chuyển chương vào PHẦN được.");
+        return;
+      }
+
+      const json = await res.json().catch(() => ({} as any));
+      if (!json.ok) {
+        alert(json.error || "Không chuyển chương vào PHẦN được.");
+        return;
+      }
+
+      // reload TOC
+      await loadTocTree(version.id);
+      handleCloseAssignModal();
+    } catch (e) {
+      console.error("handleAssignChapters exception", e);
+      alert("Không chuyển chương vào PHẦN được.");
+    } finally {
+      setAssignSaving(false);
+    }
+  }
+
   if (!bookId) {
     return (
       <div className="max-w-6xl mx-auto px-4 py-6">
@@ -803,6 +993,7 @@ export default function BookDetailPage() {
               onOpenEdit={openEditModal}
               onOpenCreateChild={handleOpenCreateChild}
               onMoveUpDown={handleMoveItem}
+              onOpenAssignToSection={handleOpenAssignToSection}
               rootOrder={rootOrder}
               onRootReorder={handleRootReorder}
             />
@@ -837,6 +1028,20 @@ export default function BookDetailPage() {
         onSave={handleSaveToc}
         onDelete={handleDeleteToc}
         getParentTitleById={getParentTitleById}
+      />
+
+      {/* MODAL chọn chương đưa vào PHẦN */}
+      <AssignChaptersModal
+        open={assignModalOpen}
+        sectionTitle={assignSection?.title || ""}
+        availableChapters={rootChaptersAlone.filter(
+          (ch) => ch.id !== assignSection?.id
+        )}
+        selectedChapterIds={assignSelectedChapterIds}
+        assigning={assignSaving}
+        onChangeSelected={setAssignSelectedChapterIds}
+        onClose={handleCloseAssignModal}
+        onConfirm={handleAssignChapters}
       />
     </div>
   );
