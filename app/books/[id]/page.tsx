@@ -7,7 +7,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 import {
@@ -206,6 +206,7 @@ function AssignChaptersModal({
 
 export default function BookDetailPage() {
   const params = useParams();
+  const router = useRouter();
 
   const bookId =
     typeof params?.id === "string"
