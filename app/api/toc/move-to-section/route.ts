@@ -1,6 +1,6 @@
 // app/api/toc/move-to-section/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser } from "../../_helpers";
+import { requireUser } from "../_helpers"; // ✅ sửa lại đường dẫn
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -123,7 +123,7 @@ export async function POST(req: NextRequest) {
   );
   if (!gate.ok) return (gate as any).res;
 
-  // 1) Kiểm tra section hợp lệ (thuộc version, là kind = 'section', root)
+  // 1) Kiểm tra section hợp lệ
   const { data: section, error: sErr } = await supabase
     .from("toc_items")
     .select("id,book_version_id,parent_id,kind,order_index")
@@ -176,7 +176,6 @@ export async function POST(req: NextRequest) {
 
   const chaptersAll = (chaptersRaw || []) as TocItemRow[];
 
-  // filter: chỉ lấy chương cấp 1 (root) & kind='chapter'
   const chaptersToMove = chaptersAll.filter(
     (ch) => ch.kind === "chapter" && ch.parent_id === null && ch.id !== section_id
   );
@@ -188,7 +187,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Sắp thứ tự theo thứ tự chapter_ids (user tick)
+  // Sắp theo thứ tự tick
   const orderIndexMap = new Map<string, number>();
   chapter_ids.forEach((id, idx) => orderIndexMap.set(id, idx));
   chaptersToMove.sort(
@@ -196,7 +195,7 @@ export async function POST(req: NextRequest) {
       (orderIndexMap.get(a.id) ?? 0) - (orderIndexMap.get(b.id) ?? 0)
   );
 
-  // 3) Tìm order_index hiện tại lớn nhất trong section để append ở cuối
+  // 3) Lấy order_index lớn nhất trong section
   const { data: lastChild, error: lcErr } = await supabase
     .from("toc_items")
     .select("order_index")
@@ -213,16 +212,16 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let nextOrder = ((lastChild as { order_index: number } | null)?.order_index ?? 0) + 1;
+  let nextOrder =
+    ((lastChild as { order_index: number } | null)?.order_index ?? 0) + 1;
 
-  // 4) Move từng chương: set parent_id = section_id, order_index = nextOrder++
+  // 4) Move từng chương
   for (const ch of chaptersToMove) {
     const { error: upErr } = await supabase
       .from("toc_items")
       .update({
         parent_id: section_id,
         order_index: nextOrder++,
-        // kind giữ nguyên là 'chapter'
       })
       .eq("id", ch.id);
 
