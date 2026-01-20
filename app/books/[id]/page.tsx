@@ -950,56 +950,25 @@ export default function BookDetailPage() {
         onSaveTemplateForVersion={handleSaveTemplateForVersion}
       />
 
-      {/* Khi đã có version thì mới có TOC */}
+     {/* Khi đã có version thì mới có TOC */}
       {version && (
-        <div className="space-y-4">
-          <div className="rounded-lg border bg-white p-4 shadow-sm">
-            <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h2 className="text-lg font-semibold">
-                  Mục lục (TOC) của phiên bản này
-                </h2>
-                <p className="text-xs text-gray-500">
-                  Vai trò của bạn: {tocData?.role || "—"}
-                </p>
-              </div>
-              {isEditor && (
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    className={BTN_PRIMARY}
-                    onClick={openCreateSectionModal}
-                  >
-                    + Tạo PHẦN (Section)
-                  </button>
-                  <button
-                    className={BTN}
-                    onClick={() => openCreateModal(null, "chapter")}
-                  >
-                    + Tạo chương mới
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <TocRootList
-              bookId={book.id}
-              isEditor={isEditor}
-              isAuthor={isAuthor}
-              rootItemsOrdered={rootItemsOrdered}
-              childrenMap={childrenMap}
-              openMenuFor={openMenuFor}
-              onToggleMenu={toggleMenu}
-              onCloseMenu={closeMenu}
-              onOpenEdit={openEditModal}
-              onOpenCreateChild={handleOpenCreateChild}
-              onMoveUpDown={handleMoveItem}
-              onOpenAssignToSection={handleOpenAssignToSection}
-              rootOrder={rootOrder}
-              onRootReorder={handleRootReorder}
-            />
-          </div>
-        </div>
-      )}
+      <div className="space-y-4">
+        <TocRootList
+          bookId={book.id}
+          versionId={version.id}
+          role={tocData?.role ?? "viewer"}
+          items={tocData?.items ?? []}
+          onReload={() => loadTocTree(version.id)}
+          onOpenCreateSection={() => openCreateModal(null, "section")}
+          onOpenCreateRootChapter={() => openCreateModal(null, "chapter")}
+          onOpenCreateChild={(parentId) => openCreateModal(parentId, "chapter")}
+          onOpenEdit={openEditModal}
+          onOpenCompose={(item) =>
+            router.push(`/books/${book.id}/toc/${item.id}`)
+          }
+          />
+      </div>
+    )}
 
       {/* MODAL tạo / sửa TOC */}
       <TocModal
