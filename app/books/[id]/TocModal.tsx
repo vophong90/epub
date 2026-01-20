@@ -10,6 +10,8 @@ const BTN_PRIMARY =
 const BTN_DANGER =
   "inline-flex items-center justify-center rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50";
 
+export type TocKind = "section" | "chapter" | "heading";
+
 export type TocItem = {
   id: string;
   book_version_id: string;
@@ -17,6 +19,7 @@ export type TocItem = {
   title: string;
   slug: string;
   order_index: number;
+  kind: TocKind;
   created_at?: string | null;
 };
 
@@ -39,6 +42,7 @@ export type TocModalProps = {
   currentItem: TocItem | null;
   title: string;
   onTitleChange: (val: string) => void;
+  kind: TocKind;
   bookId: string;
 
   // assignments
@@ -75,6 +79,7 @@ export function TocModal(props: TocModalProps) {
     currentItem,
     title,
     onTitleChange,
+    kind,
     bookId,
     loadingAssignments,
     members,
@@ -109,16 +114,21 @@ export function TocModal(props: TocModalProps) {
     }
   }
 
+  const kindLabel =
+    kind === "section"
+      ? "PHẦN (Section)"
+      : kind === "chapter"
+      ? "Chương"
+      : "Mục con";
+
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30">
       <div className="w-full max-w-2xl rounded-lg bg-white p-5 shadow-xl">
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-lg font-semibold">
             {mode === "create"
-              ? parentId
-                ? "Tạo mục con mới"
-                : "Tạo chương mới (cấp 1)"
-              : "Chỉnh sửa mục lục"}
+              ? `Tạo ${kindLabel}`
+              : `Chỉnh sửa ${kindLabel}`}
           </h3>
           <button
             className="text-sm text-gray-500 hover:text-gray-800"
@@ -130,6 +140,10 @@ export function TocModal(props: TocModalProps) {
         </div>
 
         <div className="space-y-4">
+          <p className="text-xs text-gray-500">
+            Loại mục lục: <span className="font-semibold">{kindLabel}</span>
+          </p>
+
           {parentId && (
             <p className="text-xs text-gray-500">
               Mục cha:{" "}
@@ -149,7 +163,7 @@ export function TocModal(props: TocModalProps) {
               className="mt-1 w-full rounded border px-3 py-2 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
               value={title}
               onChange={(e) => onTitleChange(e.target.value)}
-              placeholder="Nhập tiêu đề chương / mục…"
+              placeholder="Nhập tiêu đề…"
             />
           </div>
 
