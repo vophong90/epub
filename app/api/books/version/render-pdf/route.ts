@@ -66,17 +66,13 @@ function loadCJKFontBase64() {
 }
 
 function loadPagedJSInline() {
-  const candidates = [
-    path.join(process.cwd(), "node_modules", "pagedjs", "dist", "paged.polyfill.js"),
-    path.join(process.cwd(), "node_modules", "pagedjs", "dist", "paged.polyfill.min.js"),
-    path.join(process.cwd(), "node_modules", "pagedjs", "dist", "paged.js"),
-    path.join(process.cwd(), "node_modules", "pagedjs", "dist", "paged.min.js"),
-  ];
-
-  for (const p of candidates) {
-    try {
-      if (fs.existsSync(p)) return fs.readFileSync(p, "utf8");
-    } catch {}
+  const p = path.join(process.cwd(), "public", "paged.polyfill.js");
+  try {
+    if (fs.existsSync(p)) {
+      return fs.readFileSync(p, "utf8");
+    }
+  } catch (e) {
+    console.error("❌ Cannot load /public/paged.polyfill.js", e);
   }
   return null;
 }
