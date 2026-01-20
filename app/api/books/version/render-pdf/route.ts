@@ -66,42 +66,24 @@ function loadCJKFontBase64() {
 }
 
 function loadPagedJSInline() {
+  // Bạn đang dùng public/paged.polyfill.js (tự copy vào public)
   const p = path.join(process.cwd(), "public", "paged.polyfill.js");
   try {
-    if (fs.existsSync(p)) {
-      return fs.readFileSync(p, "utf8");
-    }
+    if (fs.existsSync(p)) return fs.readFileSync(p, "utf8");
   } catch (e) {
     console.error("❌ Cannot load /public/paged.polyfill.js", e);
   }
   return null;
 }
 
-function injectPagedTocCSS(css: string) {
-  // ✅ cách ít lỗi hơn leader()
+/**
+ * ✅ QUAN TRỌNG:
+ * - KHÔNG inject thêm CSS cho nav.toc ở đây nữa (vì template CSS đã có).
+ * - Chỉ inject rule tắt column-count sau khi paged render.
+ */
+function injectPagedCSS(css: string) {
   return `
 ${css}
-
-/* ===== TOC page numbers (Paged.js) ===== */
-nav.toc li a{
-  display:flex;
-  align-items:baseline;
-  gap:8px;
-}
-nav.toc li a::after{
-  content: target-counter(attr(href), page);
-  margin-left:auto;
-  font-variant-numeric: tabular-nums;
-}
-
-/* dotted leader (ổn định hơn leader()) */
-nav.toc li a::before{
-  content:"";
-  flex:1;
-  border-bottom: 1px dotted rgba(0,0,0,.35);
-  margin: 0 8px;
-  transform: translateY(-2px);
-}
 
 /* khi pagedjs render pages, tắt column-count để không xung đột pagination */
 .pagedjs_pages #book-content{
@@ -128,7 +110,7 @@ type TocContentRow = {
 };
 
 type RenderNode = {
-  id: string;
+  id: string; // anchor
   toc_item_id: string;
   title: string;
   slug: string;
@@ -164,10 +146,13 @@ function makeAnchor(tocItemId: string) {
 }
 
 /* =========================
- * Pagination helpers
+ * Pagination helpers (Supabase range paging)
  * ========================= */
 
-async function fetchAllTocItemsByVersion(admin: any, versionId: string): Promise<TocItemRow[]> {
+async function fetchAllTocItemsByVersion(
+  admin: any,
+  versionId: string
+): Promise<TocItemRow[]> {
   const PAGE = 1000;
   let from = 0;
   const all: TocItemRow[] = [];
@@ -189,10 +174,14 @@ async function fetchAllTocItemsByVersion(admin: any, versionId: string): Promise
     if (batch.length < PAGE) break;
     from += PAGE;
   }
+
   return all;
 }
 
-async function fetchAllTocContentsByItemIds(admin: any, tocItemIds: string[]): Promise<TocContentRow[]> {
+async function fetchAllTocContentsByItemIds(
+  admin: any,
+  tocItemIds: string[]
+): Promise<TocContentRow[]> {
   if (!tocItemIds.length) return [];
 
   const ID_CHUNK = 500;
@@ -224,15 +213,22 @@ async function fetchAllTocContentsByItemIds(admin: any, tocItemIds: string[]): P
   return all;
 }
 
-async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNode[]> {
+async function buildNodesFromDB(
+  admin: any,
+  versionId: string
+): Promise<RenderNode[]> {
   const tocItems = await fetchAllTocItemsByVersion(admin, versionId);
   if (!tocItems.length) return [];
 
-  const tocContents = await fetchAllTocContentsByItemIds(admin, tocItems.map((x) => x.id));
+  const tocContents = await fetchAllTocContentsByItemIds(
+    admin,
+    tocItems.map((x) => x.id)
+  );
 
   const contentByItem = new Map<string, TocContentRow>();
   for (const c of tocContents) contentByItem.set(c.toc_item_id, c);
 
+  // build children map
   const children = new Map<string | null, TocItemRow[]>();
   for (const it of tocItems) {
     const key = it.parent_id ?? null;
@@ -302,18 +298,43 @@ async function launchBrowser() {
   return browser;
 }
 
+function injectTocListIntoTocHTML(tocHtml: string, tocList: string) {
+  // ✅ không dùng script sửa DOM nữa (tránh Paged “item doesn't belong to list”)
+  if (!tocHtml) return tocHtml;
+
+  if (tocHtml.includes('id="toc-list"')) {
+    return tocHtml.replace(
+      /<ol[^>]*id="toc-list"[^>]*>/,
+      (m) => `${m}\n${tocList}\n`
+    );
+  }
+
+  // fallback: nếu template không có toc-list thì trả nguyên
+  return tocHtml;
+}
+
 export async function POST(req: NextRequest) {
   const supabase = getRouteClient();
   const admin = getAdminClient();
 
-  const { data: { user }, error: uErr } = await supabase.auth.getUser();
-  if (uErr || !user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const {
+    data: { user },
+    error: uErr,
+  } = await supabase.auth.getUser();
+
+  if (uErr || !user)
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   let body: Body = {};
-  try { body = await req.json(); } catch { body = {}; }
+  try {
+    body = await req.json();
+  } catch {
+    body = {};
+  }
 
   const versionId = (body.version_id || "").toString().trim();
-  if (!versionId) return NextResponse.json({ error: "version_id là bắt buộc" }, { status: 400 });
+  if (!versionId)
+    return NextResponse.json({ error: "version_id là bắt buộc" }, { status: 400 });
 
   const { data: version, error: vErr } = await admin
     .from("book_versions")
@@ -322,11 +343,16 @@ export async function POST(req: NextRequest) {
     .maybeSingle<VersionRow>();
 
   if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 });
-  if (!version) return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
+  if (!version)
+    return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
 
   let templateId = (body.template_id || "").toString().trim();
   if (!templateId) templateId = version.template_id || "";
-  if (!templateId) return NextResponse.json({ error: "Chưa xác định được template cho phiên bản này" }, { status: 400 });
+  if (!templateId)
+    return NextResponse.json(
+      { error: "Chưa xác định được template cho phiên bản này" },
+      { status: 400 }
+    );
 
   // quyền
   const { data: profile, error: pErr } = await supabase
@@ -353,7 +379,8 @@ export async function POST(req: NextRequest) {
     canRender = !!perm;
   }
 
-  if (!canRender) return NextResponse.json({ error: "Bạn không có quyền render PDF" }, { status: 403 });
+  if (!canRender)
+    return NextResponse.json({ error: "Bạn không có quyền render PDF" }, { status: 403 });
 
   const { data: book, error: bErr } = await admin
     .from("books")
@@ -366,7 +393,9 @@ export async function POST(req: NextRequest) {
 
   const { data: tpl, error: tErr } = await admin
     .from("book_templates")
-    .select("id,name,css,cover_html,front_matter_html,toc_html,header_html,footer_html,page_size,page_margin_mm,toc_depth")
+    .select(
+      "id,name,css,cover_html,front_matter_html,toc_html,header_html,footer_html,page_size,page_margin_mm,toc_depth"
+    )
     .eq("id", templateId)
     .eq("is_active", true)
     .maybeSingle<TemplateRow>();
@@ -403,10 +432,12 @@ export async function POST(req: NextRequest) {
   try {
     const origin = getSiteOrigin(req);
 
-    // ✅ load Paged.js bundle (inline)
+    // load Paged.js inline
     const pagedInline = loadPagedJSInline();
     if (!pagedInline) {
-      throw new Error("Paged.js not found in node_modules. Ensure dependency `pagedjs` is installed.");
+      throw new Error(
+        "Paged.js not found. Ensure /public/paged.polyfill.js exists (or install pagedjs and bundle it)."
+      );
     }
 
     const nodes = await buildNodesFromDB(admin, versionId);
@@ -416,22 +447,23 @@ export async function POST(req: NextRequest) {
       (s || "")
         .replaceAll("{{BOOK_TITLE}}", esc(book.title))
         .replaceAll("{{YEAR}}", esc(year))
-        .replaceAll("{{CHAPTER_TITLE}}", "");
+        .replaceAll("{{CHAPTER_TITLE}}", "")
+        .replaceAll("{{SITE_ORIGIN}}", origin);
 
     const cover = token(tpl.cover_html || "");
     const front = token(tpl.front_matter_html || "");
-    const toc = token(tpl.toc_html || "");
     const header = token(tpl.header_html || "");
     const footer = token(tpl.footer_html || "");
 
-    // css: absolute fonts + inject TOC page num css
+    // css: absolute fonts + inject only safe paged rules
     const cssAbs = (tpl.css || "")
       .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
       .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
       .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
 
-    const cssFinal = injectPagedTocCSS(cssAbs);
+    const cssFinal = injectPagedCSS(cssAbs);
 
+    // inline CJK font (fallback)
     const cjkBase64 = loadCJKFontBase64();
     const inlineFontCSS = cjkBase64
       ? `
@@ -444,6 +476,7 @@ export async function POST(req: NextRequest) {
 `
       : "";
 
+    // main content
     const main = nodes
       .map((n) => {
         const isPart = n.kind === "section";
@@ -486,7 +519,7 @@ export async function POST(req: NextRequest) {
       })
       .join("\n");
 
-    // TOC list
+    // TOC list (string HTML)
     const tocItems: string[] = [];
     let partNo = 0;
     let chapterNo = 0;
@@ -495,6 +528,7 @@ export async function POST(req: NextRequest) {
       const isPart = n.kind === "section";
       const isChapter = n.kind === "chapter";
       const level = isPart ? 1 : isChapter ? 2 : 999;
+
       if (level > tocDepth) continue;
       if (!isPart && !isChapter) continue;
 
@@ -505,9 +539,7 @@ export async function POST(req: NextRequest) {
       const padAttr = pad ? ` style="padding-left:${pad}px"` : "";
       const label = esc(n.title);
 
-      const cls = isPart
-        ? "toc-item toc-item--section"
-        : "toc-item toc-item--chapter";
+      const cls = isPart ? "toc-item toc-item--section" : "toc-item toc-item--chapter";
 
       tocItems.push(`
 <li class="${cls}"${padAttr}>
@@ -516,6 +548,10 @@ export async function POST(req: NextRequest) {
     }
 
     const tocList = tocItems.join("\n");
+
+    // ✅ TOC HTML tĩnh: inject tocList trực tiếp, KHÔNG dùng script innerHTML
+    const tocRaw = token(tpl.toc_html || "");
+    const toc = injectTocListIntoTocHTML(tocRaw, tocList);
 
     const html = `<!doctype html>
 <html>
@@ -536,12 +572,6 @@ ${cssFinal}
   ${footer || ""}
 
   ${toc || ""}
-  <script>
-    (function(){
-      var ol = document.getElementById("toc-list");
-      if (ol) ol.innerHTML = ${JSON.stringify(tocList)};
-    })();
-  </script>
 
   <main id="book-content">
     ${main}
@@ -552,13 +582,22 @@ ${cssFinal}
     const browser = await launchBrowser();
     const page = await browser.newPage();
 
-    page.on("console", (msg) => console.log("[render-pdf][browser]", msg.type(), msg.text()));
-    page.on("pageerror", (err: unknown) => {const msg = err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err); console.log("[render-pdf][pageerror]", msg);});
-    page.on("requestfailed", (r) =>console.log("[render-pdf][requestfailed]", r.url(), r.failure()?.errorText));
+    page.on("console", (msg) =>
+      console.log("[render-pdf][browser]", msg.type(), msg.text())
+    );
+    page.on("pageerror", (err: unknown) => {
+      const msg =
+        err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err);
+      console.log("[render-pdf][pageerror]", msg);
+    });
+    page.on("requestfailed", (r) =>
+      console.log("[render-pdf][requestfailed]", r.url(), r.failure()?.errorText)
+    );
+
     page.setDefaultNavigationTimeout(180000);
     page.setDefaultTimeout(180000);
 
-    // Paged.js paginate là “screen”, rồi PDF in ra DOM đã paginate
+    // Paged.js paginate là “screen”
     await page.emulateMediaType("screen");
 
     await page.setContent(html, { waitUntil: "load", timeout: 180000 });
@@ -575,42 +614,42 @@ ${cssFinal}
       });
     });
 
-    // wait fonts + images settle BEFORE paginate
+    // ✅ validate TOC targets + duplicate ids (fail fast)
     await page.evaluate(() => {
-  const links = Array.from(document.querySelectorAll('nav.toc a[href^="#"]')) as HTMLAnchorElement[];
-  const missing: string[] = [];
-  const ids = new Map<string, number>();
+      const links = Array.from(
+        document.querySelectorAll('nav.toc a[href^="#"]')
+      ) as HTMLAnchorElement[];
 
-  // check missing targets
-  for (const a of links) {
-    const href = a.getAttribute("href") || "";
-    const id = href.slice(1);
-    if (!id) continue;
+      const missing: string[] = [];
+      for (const a of links) {
+        const href = a.getAttribute("href") || "";
+        const id = href.slice(1);
+        if (!id) continue;
+        if (!document.getElementById(id)) missing.push(id);
+      }
 
-    const el = document.getElementById(id);
-    if (!el) missing.push(id);
-  }
+      const ids = new Map<string, number>();
+      const allWithId = Array.from(document.querySelectorAll("[id]")) as HTMLElement[];
+      for (const el of allWithId) {
+        ids.set(el.id, (ids.get(el.id) || 0) + 1);
+      }
+      const dup = Array.from(ids.entries())
+        .filter(([, n]) => n > 1)
+        .map(([id, n]) => `${id}(${n})`);
 
-  // check duplicate ids in document
-  const allWithId = Array.from(document.querySelectorAll("[id]")) as HTMLElement[];
-  for (const el of allWithId) {
-    const id = el.id;
-    ids.set(id, (ids.get(id) || 0) + 1);
-  }
-  const dup = Array.from(ids.entries()).filter(([, n]) => n > 1).map(([id, n]) => `${id}(${n})`);
+      if (missing.length || dup.length) {
+        throw new Error(
+          "TOC target mismatch. Missing: " +
+            (missing.length ? missing.slice(0, 20).join(", ") : "none") +
+            (missing.length > 20 ? ` ... (+${missing.length - 20})` : "") +
+            " | Duplicate ids: " +
+            (dup.length ? dup.slice(0, 20).join(", ") : "none") +
+            (dup.length > 20 ? ` ... (+${dup.length - 20})` : "")
+        );
+      }
+    });
 
-  if (missing.length || dup.length) {
-    throw new Error(
-      "TOC target mismatch. Missing: " +
-        missing.slice(0, 20).join(", ") +
-        (missing.length > 20 ? ` ... (+${missing.length - 20})` : "") +
-        " | Duplicate ids: " +
-        dup.slice(0, 20).join(", ") +
-        (dup.length > 20 ? ` ... (+${dup.length - 20})` : "")
-    );
-  }
-});
-
+    // wait fonts + images settle BEFORE paginate
     await page.evaluate(async () => {
       if ((document as any).fonts?.ready) await (document as any).fonts.ready;
 
@@ -625,31 +664,37 @@ ${cssFinal}
             });
           }
           if (img.decode) {
-            try { await img.decode(); } catch {}
+            try {
+              await img.decode();
+            } catch {}
           }
         })
       );
     });
 
-    // ✅ run Paged.js paginate and wait done
-  await page.evaluate(async () => {
-  const w = window as any;
-  if (document.fonts?.ready) await document.fonts.ready;
-  if (w.PagedPolyfill?.preview) {
-    await w.PagedPolyfill.preview();
-    return;
-  }
-  if (w.Paged?.preview) {
-    await w.Paged.preview();
-    return;
-  }
-  throw new Error("Paged.js loaded but no preview() found (PagedPolyfill.preview / Paged.preview).");
-});
+    // ✅ run Paged.js paginate and wait pages created
+    await page.evaluate(async () => {
+      const w = window as any;
+      if (document.fonts?.ready) await document.fonts.ready;
 
-    // extra: ensure pages exist
+      // paged.polyfill.js thường expose PagedPolyfill.preview()
+      if (w.PagedPolyfill?.preview) {
+        await w.PagedPolyfill.preview();
+        return;
+      }
+      if (w.Paged?.preview) {
+        await w.Paged.preview();
+        return;
+      }
+      throw new Error(
+        "Paged.js loaded but no preview() found (PagedPolyfill.preview / Paged.preview)."
+      );
+    });
+
+    // ensure pages exist
     await page.waitForSelector(".pagedjs_pages", { timeout: 180000 });
 
-    // Now export PDF from paginated DOM
+    // export PDF
     const pdfBuffer = await page.pdf({
       format: "A4",
       printBackground: true,
