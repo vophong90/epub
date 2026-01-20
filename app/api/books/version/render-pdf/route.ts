@@ -159,13 +159,8 @@ type TemplateRow = {
   toc_depth: number | null;
 };
 
-function makeAnchor(tocItemId: string, slug: string) {
-  const safeSlug = (slug || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\-_.]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-  return `toc-${tocItemId}${safeSlug ? "-" + safeSlug : ""}`;
+function makeAnchor(tocItemId: string) {
+  return `toc-${tocItemId}`;
 }
 
 /* =========================
@@ -254,7 +249,7 @@ async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNo
   function walk(parentId: string | null, depth: number, currentChapterTitle: string) {
     const kids = children.get(parentId) || [];
     for (const it of kids) {
-      const anchor = makeAnchor(it.id, it.slug);
+      const anchor = makeAnchor(it.id);
 
       const c = contentByItem.get(it.id);
       const cj = c?.content_json || {};
@@ -650,10 +645,6 @@ ${cssFinal}
   }
   throw new Error("Paged.js loaded but no preview() found (PagedPolyfill.preview / Paged.preview).");
 });
-
-    await page.waitForFunction(() => (window as any).__PAGED_DONE__ === true, {
-      timeout: 180000,
-    });
 
     // extra: ensure pages exist
     await page.waitForSelector(".pagedjs_pages", { timeout: 180000 });
