@@ -23,7 +23,7 @@ type Body = {
 };
 
 function esc(s: string) {
-  return s
+  return (s || "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
@@ -66,6 +66,10 @@ function loadCJKFontBase64() {
   }
 }
 
+/**
+ * Paged.js v0.4.3: file có thể nằm ở các tên khác nhau tùy build.
+ * Ta cố đọc từ node_modules để nhúng inline (không cần /public)
+ */
 function loadPagedJSInline() {
   const candidates = [
     path.join(process.cwd(), "node_modules", "pagedjs", "dist", "paged.polyfill.js"),
@@ -82,8 +86,11 @@ function loadPagedJSInline() {
   return null;
 }
 
+/**
+ * Bổ sung CSS để TOC hiện số trang dựa trên target-counter().
+ * Paged.js sẽ phân trang → target-counter mới có giá trị.
+ */
 function injectPagedTocCSS(css: string) {
-  // Nếu anh đã có TOC CSS riêng thì vẫn OK, đoạn này chỉ bổ sung page-number
   return `
 ${css}
 
@@ -93,11 +100,20 @@ nav.toc a{
   align-items: baseline;
   gap: 8px;
 }
+nav.toc a::before{
+  content: "";
+  flex: 1;
+  border-bottom: 1px dotted rgba(0,0,0,.35);
+  margin: 0 8px;
+  transform: translateY(-2px);
+}
 nav.toc a::after{
   content: target-counter(attr(href), page);
   margin-left: auto;
   font-variant-numeric: tabular-nums;
 }
+
+/* Nếu có link không resolve được thì vẫn không crash */
 `;
 }
 
@@ -261,36 +277,36 @@ async function buildNodesFromDB(
   ) {
     const kids = children.get(parentId) || [];
     for (const it of kids) {
-  const anchor = makeAnchor(it.id, it.slug);
+      const anchor = makeAnchor(it.id, it.slug);
 
-  // ✅ lấy html từ toc_contents
-  const c = contentByItem.get(it.id);
-  const cj = c?.content_json || {};
-  const html = typeof cj?.html === "string" ? cj.html : "";
+      // lấy html từ toc_contents
+      const c = contentByItem.get(it.id);
+      const cj = c?.content_json || {};
+      const html = typeof cj?.html === "string" ? cj.html : "";
 
-  const kind =
-    it.kind === "section" || it.kind === "chapter" || it.kind === "heading"
-      ? it.kind
-      : depth === 1
-      ? "chapter"
-      : "heading";
+      const kind =
+        it.kind === "section" || it.kind === "chapter" || it.kind === "heading"
+          ? it.kind
+          : depth === 1
+          ? "chapter"
+          : "heading";
 
-  const chapterTitle =
-    kind === "chapter" ? it.title : kind === "section" ? "" : currentChapterTitle;
+      const chapterTitle =
+        kind === "chapter" ? it.title : kind === "section" ? "" : currentChapterTitle;
 
-  nodes.push({
-    id: anchor,
-    toc_item_id: it.id,
-    title: it.title,
-    slug: it.slug,
-    kind,
-    depth,
-    chapterTitle,
-    html: html || "",
-  });
+      nodes.push({
+        id: anchor,
+        toc_item_id: it.id,
+        title: it.title,
+        slug: it.slug,
+        kind,
+        depth,
+        chapterTitle,
+        html: html || "",
+      });
 
-  walk(it.id, depth + 1, chapterTitle);
-}
+      walk(it.id, depth + 1, chapterTitle);
+    }
   }
 
   walk(null, 1, "");
@@ -338,10 +354,7 @@ export async function POST(req: NextRequest) {
 
   const versionId = (body.version_id || "").toString().trim();
   if (!versionId) {
-    return NextResponse.json(
-      { error: "version_id là bắt buộc" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "version_id là bắt buộc" }, { status: 400 });
   }
 
   const { data: version, error: vErr } = await admin
@@ -350,26 +363,14 @@ export async function POST(req: NextRequest) {
     .eq("id", versionId)
     .maybeSingle<VersionRow>();
 
-  if (vErr) {
-    return NextResponse.json({ error: vErr.message }, { status: 500 });
-  }
-  if (!version) {
-    return NextResponse.json(
-      { error: "Không tìm thấy version" },
-      { status: 404 }
-    );
-  }
+  if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 });
+  if (!version) return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
 
   // Ưu tiên template từ body, nếu không có thì fallback version.template_id
   let templateId = (body.template_id || "").toString().trim();
+  if (!templateId) templateId = version.template_id || "";
   if (!templateId) {
-    templateId = version.template_id || "";
-  }
-  if (!templateId) {
-    return NextResponse.json(
-      { error: "Chưa xác định được template cho phiên bản này" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "Chưa xác định được template cho phiên bản này" }, { status: 400 });
   }
 
   // Quyền
@@ -393,18 +394,12 @@ export async function POST(req: NextRequest) {
       .in("role", ["author", "editor"])
       .maybeSingle();
 
-    if (permErr) {
-      return NextResponse.json({ error: permErr.message }, { status: 500 });
-    }
-
+    if (permErr) return NextResponse.json({ error: permErr.message }, { status: 500 });
     canRender = !!perm;
   }
 
   if (!canRender) {
-    return NextResponse.json(
-      { error: "Bạn không có quyền render PDF" },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: "Bạn không có quyền render PDF" }, { status: 403 });
   }
 
   // book
@@ -415,22 +410,18 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
 
   if (bErr) return NextResponse.json({ error: bErr.message }, { status: 500 });
-  if (!book)
-    return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
+  if (!book) return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
 
   // template
   const { data: tpl, error: tErr } = await admin
     .from("book_templates")
-    .select(
-      "id,name,css,cover_html,front_matter_html,toc_html,header_html,footer_html,page_size,page_margin_mm,toc_depth"
-    )
+    .select("id,name,css,cover_html,front_matter_html,toc_html,header_html,footer_html,page_size,page_margin_mm,toc_depth")
     .eq("id", templateId)
     .eq("is_active", true)
     .maybeSingle<TemplateRow>();
 
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
-  if (!tpl)
-    return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
+  if (!tpl) return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
 
   const tocDepth = Number.isFinite(Number(tpl.toc_depth))
     ? Math.min(6, Math.max(1, Number(tpl.toc_depth)))
@@ -450,10 +441,7 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
 
   if (rInsErr || !render?.id) {
-    return NextResponse.json(
-      { error: "Không tạo được render job", detail: rInsErr?.message },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Không tạo được render job", detail: rInsErr?.message }, { status: 500 });
   }
 
   const renderId = render.id;
@@ -475,11 +463,16 @@ export async function POST(req: NextRequest) {
     const footer = token(tpl.footer_html || "");
 
     const origin = getSiteOrigin(req);
-    const cssWithAbsoluteFonts = (tpl.css || "")
-      .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
-      .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
-      .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
 
+    // CSS: fonts absolute + inject TOC target-counter
+    const cssWithAbsoluteFonts = injectPagedTocCSS(
+      (tpl.css || "")
+        .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
+        .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
+        .replaceAll("url(/fonts/", `url(${origin}/fonts/`)
+    );
+
+    // Inline CJK fallback
     const cjkBase64 = loadCJKFontBase64();
     const inlineFontCSS = cjkBase64
       ? `
@@ -491,29 +484,36 @@ export async function POST(req: NextRequest) {
 }
 `
       : "";
-    
+
+    // Inline paged.js
+    const pagedInline = loadPagedJSInline();
+    if (!pagedInline) {
+      throw new Error("Paged.js not found in node_modules. Ensure `pagedjs` is installed.");
+    }
+
+    // Main content
     const main = nodes
-  .map((n) => {
-    const isPart = n.kind === "section";
-    const isChapter = n.kind === "chapter";
+      .map((n) => {
+        const isPart = n.kind === "section";
+        const isChapter = n.kind === "chapter";
 
-    const tag =
-      n.kind === "section"
-      ? "h1"
-      : isChapter
-      ? "h1"
-      : n.depth === 2
-      ? "h2"
-      : "h3";
+        const tag =
+          n.kind === "section"
+            ? "h1"
+            : isChapter
+            ? "h1"
+            : n.depth === 2
+            ? "h2"
+            : "h3";
 
-    const bodyHtml =
-      n.html && n.html.trim()
-        ? n.html
-        : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
+        const bodyHtml =
+          n.html && n.html.trim()
+            ? n.html
+            : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
 
-    // ✅ PHẦN: chỉ render title trang riêng, KHÔNG render body
-    if (isPart) {
-      return `
+        // PHẦN: trang riêng, không render body
+        if (isPart) {
+          return `
 <section class="part" id="${esc(n.id)}"
   data-toc-item="${esc(n.toc_item_id)}"
   data-kind="section"
@@ -521,10 +521,9 @@ export async function POST(req: NextRequest) {
   data-chapter-title="">
   <h1 class="part-title">${esc(n.title)}</h1>
 </section>`;
-    }
+        }
 
-    // Chapter/heading bình thường
-    return `
+        return `
 <section class="${isChapter ? "chapter" : "heading"}" id="${esc(n.id)}"
   data-toc-item="${esc(n.toc_item_id)}"
   data-kind="${esc(n.kind)}"
@@ -533,55 +532,49 @@ export async function POST(req: NextRequest) {
   <${tag} class="${isChapter ? "chapter-title" : ""}">${esc(n.title)}</${tag}>
   ${isChapter ? `<div class="chapter-body">${bodyHtml}</div>` : bodyHtml}
 </section>`;
-  })
-  .join("\n");
+      })
+      .join("\n");
 
-    // 4) TOC list — số cấp do template quyết định (toc_depth)
+    // TOC list
     const tocItems: string[] = [];
-    
-    let partNo = 0;
-    let chapterNo = 0;
-    
     for (const n of nodes) {
       const isPart = n.kind === "section";
       const isChapter = n.kind === "chapter";
+
       const level = isPart ? 1 : isChapter ? 2 : 999;
       if (level > tocDepth) continue;
       if (!isPart && !isChapter) continue;
-      
-      if (isPart) {
-        partNo += 1;
-      }
-      if (isChapter) {
-        chapterNo += 1;
-      }
-      
+
       const pad = level === 2 ? 14 : 0;
       const padAttr = pad ? ` style="padding-left:${pad}px"` : "";
       const label = esc(n.title);
-      const cls = isPart
-        ? "toc-item toc-item--section"
-        : "toc-item toc-item--chapter";
-      
+      const cls = isPart ? "toc-item toc-item--section" : "toc-item toc-item--chapter";
+
       tocItems.push(`
-      <li class="${cls}"${padAttr}>
-      <a href="#${esc(n.id)}">${label}</a>
-      </li>`);
+<li class="${cls}"${padAttr}>
+  <a href="#${esc(n.id)}">${label}</a>
+</li>`);
     }
 
     const tocList = tocItems.join("\n");
+
     const html = `<!doctype html>
-    <html>
-    <head>
-    <meta charset="utf-8"/>
-    <base href="${origin}/" />
-    <title>${esc(book.title)} – v${version.version_no}</title>
-    <style>
-    ${inlineFontCSS}
-    ${cssWithAbsoluteFonts}
-    </style>
-    </head>
-    <body>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <base href="${origin}/" />
+  <title>${esc(book.title)} – v${version.version_no}</title>
+
+  <style>
+${inlineFontCSS}
+${cssWithAbsoluteFonts}
+  </style>
+
+  <script>
+${pagedInline}
+  </script>
+</head>
+<body>
   ${cover || ""}
   ${front || ""}
   ${header || ""}
@@ -611,52 +604,70 @@ export async function POST(req: NextRequest) {
         console.log("[render-pdf][browser]", msg.text());
       }
     });
-    
+
     page.on("requestfailed", (r) =>
       console.log("[render-pdf][requestfailed]", r.url(), r.failure()?.errorText)
-           );
-    
-    page.on("response", async (res) => {
-      const url = res.url();
-      if (url.includes("logo-ump.png") || url.includes("logo-square.png")) {
-        console.log("[render-pdf][logo]", res.status(), res.headers()["content-type"], url);
-      }
-    });
+    );
 
     page.setDefaultNavigationTimeout(180000);
     page.setDefaultTimeout(180000);
-    
+
+    // 1) load DOM
     await page.setContent(html, { waitUntil: "load", timeout: 180000 });
+
+    // 2) force eager images
     await page.evaluate(() => {
       document.querySelectorAll("img").forEach((img) => {
         try {
-          img.loading = "eager";
-          img.decoding = "sync";
+          (img as any).loading = "eager";
+          (img as any).decoding = "sync";
           const src = img.getAttribute("src");
           if (src) img.setAttribute("src", src);
         } catch {}
       });
     });
-    
+
+    // 3) wait fonts + images decode
     await page.evaluate(async () => {
-      if (document.fonts?.ready) await document.fonts.ready;
+      if ((document as any).fonts?.ready) await (document as any).fonts.ready;
+
       const imgs = Array.from(document.images || []);
       await Promise.all(
         imgs.map(async (img: any) => {
           if (!img) return;
+
           if (!img.complete) {
             await new Promise<void>((res) => {
               img.addEventListener("load", () => res(), { once: true });
               img.addEventListener("error", () => res(), { once: true });
             });
           }
+
           if (img.decode) {
-            try { await img.decode(); } catch {}
+            try {
+              await img.decode();
+            } catch {}
           }
         })
       );
     });
 
+    // 4) ✅ paginate Paged.js (TOC target-counter sẽ có số trang)
+    await page.evaluate(async () => {
+      const w = window as any;
+      const Paged = w.Paged;
+      if (!Paged) throw new Error("Paged not available on window");
+
+      w.__PAGED_DONE__ = false;
+      await Paged.Preview(); // build paged flow
+      w.__PAGED_DONE__ = true;
+    });
+
+    await page.waitForFunction(() => (window as any).__PAGED_DONE__ === true, {
+      timeout: 180000,
+    });
+
+    // 5) export PDF
     const pdfBuffer = await page.pdf({
       format: "A4",
       printBackground: true,
