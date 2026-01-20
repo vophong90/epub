@@ -15,7 +15,7 @@ type Profile = {
   id: string;
   email: string | null;
   name: string | null;
-  system_role: string | null; // cột thật trong DB
+  system_role: string | null;
 };
 
 type AuthContextValue = {
@@ -32,111 +32,123 @@ const AuthContext = createContext<AuthContextValue>({
   refresh: async () => {},
 });
 
+async function fetchProfile(userId: string, fallbackUser: any): Promise<Profile> {
+  const { data: p, error } = await supabase
+    .from("profiles")
+    .select("id,email,name,system_role")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (!error && p) {
+    return {
+      id: p.id,
+      email: p.email,
+      name: p.name,
+      system_role: p.system_role ?? null,
+    };
+  }
+
+  return {
+    id: userId,
+    email: fallbackUser?.email ?? null,
+    name: (fallbackUser?.user_metadata as any)?.full_name ?? null,
+    system_role: null,
+  };
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
-
-  // loading chỉ nên "true" ở lần init hoặc khi thực sự đổi user
   const [loading, setLoading] = useState(true);
+
   const initializedRef = useRef(false);
-  const lastUserIdRef = useRef<string | null>(null);
+  const currentUserIdRef = useRef<string | null>(null);
 
-  async function loadSessionAndProfile(opts?: { force?: boolean }) {
-    const force = opts?.force ?? false;
+  const hydrateForUser = async (u: any, opts?: { showLoading?: boolean }) => {
+    const showLoading = opts?.showLoading ?? true;
 
-    // Lấy user hiện tại
-    const {
-      data: { user: u },
-      error,
-    } = await supabase.auth.getUser();
+    const nextId = u?.id ?? null;
 
-    if (error || !u) {
-      // nếu trước đó đã có user thì mới cần setLoading để UI chuyển trạng thái
-      if (!initializedRef.current || lastUserIdRef.current !== null) {
-        setLoading(true);
-      }
+    // Nếu user không đổi thì thôi (tránh nhấp tab/focus bị nháy UI)
+    if (initializedRef.current && currentUserIdRef.current === nextId) {
+      // vẫn sync user object nếu cần (token refresh có thể đổi access token nhưng id giữ nguyên)
+      setUser(u);
+      return;
+    }
 
-      setUser(null);
+    if (showLoading) setLoading(true);
+
+    currentUserIdRef.current = nextId;
+    setUser(u);
+
+    if (!u) {
       setProfile(null);
-      lastUserIdRef.current = null;
-
       initializedRef.current = true;
       setLoading(false);
       return;
     }
 
-    const nextUserId = u.id;
-    const userChanged = lastUserIdRef.current !== nextUserId;
-
-    // Chỉ bật loading khi lần đầu, hoặc user thật sự đổi, hoặc force refresh
-    if (!initializedRef.current || userChanged || force) {
-      setLoading(true);
-    }
-
-    // Nếu user không đổi và không force thì thôi (tránh “nhấp tab” bị reset UI)
-    if (initializedRef.current && !userChanged && !force) {
-      return;
-    }
-
-    setUser(u);
-    lastUserIdRef.current = nextUserId;
-
-    // Lấy profile (chỉ cột có thật)
-    const { data: p, error: pErr } = await supabase
-      .from("profiles")
-      .select("id,email,name,system_role")
-      .eq("id", nextUserId)
-      .maybeSingle();
-
-    if (!pErr && p) {
-      setProfile({
-        id: p.id,
-        email: p.email,
-        name: p.name,
-        system_role: p.system_role ?? null,
-      });
-    } else {
-      // fallback tối thiểu, tránh vỡ UI
-      setProfile({
-        id: nextUserId,
-        email: u.email ?? null,
-        name: (u.user_metadata as any)?.full_name ?? null,
-        system_role: null,
-      });
-    }
+    const p = await fetchProfile(u.id, u);
+    setProfile(p);
 
     initializedRef.current = true;
     setLoading(false);
-  }
+  };
+
+  const refresh = async () => {
+    // refresh chủ động: có loading
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    await hydrateForUser(session?.user ?? null, { showLoading: true });
+  };
 
   useEffect(() => {
-    // init lần đầu
-    loadSessionAndProfile({ force: true });
+    let mounted = true;
 
-    // Chỉ phản ứng với event “có ý nghĩa”, tránh refresh khi đổi tab/focus
+    (async () => {
+      // init: dùng getSession (nhẹ và ổn định hơn getUser trong client)
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!mounted) return;
+      await hydrateForUser(session?.user ?? null, { showLoading: true });
+    })();
+
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "USER_UPDATED") {
-        loadSessionAndProfile({ force: true });
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      // LOG nếu muốn debug:
+      // console.log("[Auth] event:", event);
+
+      if (event === "SIGNED_OUT") {
+        // có loading ngắn để UI chuyển trạng thái mượt
+        hydrateForUser(null, { showLoading: true });
+        return;
       }
-      // BỎ QUA các event kiểu TOKEN_REFRESHED / INITIAL_SESSION (tùy phiên bản)
-      // để tránh nhấp tab lại bị reset UI
+
+      if (event === "SIGNED_IN" || event === "USER_UPDATED") {
+        hydrateForUser(session?.user ?? null, { showLoading: true });
+        return;
+      }
+
+      // Các event kiểu TOKEN_REFRESHED/INITIAL_SESSION/...:
+      // KHÔNG được bật loading, chỉ sync user nhẹ
+      if (session?.user) {
+        hydrateForUser(session.user, { showLoading: false });
+      }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        profile,
-        loading,
-        refresh: () => loadSessionAndProfile({ force: true }),
-      }}
-    >
+    <AuthContext.Provider value={{ user, profile, loading, refresh }}>
       {children}
     </AuthContext.Provider>
   );
