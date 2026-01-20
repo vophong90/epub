@@ -574,10 +574,10 @@ export default function BookDetailPage() {
 
   // Khi bấm "Thêm mục con" ở card: nếu parent là section -> tạo chapter; nếu chapter -> heading
   function handleOpenCreateChild(parent: TocItemRoot) {
-    const childKind: TocKind = parent.kind === "section" ? "chapter" : "heading";
-    openCreateModal(parent.id, childKind);
+    if (parent.kind !== "section") return;
+    openCreateModal(parent.id, "chapter");
   }
-
+  
   async function openEditModal(item: TocItemRoot) {
     setModalMode("edit");
     setModalParentId(item.parent_id);
