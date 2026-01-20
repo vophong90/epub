@@ -66,6 +66,41 @@ function loadCJKFontBase64() {
   }
 }
 
+function loadPagedJSInline() {
+  const candidates = [
+    path.join(process.cwd(), "node_modules", "pagedjs", "dist", "paged.polyfill.js"),
+    path.join(process.cwd(), "node_modules", "pagedjs", "dist", "paged.polyfill.min.js"),
+    path.join(process.cwd(), "node_modules", "pagedjs", "dist", "paged.js"),
+    path.join(process.cwd(), "node_modules", "pagedjs", "dist", "paged.min.js"),
+  ];
+
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return fs.readFileSync(p, "utf8");
+    } catch {}
+  }
+  return null;
+}
+
+function injectPagedTocCSS(css: string) {
+  // Nếu anh đã có TOC CSS riêng thì vẫn OK, đoạn này chỉ bổ sung page-number
+  return `
+${css}
+
+/* ===== TOC page numbers via Paged.js ===== */
+nav.toc a{
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+nav.toc a::after{
+  content: target-counter(attr(href), page);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+`;
+}
+
 /** DB row types tối giản */
 type TocItemRow = {
   id: string;
