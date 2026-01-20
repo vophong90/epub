@@ -331,3 +331,81 @@ export async function PATCH(req: NextRequest) {
     version: updated,
   });
 }
+
+export async function DELETE(req: NextRequest) {
+  const supabase = getRouteClient();
+
+  const { searchParams } = new URL(req.url);
+  const versionId = (searchParams.get("id") || "").toString().trim();
+  if (!versionId) {
+    return NextResponse.json({ error: "id (version_id) là bắt buộc" }, { status: 400 });
+  }
+
+  // 1) user
+  const {
+    data: { user },
+    error: uErr,
+  } = await supabase.auth.getUser();
+  if (uErr || !user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // 2) profile -> system_role
+  const { data: profile, error: pErr } = await supabase
+    .from("profiles")
+    .select("id,system_role")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  if (pErr) return NextResponse.json({ error: pErr.message }, { status: 500 });
+
+  const isAdmin = profile?.system_role === "admin";
+
+  // 3) load version
+  const { data: version, error: vErr } = await supabase
+    .from("book_versions")
+    .select("id,book_id,status,version_no")
+    .eq("id", versionId)
+    .maybeSingle();
+
+  if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 });
+  if (!version) return NextResponse.json({ error: "Không tìm thấy phiên bản" }, { status: 404 });
+
+  // 4) book_permissions để lấy role
+  const { data: perm, error: permErr } = await supabase
+    .from("book_permissions")
+    .select("role")
+    .eq("book_id", version.book_id)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (permErr) return NextResponse.json({ error: permErr.message }, { status: 500 });
+
+  const role = perm?.role || null; // viewer|author|editor...
+  const isEditor = role === "editor";
+
+  // 5) quyền xóa
+  const status = (version.status || "").toString();
+
+  // published: chỉ admin
+  if (status === "published" && !isAdmin) {
+    return NextResponse.json({ error: "Chỉ admin mới được xóa phiên bản đã xuất bản." }, { status: 403 });
+  }
+
+  // draft: admin hoặc editor
+  if (status !== "published" && !(isAdmin || isEditor)) {
+    return NextResponse.json({ error: "Chỉ admin hoặc editor mới được xóa phiên bản nháp." }, { status: 403 });
+  }
+
+  // 6) delete (cascade)
+  const { error: delErr } = await supabase
+    .from("book_versions")
+    .delete()
+    .eq("id", versionId);
+
+  if (delErr) {
+    return NextResponse.json({ error: delErr.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true });
+}
