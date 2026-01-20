@@ -1,12 +1,7 @@
 // app/books/[id]/page.tsx
 "use client";
 
-import {
-  useEffect,
-  useMemo,
-  useState,
-  type CSSProperties,
-} from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -40,6 +35,7 @@ const BTN_PRIMARY =
 type VersionsApiResponse = {
   ok: boolean;
   is_admin: boolean;
+  book_role: string; // viewer|author|editor... (từ book_permissions), admin lấy từ profiles.system_role
   versions: BookVersion[];
   error?: string;
 };
@@ -52,7 +48,6 @@ type TocTreeResponse = {
 };
 
 type MemberProfile = ModalMemberProfile;
-
 type Member = ModalMember;
 
 type MembersResponse = {
@@ -128,7 +123,7 @@ function AssignChaptersModal({
       >
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-lg font-semibold">
-            Chọn chương đưa vào PHẦN: {sectionTitle}
+            Chọn chương đưa vào phần: {sectionTitle}
           </h3>
           <button
             className="text-sm text-gray-500 hover:text-gray-800"
@@ -141,15 +136,14 @@ function AssignChaptersModal({
 
         {noneAvailable ? (
           <p className="text-sm text-gray-600">
-            Hiện không có chương root nào (Chương cấp 1, không thuộc PHẦN) để
-            đưa vào PHẦN này.
+            Hiện không có chương root nào (Chương cấp 1, không thuộc phần) để đưa
+            vào phần này.
           </p>
         ) : (
           <div className="space-y-3">
             <p className="text-sm text-gray-600">
-              Chọn các chương cấp 1 (đang là chương lẻ) để chuyển vào PHẦN này.
-              Khi xác nhận, các chương sẽ được đặt ở cuối danh sách trong
-              PHẦN.
+              Chọn các chương cấp 1 (đang là chương lẻ) để chuyển vào phần này.
+              Khi xác nhận, các chương sẽ được đặt ở cuối danh sách trong phần.
             </p>
 
             <div className="max-h-64 space-y-1 overflow-auto rounded border p-2">
@@ -177,18 +171,14 @@ function AssignChaptersModal({
             </div>
 
             <p className="text-xs text-gray-500">
-              Thứ tự sau khi chuyển sẽ được sắp ở cuối PHẦN, theo thứ tự bạn tick
+              Thứ tự sau khi chuyển sẽ được sắp ở cuối phần, theo thứ tự bạn tick
               ở đây.
             </p>
           </div>
         )}
 
         <div className="mt-5 flex items-center justify-between">
-          <button
-            className={BTN}
-            onClick={onClose}
-            disabled={assigning}
-          >
+          <button className={BTN} onClick={onClose} disabled={assigning}>
             Hủy
           </button>
           <button
@@ -196,7 +186,7 @@ function AssignChaptersModal({
             onClick={onConfirm}
             disabled={assigning || selectedChapterIds.length === 0}
           >
-            {assigning ? "Đang chuyển..." : "Chuyển chương vào PHẦN"}
+            {assigning ? "Đang chuyển..." : "Chuyển chương vào phần"}
           </button>
         </div>
       </div>
@@ -216,13 +206,24 @@ export default function BookDetailPage() {
       : "";
 
   const [book, setBook] = useState<Book | null>(null);
+
+  // ✅ Versions dropdown
+  const [versions, setVersions] = useState<BookVersion[]>([]);
+  const [selectedVersionId, setSelectedVersionId] = useState<string>("");
+
   const [version, setVersion] = useState<BookVersion | null>(null);
   const [tocData, setTocData] = useState<TocTreeResponse | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
   const [creatingVersion, setCreatingVersion] = useState(false);
   const [hasPublishedVersion, setHasPublishedVersion] = useState(false);
+
+  // ✅ Permission for delete-version
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [bookRole, setBookRole] = useState<string>("viewer");
+  const [deletingVersion, setDeletingVersion] = useState(false);
 
   /** Templates */
   const [templates, setTemplates] = useState<BookTemplate[]>([]);
@@ -249,7 +250,9 @@ export default function BookDetailPage() {
 
   /** Search user để phân công (theo email) */
   const [userSearchQuery, setUserSearchQuery] = useState("");
-  const [userSearchResults, setUserSearchResults] = useState<MemberProfile[]>([]);
+  const [userSearchResults, setUserSearchResults] = useState<MemberProfile[]>(
+    []
+  );
   const [userSearchLoading, setUserSearchLoading] = useState(false);
   const [userSearchError, setUserSearchError] = useState<string | null>(null);
 
@@ -263,7 +266,9 @@ export default function BookDetailPage() {
   /** Modal chuyển chương vào PHẦN */
   const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [assignSection, setAssignSection] = useState<TocItemRoot | null>(null);
-  const [assignSelectedChapterIds, setAssignSelectedChapterIds] = useState<string[]>([]);
+  const [assignSelectedChapterIds, setAssignSelectedChapterIds] = useState<
+    string[]
+  >([]);
   const [assignSaving, setAssignSaving] = useState(false);
 
   function toggleMenu(id: string) {
@@ -295,7 +300,30 @@ export default function BookDetailPage() {
     [members]
   );
 
-  /** Load book + version + toc + members */
+  // ===== Helpers: load versions list =====
+  async function refreshVersions(bookIdArg: string) {
+    const res = await fetch(`/api/books/versions?book_id=${bookIdArg}`);
+    const json = (await res.json().catch(() => ({}))) as Partial<VersionsApiResponse>;
+
+    if (!res.ok || !json.ok) {
+      console.error("refreshVersions error:", json.error || res.status);
+      setVersions([]);
+      setSelectedVersionId("");
+      setVersion(null);
+      setHasPublishedVersion(false);
+      return { ok: false as const, versions: [] as BookVersion[] };
+    }
+
+    const vs = (json.versions || []) as BookVersion[];
+    setVersions(vs);
+    setIsAdmin(!!json.is_admin);
+    setBookRole((json.book_role || "viewer") as string);
+    setHasPublishedVersion(vs.some((v) => v.status === "published"));
+
+    return { ok: true as const, versions: vs };
+  }
+
+  /** Load book + versions + chọn latest */
   useEffect(() => {
     if (!bookId) return;
 
@@ -322,39 +350,27 @@ export default function BookDetailPage() {
         if (cancelled) return;
         setBook(bookRow as Book);
 
-        // 2) Load danh sách version qua API
-        const res = await fetch(`/api/books/versions?book_id=${bookId}`);
-        const json = (await res
-          .json()
-          .catch(() => ({}))) as Partial<VersionsApiResponse>;
-
+        // 2) Load versions
+        const r = await refreshVersions(bookId);
         if (cancelled) return;
 
-        if (!res.ok || !json.ok) {
-          console.error("load versions error:", json.error || res.status);
+        if (!r.ok || r.versions.length === 0) {
           setVersion(null);
+          setSelectedVersionId("");
+          setSelectedTemplateId("");
+          setTocData(null);
+          setMembers([]);
           return;
         }
 
-        const versions = json.versions || [];
-        setHasPublishedVersion(versions.some((v) => v.status === "published"));
-        if (versions.length > 0) {
-          const latest = versions[versions.length - 1];
-          setVersion(latest);
+        const latest = r.versions[r.versions.length - 1];
+        setVersion(latest);
+        setSelectedVersionId(latest.id);
+        setSelectedTemplateId(latest.template_id || "");
 
-          // sync selected template from latest
-          setSelectedTemplateId(latest.template_id || "");
-
-          // 3) Load TOC tree
-          await loadTocTree(latest.id, cancelled);
-
-          // 4) Load members
-          await loadMembers(latest.id, cancelled);
-        } else {
-          setVersion(null);
-          setSelectedTemplateId("");
-          setHasPublishedVersion(false);
-        }
+        // 3) Load TOC tree + members
+        await loadTocTree(latest.id, cancelled);
+        await loadMembers(latest.id, cancelled);
       } catch (e: any) {
         if (!cancelled) setErrorMsg(e?.message || "Lỗi khi tải dữ liệu.");
       } finally {
@@ -363,7 +379,6 @@ export default function BookDetailPage() {
     }
 
     loadAll();
-
     return () => {
       cancelled = true;
     };
@@ -404,18 +419,13 @@ export default function BookDetailPage() {
     setTemplatesError(null);
     try {
       const res = await fetch("/api/book-templates?active=1");
-      const json = (await res
-        .json()
-        .catch(() => ({}))) as Partial<{
+      const json = (await res.json().catch(() => ({}))) as Partial<{
         ok: boolean;
         templates: BookTemplate[];
         error?: string;
       }>;
       if (!res.ok || !json.ok) {
-        console.error(
-          "load templates error:",
-          (json as any)?.error || res.status
-        );
+        console.error("load templates error:", (json as any)?.error || res.status);
         setTemplates([]);
         setTemplatesError((json as any)?.error || "Không tải được templates.");
         return;
@@ -445,10 +455,7 @@ export default function BookDetailPage() {
     () => buildChildrenMap(tocData?.items || []),
     [tocData]
   );
-  const rootItems = useMemo(
-    () => childrenMap.get(null) || [],
-    [childrenMap]
-  );
+  const rootItems = useMemo(() => childrenMap.get(null) || [], [childrenMap]);
 
   /** Sync rootOrder từ rootItems */
   useEffect(() => {
@@ -467,12 +474,84 @@ export default function BookDetailPage() {
 
   /** Các chương root (chapter cấp 1, không thuộc PHẦN) – dùng cho assign modal */
   const rootChaptersAlone = useMemo(
-    () =>
-      rootItems.filter(
-        (it) => it.kind === "chapter" && it.parent_id === null
-      ),
+    () => rootItems.filter((it) => it.kind === "chapter" && it.parent_id === null),
     [rootItems]
   );
+
+  // ===== Version dropdown: select version =====
+  async function handleSelectVersion(versionId: string) {
+    setSelectedVersionId(versionId);
+
+    const v = versions.find((x) => x.id === versionId) || null;
+    setVersion(v);
+    setTocData(null);
+    setMembers([]);
+
+    if (!v) {
+      setSelectedTemplateId("");
+      return;
+    }
+
+    setSelectedTemplateId(v.template_id || "");
+    await loadTocTree(v.id);
+    await loadMembers(v.id);
+    await loadTemplates();
+  }
+
+  // ===== Delete version rule =====
+  const canDeleteSelectedVersion = useMemo(() => {
+    if (!version) return false;
+    if (version.status === "published") return isAdmin;
+    return isAdmin || bookRole === "editor";
+  }, [version, isAdmin, bookRole]);
+
+  async function handleDeleteSelectedVersion() {
+    if (!version) return;
+    if (!canDeleteSelectedVersion) return;
+
+    const ok = confirm(
+      `Bạn chắc chắn muốn xóa Phiên bản ${version.version_no} (${version.status})?\n` +
+        `Toàn bộ mục lục và nội dung của phiên bản này sẽ bị xóa.`
+    );
+    if (!ok) return;
+
+    setDeletingVersion(true);
+    try {
+      const res = await fetch(`/api/books/versions?id=${version.id}`, {
+        method: "DELETE",
+      });
+      const json = await res.json().catch(() => ({} as any));
+      if (!res.ok || !json?.ok) {
+        console.error("delete version error:", json);
+        alert(json?.error || "Không xóa được phiên bản.");
+        return;
+      }
+
+      // refresh list + select latest
+      const r = await refreshVersions(bookId);
+      if (!r.ok || r.versions.length === 0) {
+        setVersion(null);
+        setSelectedVersionId("");
+        setSelectedTemplateId("");
+        setTocData(null);
+        setMembers([]);
+        return;
+      }
+
+      const latest = r.versions[r.versions.length - 1];
+      setVersion(latest);
+      setSelectedVersionId(latest.id);
+      setSelectedTemplateId(latest.template_id || "");
+      await loadTocTree(latest.id);
+      await loadMembers(latest.id);
+      await loadTemplates();
+    } catch (e: any) {
+      console.error("handleDeleteSelectedVersion error:", e);
+      alert(e?.message || "Không xóa được phiên bản.");
+    } finally {
+      setDeletingVersion(false);
+    }
+  }
 
   /** Tạo phiên bản đầu tiên */
   async function handleCreateFirstVersion() {
@@ -483,26 +562,30 @@ export default function BookDetailPage() {
       const res = await fetch("/api/books/versions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          book_id: bookId,
-        }),
+        body: JSON.stringify({ book_id: bookId }),
       });
 
       const json = await res.json().catch(() => ({} as any));
-
       if (!res.ok || !json?.ok || !json?.version) {
         console.error("create version error:", json);
         setErrorMsg(json?.error || "Không tạo được phiên bản mới.");
         return;
       }
 
-      const v = json.version as BookVersion;
-      setVersion(v);
-      setSelectedTemplateId(v.template_id || "");
+      // refresh list + select new version
+      const r = await refreshVersions(bookId);
+      const created = json.version as BookVersion;
 
-      await loadTocTree(v.id);
-      await loadMembers(v.id);
+      setVersion(created);
+      setSelectedVersionId(created.id);
+      setSelectedTemplateId(created.template_id || "");
+
+      await loadTocTree(created.id);
+      await loadMembers(created.id);
       await loadTemplates();
+
+      // đảm bảo hasPublishedVersion theo list mới
+      if (r.ok) setHasPublishedVersion(r.versions.some((v) => v.status === "published"));
     } catch (e: any) {
       console.error("handleCreateFirstVersion error:", e);
       setErrorMsg(e?.message || "Lỗi khi tạo phiên bản mới.");
@@ -512,46 +595,46 @@ export default function BookDetailPage() {
   }
 
   /** Tạo phiên bản mới bằng cách clone từ bản published gần nhất */
-async function handleCloneFromPublished() {
-  if (!bookId) return;
+  async function handleCloneFromPublished() {
+    if (!bookId) return;
 
-  setCreatingVersion(true);
-  setErrorMsg(null);
+    setCreatingVersion(true);
+    setErrorMsg(null);
 
-  try {
-    const res = await fetch("/api/books/version/clone", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ book_id: bookId }),
-    });
+    try {
+      const res = await fetch("/api/books/version/clone", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ book_id: bookId }),
+      });
 
-    const json = await res.json().catch(() => ({} as any));
-    if (!res.ok || !json?.ok || !json?.new_version) {
-      console.error("clone version error:", json);
-      setErrorMsg(json?.error || "Không clone được phiên bản mới.");
-      return;
+      const json = await res.json().catch(() => ({} as any));
+      if (!res.ok || !json?.ok || !json?.new_version) {
+        console.error("clone version error:", json);
+        setErrorMsg(json?.error || "Không clone được phiên bản mới.");
+        return;
+      }
+
+      const v = json.new_version as BookVersion;
+
+      // refresh list + select new version
+      await refreshVersions(bookId);
+      setVersion(v);
+      setSelectedVersionId(v.id);
+      setSelectedTemplateId(v.template_id || "");
+
+      await loadTocTree(v.id);
+      await loadMembers(v.id);
+      await loadTemplates();
+
+      setHasPublishedVersion(true);
+    } catch (e: any) {
+      console.error("handleCloneFromPublished error:", e);
+      setErrorMsg(e?.message || "Lỗi khi clone phiên bản mới.");
+    } finally {
+      setCreatingVersion(false);
     }
-
-    const v = json.new_version as BookVersion;
-
-    // set version mới + sync template (nếu clone có template_id thì tự ăn, còn không thì "")
-    setVersion(v);
-    setSelectedTemplateId(v.template_id || "");
-
-    // reload TOC + members + templates
-    await loadTocTree(v.id);
-    await loadMembers(v.id);
-    await loadTemplates();
-
-    // sau khi clone thì chắc chắn có published (vì clone từ published)
-    setHasPublishedVersion(true);
-  } catch (e: any) {
-    console.error("handleCloneFromPublished error:", e);
-    setErrorMsg(e?.message || "Lỗi khi clone phiên bản mới.");
-  } finally {
-    setCreatingVersion(false);
   }
-}
 
   /** Lưu template cho version hiện tại */
   async function handleSaveTemplateForVersion() {
@@ -577,6 +660,9 @@ async function handleCloneFromPublished() {
       const updated = json.version as BookVersion;
       setVersion(updated);
       setSelectedTemplateId(updated.template_id || "");
+
+      // cập nhật versions[] để dropdown reflect đúng
+      setVersions((cur) => cur.map((x) => (x.id === updated.id ? updated : x)));
     } catch (e: any) {
       console.error("handleSaveTemplateForVersion error:", e);
       alert(e?.message || "Không lưu được template.");
@@ -587,23 +673,12 @@ async function handleCloneFromPublished() {
 
   /** Modal helpers */
 
-  // Tạo modal tạo mới: nếu không truyền kind thì:
-  //  - parent = null  -> chapter
-  //  - parent != null -> heading
-  function openCreateModal(
-    parentId: string | null = null,
-    forcedKind?: TocKind
-  ) {
+  function openCreateModal(parentId: string | null = null, forcedKind?: TocKind) {
     setModalMode("create");
     setModalParentId(parentId);
     setModalItem(null);
     setModalTitle("");
-
-    if (forcedKind) {
-      setModalKind(forcedKind);
-    } else {
-      setModalKind("chapter");
-    }
+    setModalKind(forcedKind ? forcedKind : "chapter");
 
     setModalSelectedAuthors([]);
     setModalOriginalAuthors([]);
@@ -613,17 +688,15 @@ async function handleCloneFromPublished() {
     setModalOpen(true);
   }
 
-  // Tạo riêng function cho Section
   function openCreateSectionModal() {
     openCreateModal(null, "section");
   }
 
-  // Khi bấm "Thêm mục con" ở card: nếu parent là section -> tạo chapter; nếu chapter -> heading
   function handleOpenCreateChild(parent: TocItemRoot) {
     if (parent.kind !== "section") return;
     openCreateModal(parent.id, "chapter");
   }
-  
+
   async function openEditModal(item: TocItemRoot) {
     setModalMode("edit");
     setModalParentId(item.parent_id);
@@ -733,7 +806,6 @@ async function handleCloneFromPublished() {
           body: JSON.stringify({
             id: modalItem.id,
             title: modalTitle.trim(),
-            // không cho đổi kind ở đây, giữ nguyên loại
           }),
         });
         if (!res.ok) {
@@ -771,7 +843,6 @@ async function handleCloneFromPublished() {
         }
       }
 
-      // Reload TOC + members
       await loadTocTree(version.id);
       await loadMembers(version.id);
 
@@ -873,7 +944,7 @@ async function handleCloneFromPublished() {
     } catch (err) {
       console.error("reorder(root) exception", err);
       alert("Không đổi thứ tự được.");
-      setRootOrder(prev); // rollback nếu exception
+      setRootOrder(prev);
     } finally {
       setRootReordering(false);
     }
@@ -919,22 +990,21 @@ async function handleCloneFromPublished() {
 
       if (!res.ok) {
         console.error("move-to-section error", await res.text());
-        alert("Không chuyển chương vào PHẦN được.");
+        alert("Không chuyển chương vào phần được.");
         return;
       }
 
       const json = await res.json().catch(() => ({} as any));
       if (!json.ok) {
-        alert(json.error || "Không chuyển chương vào PHẦN được.");
+        alert(json.error || "Không chuyển chương vào phần được.");
         return;
       }
 
-      // reload TOC
       await loadTocTree(version.id);
       handleCloseAssignModal();
     } catch (e) {
       console.error("handleAssignChapters exception", e);
-      alert("Không chuyển chương vào PHẦN được.");
+      alert("Không chuyển chương vào phần được.");
     } finally {
       setAssignSaving(false);
     }
@@ -984,12 +1054,22 @@ async function handleCloneFromPublished() {
       <BookHeaderSection
         book={book}
         version={version}
+        // ✅ dropdown versions
+        versions={versions}
+        selectedVersionId={selectedVersionId}
+        onSelectVersion={handleSelectVersion}
+        // ✅ delete version
+        canDeleteSelectedVersion={canDeleteSelectedVersion}
+        deletingVersion={deletingVersion}
+        onDeleteSelectedVersion={handleDeleteSelectedVersion}
+        // templates
         templates={templates}
         templatesLoading={templatesLoading}
         templatesError={templatesError}
         selectedTemplateId={selectedTemplateId}
         savingTemplate={savingTemplate}
         creatingVersion={creatingVersion}
+        // clone button (chỉ khi có published và là editor)
         hasPublishedVersion={hasPublishedVersion && isEditor}
         onCreateFirstVersion={handleCreateFirstVersion}
         onCloneFromPublished={handleCloneFromPublished}
@@ -997,25 +1077,23 @@ async function handleCloneFromPublished() {
         onSaveTemplateForVersion={handleSaveTemplateForVersion}
       />
 
-     {/* Khi đã có version thì mới có TOC */}
+      {/* Khi đã có version thì mới có TOC */}
       {version && (
-      <div className="space-y-4">
-        <TocRootList
-          bookId={book.id}
-          versionId={version.id}
-          role={tocData?.role ?? "viewer"}
-          items={tocData?.items ?? []}
-          onReload={() => loadTocTree(version.id)}
-          onOpenCreateSection={() => openCreateModal(null, "section")}
-          onOpenCreateRootChapter={() => openCreateModal(null, "chapter")}
-          onOpenCreateChild={(parentId) => openCreateModal(parentId, "chapter")}
-          onOpenEdit={openEditModal}
-          onOpenCompose={(item) =>
-            router.push(`/books/${book.id}/toc/${item.id}`)
-          }
+        <div className="space-y-4">
+          <TocRootList
+            bookId={book.id}
+            versionId={version.id}
+            role={tocData?.role ?? "viewer"}
+            items={tocData?.items ?? []}
+            onReload={() => loadTocTree(version.id)}
+            onOpenCreateSection={() => openCreateModal(null, "section")}
+            onOpenCreateRootChapter={() => openCreateModal(null, "chapter")}
+            onOpenCreateChild={(parentId) => openCreateModal(parentId, "chapter")}
+            onOpenEdit={openEditModal}
+            onOpenCompose={(item) => router.push(`/books/${book.id}/toc/${item.id}`)}
           />
-      </div>
-    )}
+        </div>
+      )}
 
       {/* MODAL tạo / sửa TOC */}
       <TocModal
