@@ -1,29 +1,12 @@
 // app/api/books/version/clone/route.ts
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
+import { getRouteClient } from "@/lib/supabaseServer";
 import { getAdminClient } from "@/lib/supabase-admin";
 
-/**
- * POST /api/books/version/clone
- *
- * Body:
- * - book_id?: string
- * - source_version_id?: string
- *
- * Logic:
- * - Nếu có source_version_id: dùng version đó làm nguồn (yêu cầu status = 'published')
- * - Nếu không: tìm bản published mới nhất của book_id
- * - Tạo version mới: status = 'draft', version_no = max(version_no) + 1
- * - Clone toàn bộ toc_items, toc_contents, toc_assignments từ source sang version mới
- */
-
-// ====== Pagination helpers (fix Supabase 1000 row cap) ======
-
-async function fetchAllTocItemsByVersion(
-  supabase: any,
-  sourceVersionId: string
-) {
+async function fetchAllTocItemsByVersion(supabase: any, sourceVersionId: string) {
   const PAGE = 1000;
   let from = 0;
   const all: any[] = [];
@@ -31,7 +14,7 @@ async function fetchAllTocItemsByVersion(
   while (true) {
     const { data, error } = await supabase
       .from("toc_items")
-      .select("id, book_version_id, parent_id, title, slug, order_index, created_at")
+      .select("id, book_version_id, parent_id, title, slug, kind, order_index, created_at")
       .eq("book_version_id", sourceVersionId)
       .order("order_index", { ascending: true })
       .order("id", { ascending: true }) // stable paging
@@ -72,14 +55,12 @@ async function fetchAllByItemIds<T>(
 
     let from = 0;
     while (true) {
-      const q = supabase
+      const { data, error } = await supabase
         .from(table)
         .select(selectCols)
         .in(idCol, slice)
         .order(idCol, { ascending: true })
         .range(from, from + PAGE - 1);
-
-      const { data, error } = await q;
 
       if (error) {
         const label = table === "toc_contents" ? "nội dung TOC" : "phân công TOC";
@@ -98,8 +79,12 @@ async function fetchAllByItemIds<T>(
 }
 
 export async function POST(req: NextRequest) {
-  const supabase = getAdminClient();
+  // ✅ route client: check user/permission (cookie session)
+  const supabase = getRouteClient();
+  // ✅ admin client: thực hiện clone (service role)
+  const admin = getAdminClient();
 
+  // 0) Parse body
   let body: any = {};
   try {
     body = await req.json();
@@ -113,16 +98,23 @@ export async function POST(req: NextRequest) {
 
   if (!book_id_input && !source_version_id_input) {
     return NextResponse.json(
-      {
-        ok: false,
-        error: "Cần truyền book_id hoặc source_version_id.",
-      },
+      { ok: false, error: "Cần truyền book_id hoặc source_version_id." },
       { status: 400 }
     );
   }
 
+  // 1) Check user login
+  const {
+    data: { user },
+    error: uErr,
+  } = await supabase.auth.getUser();
+
+  if (uErr || !user) {
+    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+
   try {
-    // 1) Xác định source version
+    // 2) Xác định source version (dùng admin để chắc chắn đọc được)
     type VersionRow = {
       id: string;
       book_id: string;
@@ -130,43 +122,31 @@ export async function POST(req: NextRequest) {
       status: string;
       created_by: string | null;
       created_at: string | null;
+      template_id: string | null;
     };
 
     let sourceVersion: VersionRow | null = null;
 
     if (source_version_id_input) {
-      const { data, error } = await supabase
+      const { data, error } = await admin
         .from("book_versions")
-        .select("id, book_id, version_no, status, created_by, created_at")
+        .select("id, book_id, version_no, status, created_by, created_at, template_id")
         .eq("id", source_version_id_input)
         .maybeSingle();
 
       if (error || !data) {
-        return NextResponse.json(
-          {
-            ok: false,
-            error: "Không tìm thấy version nguồn.",
-          },
-          { status: 404 }
-        );
+        return NextResponse.json({ ok: false, error: "Không tìm thấy version nguồn." }, { status: 404 });
       }
 
       if (data.status !== "published") {
-        return NextResponse.json(
-          {
-            ok: false,
-            error: "Chỉ được clone từ version đã publish.",
-          },
-          { status: 400 }
-        );
+        return NextResponse.json({ ok: false, error: "Chỉ được clone từ version đã publish." }, { status: 400 });
       }
 
       sourceVersion = data as VersionRow;
     } else {
-      // dùng book_id_input, tìm bản published mới nhất
-      const { data, error } = await supabase
+      const { data, error } = await admin
         .from("book_versions")
-        .select("id, book_id, version_no, status, created_by, created_at")
+        .select("id, book_id, version_no, status, created_by, created_at, template_id")
         .eq("book_id", book_id_input!)
         .eq("status", "published")
         .order("version_no", { ascending: false })
@@ -175,11 +155,7 @@ export async function POST(req: NextRequest) {
 
       if (error || !data) {
         return NextResponse.json(
-          {
-            ok: false,
-            error:
-              "Không tìm thấy phiên bản published nào của sách này để clone.",
-          },
+          { ok: false, error: "Không tìm thấy phiên bản published nào của sách này để clone." },
           { status: 404 }
         );
       }
@@ -188,16 +164,41 @@ export async function POST(req: NextRequest) {
     }
 
     if (!sourceVersion) {
-      return NextResponse.json(
-        { ok: false, error: "Không xác định được phiên bản nguồn." },
-        { status: 500 }
-      );
+      return NextResponse.json({ ok: false, error: "Không xác định được phiên bản nguồn." }, { status: 500 });
     }
 
     const bookId = sourceVersion.book_id;
 
-    // 2) Tìm version_no lớn nhất hiện có để gán version_no mới = max + 1
-    const { data: maxVersionRow, error: maxErr } = await supabase
+    // 3) Check quyền user trên book (dùng route client để tôn trọng RLS)
+    const { data: profile, error: pErr } = await supabase
+      .from("profiles")
+      .select("id,system_role")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (pErr) {
+      return NextResponse.json({ ok: false, error: pErr.message }, { status: 500 });
+    }
+
+    const isAdmin = profile?.system_role === "admin";
+
+    const { data: perm, error: permErr } = await supabase
+      .from("book_permissions")
+      .select("role")
+      .eq("book_id", bookId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (permErr) {
+      return NextResponse.json({ ok: false, error: permErr.message }, { status: 500 });
+    }
+
+    if (!perm && !isAdmin) {
+      return NextResponse.json({ ok: false, error: "Bạn không có quyền tạo phiên bản cho sách này" }, { status: 403 });
+    }
+
+    // 4) Tìm version_no lớn nhất hiện có để +1
+    const { data: maxVersionRow, error: maxErr } = await admin
       .from("book_versions")
       .select("version_no")
       .eq("book_id", bookId)
@@ -207,38 +208,30 @@ export async function POST(req: NextRequest) {
 
     if (maxErr) {
       return NextResponse.json(
-        {
-          ok: false,
-          error: `Lỗi khi kiểm tra version hiện có: ${maxErr.message}`,
-        },
+        { ok: false, error: `Lỗi khi kiểm tra version hiện có: ${maxErr.message}` },
         { status: 500 }
       );
     }
 
     const nextVersionNo =
-      (maxVersionRow?.version_no ?? sourceVersion.version_no) + 1;
+      (maxVersionRow?.version_no ?? sourceVersion.version_no ?? 0) + 1;
 
-    // 3) Tạo version mới (draft)
-    const { data: insertedVersion, error: insVersionErr } = await supabase
+    // 5) Tạo version mới (draft) + ✅ inherit template_id + ✅ created_by = user.id
+    const { data: insertedVersion, error: insVersionErr } = await admin
       .from("book_versions")
       .insert({
         book_id: bookId,
         version_no: nextVersionNo,
         status: "draft",
-        // tái sử dụng created_by cũ nếu có; hoặc để default/null
-        created_by: sourceVersion.created_by ?? null,
+        created_by: user.id,
+        template_id: sourceVersion.template_id ?? null,
       })
-      .select("id, book_id, version_no, status, created_by, created_at")
+      .select("id, book_id, version_no, status, created_by, created_at, template_id")
       .maybeSingle();
 
     if (insVersionErr || !insertedVersion) {
       return NextResponse.json(
-        {
-          ok: false,
-          error:
-            insVersionErr?.message ||
-            "Không tạo được phiên bản nháp mới từ version publish.",
-        },
+        { ok: false, error: insVersionErr?.message || "Không tạo được phiên bản nháp mới từ version publish." },
         { status: 500 }
       );
     }
@@ -246,23 +239,21 @@ export async function POST(req: NextRequest) {
     const newVersion = insertedVersion as VersionRow;
     const newVersionId = newVersion.id;
 
-    // 4) Lấy toàn bộ TOC items của sourceVersion (FIX: pagination)
+    // 6) Lấy toàn bộ TOC items của sourceVersion (FIX: pagination)
     type TocItemRow = {
       id: string;
       book_version_id: string;
       parent_id: string | null;
       title: string;
-      slug: string;
+      slug: string | null;
+      kind: string | null;
       order_index: number;
       created_at: string | null;
     };
 
-    const allItems = (await fetchAllTocItemsByVersion(
-      supabase,
-      sourceVersion.id
-    )) as TocItemRow[];
+    const allItems = (await fetchAllTocItemsByVersion(admin, sourceVersion.id)) as TocItemRow[];
 
-    // Nếu không có nội dung TOC thì không sao, chỉ trả về version mới
+    // Nếu không có TOC thì trả về version mới
     if (allItems.length === 0) {
       return NextResponse.json({
         ok: true,
@@ -271,12 +262,8 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 5) Map id -> item, và group theo parent để clone theo tree
-    const byId = new Map<string, TocItemRow>(allItems.map((i) => [i.id, i]));
-    void byId; // giữ đúng chức năng/biến cũ (tránh lint), dù không dùng trực tiếp
-
+    // 7) Group theo parent để clone theo tree
     const childrenMap = new Map<string | null, TocItemRow[]>();
-
     for (const it of allItems) {
       const key = it.parent_id;
       if (!childrenMap.has(key)) childrenMap.set(key, []);
@@ -284,10 +271,9 @@ export async function POST(req: NextRequest) {
     }
 
     // helper: lấy children của một item
-    const getChildren = (parentId: string | null) =>
-      childrenMap.get(parentId) || [];
+    const getChildren = (parentId: string | null) => childrenMap.get(parentId) || [];
 
-    // 6) Clone tree đệ quy: toc_items, toc_contents, toc_assignments
+    // 8) Load contents & assignments 1 lần (chunk+pagination)
     type TocContentRow = {
       toc_item_id: string;
       content_json: any;
@@ -304,10 +290,8 @@ export async function POST(req: NextRequest) {
 
     const sourceItemIds = allItems.map((i) => i.id);
 
-    // cache contents & assignments theo toc_item_id để đỡ query lặp lại
-    // FIX: chunk+pagination instead of single .in(...)
     const allContents = await fetchAllByItemIds<TocContentRow>(
-      supabase,
+      admin,
       "toc_contents",
       "toc_item_id, content_json, status, updated_by, updated_at",
       "toc_item_id",
@@ -315,12 +299,10 @@ export async function POST(req: NextRequest) {
     );
 
     const contentsByItem = new Map<string, TocContentRow>();
-    (allContents || []).forEach((c) => {
-      contentsByItem.set(c.toc_item_id, c as TocContentRow);
-    });
+    (allContents || []).forEach((c) => contentsByItem.set(c.toc_item_id, c));
 
     const allAssignments = await fetchAllByItemIds<TocAssignmentRow>(
-      supabase,
+      admin,
       "toc_assignments",
       "toc_item_id, user_id, role_in_item",
       "toc_item_id",
@@ -329,25 +311,22 @@ export async function POST(req: NextRequest) {
 
     const assignmentsByItem = new Map<string, TocAssignmentRow[]>();
     (allAssignments || []).forEach((a) => {
-      const arr =
-        assignmentsByItem.get((a as any).toc_item_id) || ([] as TocAssignmentRow[]);
-      arr.push(a as TocAssignmentRow);
-      assignmentsByItem.set((a as any).toc_item_id, arr);
+      const arr = assignmentsByItem.get(a.toc_item_id) || [];
+      arr.push(a);
+      assignmentsByItem.set(a.toc_item_id, arr);
     });
 
-    // Hàm đệ quy clone một node và toàn bộ subtree của nó
-    async function cloneItemTree(
-      oldItem: TocItemRow,
-      newParentId: string | null
-    ): Promise<string> {
-      // 6.1 Insert toc_item mới
-      const { data: insertedItemRows, error: insItemErr } = await supabase
+    // 9) Đệ quy clone subtree
+    async function cloneItemTree(oldItem: TocItemRow, newParentId: string | null): Promise<string> {
+      // 9.1 Insert toc_item mới (✅ clone kind)
+      const { data: insertedItemRows, error: insItemErr } = await admin
         .from("toc_items")
         .insert({
           book_version_id: newVersionId,
           parent_id: newParentId,
           title: oldItem.title,
           slug: oldItem.slug,
+          kind: oldItem.kind ?? "chapter",
           order_index: oldItem.order_index,
         })
         .select("id")
@@ -359,27 +338,23 @@ export async function POST(req: NextRequest) {
 
       const newItemId = insertedItemRows[0].id as string;
 
-      // 6.2 Clone nội dung nếu có
+      // 9.2 Clone content nếu có
       const content = contentsByItem.get(oldItem.id);
       if (content) {
-        const { error: insContentErr } = await supabase
-          .from("toc_contents")
-          .insert({
-            toc_item_id: newItemId,
-            content_json: content.content_json,
-            status: content.status,
-            updated_by: content.updated_by,
-            // updated_at để default/trigger, không nhất thiết dùng lại
-          });
+        const { error: insContentErr } = await admin.from("toc_contents").insert({
+          toc_item_id: newItemId,
+          content_json: content.content_json,
+          status: content.status,
+          updated_by: content.updated_by,
+          // updated_at để default
+        });
 
         if (insContentErr) {
-          throw new Error(
-            `Không clone được nội dung cho mục TOC: ${insContentErr.message}`
-          );
+          throw new Error(`Không clone được nội dung cho mục TOC: ${insContentErr.message}`);
         }
       }
 
-      // 6.3 Clone assignments nếu có
+      // 9.3 Clone assignments nếu có
       const assigns = assignmentsByItem.get(oldItem.id) || [];
       if (assigns.length > 0) {
         const rowsToInsert = assigns.map((a) => ({
@@ -388,18 +363,13 @@ export async function POST(req: NextRequest) {
           role_in_item: a.role_in_item,
         }));
 
-        const { error: insAssignErr } = await supabase
-          .from("toc_assignments")
-          .insert(rowsToInsert);
-
+        const { error: insAssignErr } = await admin.from("toc_assignments").insert(rowsToInsert);
         if (insAssignErr) {
-          throw new Error(
-            `Không clone được phân công cho mục TOC: ${insAssignErr.message}`
-          );
+          throw new Error(`Không clone được phân công cho mục TOC: ${insAssignErr.message}`);
         }
       }
 
-      // 6.4 Clone các mục con
+      // 9.4 Clone children
       const children = getChildren(oldItem.id);
       for (const child of children) {
         await cloneItemTree(child, newItemId);
@@ -408,8 +378,11 @@ export async function POST(req: NextRequest) {
       return newItemId;
     }
 
-    // 7) Clone toàn bộ các root items (parent_id = null)
+    // 10) Clone các root items (parent_id = null)
     const rootItems = getChildren(null);
+    // ổn định thứ tự root theo order_index trước khi clone
+    rootItems.sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0));
+
     for (const root of rootItems) {
       await cloneItemTree(root, null);
     }
@@ -422,10 +395,7 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     console.error("books/version/clone error:", e);
     return NextResponse.json(
-      {
-        ok: false,
-        error: e?.message || "Lỗi không xác định khi clone phiên bản sách.",
-      },
+      { ok: false, error: e?.message || "Lỗi không xác định khi clone phiên bản sách." },
       { status: 500 }
     );
   }
