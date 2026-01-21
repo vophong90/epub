@@ -4,6 +4,7 @@ import { getRouteClient } from "@/lib/supabaseServer";
 import { getAdminClient } from "@/lib/supabase-admin";
 
 import puppeteer, { type Browser } from "puppeteer-core";
+import { createRequire } from "module";
 import chromium from "@sparticuz/chromium-min";
 
 import fs from "fs";
@@ -11,10 +12,18 @@ import path from "path";
 
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+
 try {
-  (pdfjsLib as any).GlobalWorkerOptions.workerSrc = "";
+  const workerPath = require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
+  (pdfjsLib as any).GlobalWorkerOptions.workerSrc = `file://${workerPath}`;
+
   (pdfjsLib as any).GlobalWorkerOptions.workerPort = null;
-} catch {}
+} catch (e) {
+  console.error("[render-pdf] set pdfjs workerSrc failed:", e);
+}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
