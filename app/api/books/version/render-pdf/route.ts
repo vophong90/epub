@@ -785,7 +785,10 @@ export async function POST(req: NextRequest) {
     });
 
     const coverPdf = await renderHtmlToPdf(browser, coverHtml);
-    const frontPdf = frontBody ? await renderHtmlToPdf(browser, frontHtml) : Buffer.from(await PDFDocument.create().save());
+    const frontPdf = frontBody
+      ? await renderHtmlToPdf(browser, frontHtml)
+      : Buffer.from(await (await PDFDocument.create()).save());
+
     const contentPdf = await renderHtmlToPdf(browser, contentHtml);
 
     const coverPages = await countPdfPages(coverPdf);
