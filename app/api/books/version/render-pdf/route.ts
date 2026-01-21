@@ -352,7 +352,7 @@ async function renderHtmlToPdf(browser: Browser, html: string, origin: string) {
   }
 
   // small extra delay for layout/fonts
-  await page.waitForTimeout(300);
+  await new Promise((r) => setTimeout(r, 300));
 
   const buf = await page.pdf({
     format: "A4",
