@@ -377,6 +377,7 @@ async function countPdfPages(pdfBuffer: Buffer) {
 async function extractAnchorPagesFromPdf(contentPdf: Buffer) {
   const loadingTask = (pdfjsLib as any).getDocument({
     data: new Uint8Array(contentPdf),
+    disableWorker: true,
   });
   const pdf = await loadingTask.promise;
 
