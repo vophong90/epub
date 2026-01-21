@@ -19,7 +19,6 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@types/node": "^20.17.10",
-    "pagedjs": "^0.4.3",
     "@sparticuz/chromium-min": "^141.0.0",
     "puppeteer-core": "^24.23.1",
     "mammoth": "^1.7.0",
@@ -50,7 +49,9 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "html-to-docx": "^1.8.0",
-    "encoding": "^0.1.13"
+    "encoding": "^0.1.13",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.10.38"
   },
   "devDependencies": {
     "typescript": "^5.5.4",
