@@ -10,14 +10,11 @@ import fs from "fs";
 import path from "path";
 
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
-
 import { createRequire } from "module";
 import { pathToFileURL } from "url";
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 
 const require = createRequire(import.meta.url);
-
-import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 
 try {
   const workerPath = require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
