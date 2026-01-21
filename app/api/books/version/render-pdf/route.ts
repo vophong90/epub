@@ -14,7 +14,6 @@ import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 
 import { createRequire } from "module";
 import { pathToFileURL } from "url";
-import path from "path";
 
 const require = createRequire(import.meta.url);
 
