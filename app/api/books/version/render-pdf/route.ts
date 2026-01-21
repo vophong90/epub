@@ -11,6 +11,10 @@ import path from "path";
 
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+try {
+  (pdfjsLib as any).GlobalWorkerOptions.workerSrc = "";
+  (pdfjsLib as any).GlobalWorkerOptions.workerPort = null;
+} catch {}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -377,28 +381,33 @@ async function countPdfPages(pdfBuffer: Buffer) {
 async function extractAnchorPagesFromPdf(contentPdf: Buffer) {
   const loadingTask = (pdfjsLib as any).getDocument({
     data: new Uint8Array(contentPdf),
-    disableWorker: true,
+    disableWorker: true, // ✅ cực quan trọng
+    useSystemFonts: true,
+    isEvalSupported: false,
   });
+
   const pdf = await loadingTask.promise;
 
-  const map = new Map<string, number>(); // toc_item_id -> pageIndex(0-based in content.pdf)
-
+  const map = new Map<string, number>();
   const re = /__ANCHOR__toc-([0-9a-fA-F-]{36})__/g;
 
-  for (let p = 1; p <= pdf.numPages; p++) {
-    const page = await pdf.getPage(p);
-    const tc = await page.getTextContent();
-    const text = (tc.items || [])
-      .map((it: any) => (typeof it.str === "string" ? it.str : ""))
-      .join(" ");
+  try {
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const page = await pdf.getPage(p);
+      const tc = await page.getTextContent();
+      const text = (tc.items || [])
+        .map((it: any) => (typeof it.str === "string" ? it.str : ""))
+        .join(" ");
 
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) {
-      const tocId = m[1].toLowerCase();
-      if (!map.has(tocId)) {
-        map.set(tocId, p - 1);
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(text)) !== null) {
+        const tocId = m[1].toLowerCase();
+        if (!map.has(tocId)) map.set(tocId, p - 1);
       }
     }
+  } finally {
+    // ✅ cleanup
+    await pdf.destroy?.();
   }
 
   return map;
