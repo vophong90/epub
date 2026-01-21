@@ -2,10 +2,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRouteClient } from "@/lib/supabaseServer";
 import { getAdminClient } from "@/lib/supabase-admin";
-import puppeteer, { type Browser } from "puppeteer-core";
 
+import puppeteer, { type Browser } from "puppeteer-core";
 import chromium from "@sparticuz/chromium-min";
-import puppeteer from "puppeteer-core";
 
 import fs from "fs";
 import path from "path";
