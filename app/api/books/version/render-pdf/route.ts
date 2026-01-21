@@ -11,14 +11,22 @@ import path from "path";
 
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+
 import { createRequire } from "module";
+import { pathToFileURL } from "url";
+import path from "path";
 
 const require = createRequire(import.meta.url);
 
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+
 try {
   const workerPath = require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
-  (pdfjsLib as any).GlobalWorkerOptions.workerSrc = `file://${workerPath}`;
+  const absWorkerPath = path.isAbsolute(workerPath)
+    ? workerPath
+    : path.resolve(process.cwd(), workerPath);
 
+  (pdfjsLib as any).GlobalWorkerOptions.workerSrc = pathToFileURL(absWorkerPath).toString();
   (pdfjsLib as any).GlobalWorkerOptions.workerPort = null;
 } catch (e) {
   console.error("[render-pdf] set pdfjs workerSrc failed:", e);
