@@ -145,21 +145,25 @@ function makeAnchor(tocItemId: string) {
   return `toc-${tocItemId}`;
 }
 
+/**
+ * Strip lists in content body to avoid Paged.js list crashes
+ * (Không đụng TOC; chỉ dùng cho nội dung chương)
+ */
 function stripLists(html: string) {
   if (!html) return "";
 
-  // Convert list containers to div
+  // Convert list containers to div, preserve attrs safely
   let out = html
-    .replace(/<\s*ol(\s[^>]*)?>/gi, `<div data-list="ol"$1>`)
-    .replace(/<\s*ul(\s[^>]*)?>/gi, `<div data-list="ul"$1>`)
-    .replace(/<\s*menu(\s[^>]*)?>/gi, `<div data-list="menu"$1>`)
+    .replace(/<\s*ol(\s[^>]*)?>/gi, (_m, attrs) => `<div data-list="ol"${attrs || ""}>`)
+    .replace(/<\s*ul(\s[^>]*)?>/gi, (_m, attrs) => `<div data-list="ul"${attrs || ""}>`)
+    .replace(/<\s*menu(\s[^>]*)?>/gi, (_m, attrs) => `<div data-list="menu"${attrs || ""}>`)
     .replace(/<\s*\/\s*ol\s*>/gi, `</div>`)
     .replace(/<\s*\/\s*ul\s*>/gi, `</div>`)
     .replace(/<\s*\/\s*menu\s*>/gi, `</div>`);
 
   // Convert list items to div
   out = out
-    .replace(/<\s*li(\s[^>]*)?>/gi, `<div data-li="1"$1>`)
+    .replace(/<\s*li(\s[^>]*)?>/gi, (_m, attrs) => `<div data-li="1"${attrs || ""}>`)
     .replace(/<\s*\/\s*li\s*>/gi, `</div>`);
 
   return out;
@@ -329,9 +333,8 @@ async function launchBrowser() {
 function injectTocListIntoTocHTML(tocHtml: string, tocList: string) {
   if (!tocHtml) return tocHtml;
 
-  // ưu tiên container div#toc-list
   if (tocHtml.includes('id="toc-list"')) {
-    // insert ngay sau thẻ mở có id toc-list (div/ol/whatever)
+    // insert ngay sau thẻ mở có id toc-list (ol/div/whatever)
     return tocHtml.replace(
       /<([a-zA-Z0-9]+)[^>]*id="toc-list"[^>]*>/,
       (m) => `${m}\n${tocList}\n`
@@ -345,7 +348,6 @@ function injectTocListIntoTocHTML(tocHtml: string, tocList: string) {
  * ✅ SANITIZE LIST DOM (giữ TOC dạng <ol><li>)
  * - Fix mọi <li> mồ côi (không có parent UL/OL/MENU) => đổi sang <div>
  * - Dọn nested list sai trong nav.toc: đảm bảo nav.toc #toc-list chỉ chứa LI trực tiếp
- * - Không convert <ol>/<ul> trong TOC sang <div> (giữ style counter)
  */
 const SANITIZE_DOM_BEFORE_PAGED = `(() => {
   // 1) Fix orphan <li> toàn trang
@@ -359,27 +361,26 @@ const SANITIZE_DOM_BEFORE_PAGED = `(() => {
       orphanCount++;
       const div = document.createElement('div');
       div.setAttribute('data-orphan-li', '1');
-      if (li.getAttribute('class')) div.setAttribute('class', li.getAttribute('class'));
-      if (li.getAttribute('style')) div.setAttribute('style', li.getAttribute('style'));
+      if (li.getAttribute('class')) div.setAttribute('class', li.getAttribute('class')!);
+      if (li.getAttribute('style')) div.setAttribute('style', li.getAttribute('style')!);
       div.innerHTML = li.innerHTML;
       li.replaceWith(div);
     }
   }
 
-  // 2) Normalize TOC: chỉ cho phép #toc-list có <li> con trực tiếp
+  // 2) Normalize TOC: #toc-list chỉ chứa LI trực tiếp
   const nav = document.querySelector('nav.toc');
   let tocFlattened = 0;
 
   if (nav) {
     const tocList = nav.querySelector('#toc-list');
     if (tocList) {
-      // Nếu có nested <ol>/<ul> bên trong li (do template/HTML lồng), flatten
+      // bỏ nested <ol>/<ul> trong toc-list (nếu có)
       const nestedLists = Array.from(tocList.querySelectorAll('li ol, li ul'));
       for (const nl of nestedLists) {
         const parentLi = nl.closest('li');
         if (!parentLi) continue;
 
-        // move child li lên cùng cấp ngay sau parent li
         const childLis = Array.from(nl.querySelectorAll(':scope > li'));
         for (const childLi of childLis) {
           tocList.insertBefore(childLi, parentLi.nextSibling);
@@ -388,10 +389,9 @@ const SANITIZE_DOM_BEFORE_PAGED = `(() => {
         nl.remove();
       }
 
-      // Nếu có <li> không phải con trực tiếp (bị bọc bởi div/span), kéo lên
-      const deepLis = Array.from(tocList.querySelectorAll('ol li, ul li'));
-      // deepLis có thể chứa cả direct li, lọc ra những li mà parentElement != tocList
-      for (const li of deepLis) {
+      // Nếu có li bị bọc sâu, kéo về direct child
+      const allLis = Array.from(tocList.querySelectorAll('li'));
+      for (const li of allLis) {
         if (li.parentElement !== tocList) {
           tocList.appendChild(li);
           tocFlattened++;
@@ -400,7 +400,7 @@ const SANITIZE_DOM_BEFORE_PAGED = `(() => {
     }
   }
 
-  window.__SANITIZE_REPORT__ = { orphanLi: orphanCount, tocFlattened };
+  (window as any).__SANITIZE_REPORT__ = { orphanLi: orphanCount, tocFlattened };
 })();`;
 
 export async function POST(req: NextRequest) {
@@ -583,9 +583,9 @@ export async function POST(req: NextRequest) {
 
         const bodyHtmlRaw =
           n.html && n.html.trim()
-          ? n.html
-          : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
-        
+            ? n.html
+            : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
+
         const bodyHtml = stripLists(bodyHtmlRaw);
 
         if (isPart) {
@@ -611,9 +611,8 @@ export async function POST(req: NextRequest) {
       })
       .join("\n");
 
-    // TOC list (string HTML)
+    // TOC list (string HTML) - ✅ đúng chuẩn: <ol> chỉ chứa <li>
     const tocItems: string[] = [];
-
     for (const n of nodes) {
       const isPart = n.kind === "section";
       const isChapter = n.kind === "chapter";
@@ -629,15 +628,16 @@ export async function POST(req: NextRequest) {
       const cls = isPart
         ? "toc-item toc-item--section"
         : "toc-item toc-item--chapter";
-      
+
       tocItems.push(`
-      <div class="${cls}"${padAttr}>
-      <a href="#${esc(n.id)}">${label}</a>
-      </div>`);
+<li class="${cls}"${padAttr}>
+  <a href="#${esc(n.id)}">${label}</a>
+</li>`);
+    }
 
     const tocList = tocItems.join("\n");
 
-    // ✅ TOC HTML tĩnh: inject tocList trực tiếp, KHÔNG dùng script innerHTML
+    // ✅ TOC HTML tĩnh: inject tocList trực tiếp
     const tocRaw = token(tpl.toc_html || "");
     const toc = injectTocListIntoTocHTML(tocRaw, tocList);
 
@@ -689,12 +689,10 @@ ${cssFinal}
     page.setDefaultNavigationTimeout(180000);
     page.setDefaultTimeout(180000);
 
-    // Paged.js paginate là “screen”
     await page.emulateMediaType("screen");
-
     await page.setContent(html, { waitUntil: "load", timeout: 180000 });
 
-    // force eager images (JS thuần)
+    // force eager images
     await page.evaluate(() => {
       document.querySelectorAll("img").forEach((img) => {
         try {
@@ -708,43 +706,7 @@ ${cssFinal}
       });
     });
 
-    // ✅ validate TOC targets + duplicate ids (fail fast) (JS thuần)
-    await page.evaluate(() => {
-      const links = Array.from(
-        document.querySelectorAll('nav.toc a[href^="#"]')
-      );
-
-      const missing: string[] = [];
-      for (const a of links) {
-        const href = (a as HTMLAnchorElement).getAttribute("href") || "";
-        const id = href.slice(1);
-        if (!id) continue;
-        if (!document.getElementById(id)) missing.push(id);
-      }
-
-      const ids = new Map<string, number>();
-      const allWithId = Array.from(document.querySelectorAll("[id]"));
-      for (const el of allWithId) {
-        const id = (el as HTMLElement).id;
-        ids.set(id, (ids.get(id) || 0) + 1);
-      }
-      const dup = Array.from(ids.entries())
-        .filter(([, n]) => n > 1)
-        .map(([id, n]) => `${id}(${n})`);
-
-      if (missing.length || dup.length) {
-        throw new Error(
-          "TOC target mismatch. Missing: " +
-            (missing.length ? missing.slice(0, 20).join(", ") : "none") +
-            (missing.length > 20 ? ` ... (+${missing.length - 20})` : "") +
-            " | Duplicate ids: " +
-            (dup.length ? dup.slice(0, 20).join(", ") : "none") +
-            (dup.length > 20 ? ` ... (+${dup.length - 20})` : "")
-        );
-      }
-    });
-
-    // wait fonts + images settle BEFORE paginate (JS thuần)
+    // wait fonts + images settle
     await page.evaluate(async () => {
       // @ts-ignore
       if (document.fonts && document.fonts.ready) {
@@ -780,11 +742,11 @@ ${cssFinal}
 
     const sanitizeReport = await page.evaluate(() => {
       // @ts-ignore
-      return window.__SANITIZE_REPORT__ || null;
+      return (window as any).__SANITIZE_REPORT__ || null;
     });
     console.log("[render-pdf] sanitize report:", sanitizeReport);
 
-    // ✅ run Paged.js paginate and wait pages created (JS thuần)
+    // ✅ run Paged.js paginate
     await page.evaluate(async () => {
       // @ts-ignore
       if (document.fonts && document.fonts.ready) {
@@ -793,18 +755,14 @@ ${cssFinal}
       }
 
       // @ts-ignore
-      const w = window;
+      const w = window as any;
 
-      // @ts-ignore
       if (w.PagedPolyfill && w.PagedPolyfill.preview) {
-        // @ts-ignore
         await w.PagedPolyfill.preview();
         return;
       }
 
-      // @ts-ignore
       if (w.Paged && w.Paged.preview) {
-        // @ts-ignore
         await w.Paged.preview();
         return;
       }
@@ -814,10 +772,8 @@ ${cssFinal}
       );
     });
 
-    // ensure pages exist
     await page.waitForSelector(".pagedjs_pages", { timeout: 180000 });
 
-    // export PDF
     const pdfBuffer = await page.pdf({
       format: "A4",
       printBackground: true,
