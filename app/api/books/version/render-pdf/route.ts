@@ -201,9 +201,11 @@ async function buildNodesFromDB(
       const cj = c?.content_json || {};
       const html = typeof cj?.html === "string" ? cj.html : "";
 
-      const kind =
-        it.kind === "section" || it.kind === "chapter" || it.kind === "heading"
-          ? it.kind
+      const kind: "section" | "chapter" | "heading" =
+        it.kind === "section"
+          ? "section"
+          : it.kind === "chapter"
+          ? "chapter"
           : depth === 1
           ? "chapter"
           : "heading";
