@@ -322,14 +322,16 @@ function injectTocListIntoTocHTML(tocHtml: string, tocList: string) {
 }
 
 /**
- * ✅ SUPER IMPORTANT: sanitize DOM trước Paged preview (JS thuần)
- * - Fix orphan <li> (li không nằm trong ul/ol/menu) => đổi thành <div>
- * - Convert list trong nav.toc (ol/ul/li) => div để Paged không xử list TOC nữa
+ * ✅ SANITIZE LIST DOM (giữ TOC dạng <ol><li>)
+ * - Fix mọi <li> mồ côi (không có parent UL/OL/MENU) => đổi sang <div>
+ * - Dọn nested list sai trong nav.toc: đảm bảo nav.toc #toc-list chỉ chứa LI trực tiếp
+ * - Không convert <ol>/<ul> trong TOC sang <div> (giữ style counter)
  */
 const SANITIZE_DOM_BEFORE_PAGED = `(() => {
-  // 1) Fix orphan <li>
+  // 1) Fix orphan <li> toàn trang
   const lis = Array.from(document.querySelectorAll('li'));
   let orphanCount = 0;
+
   for (const li of lis) {
     const p = li.parentElement;
     const ok = p && (p.tagName === 'UL' || p.tagName === 'OL' || p.tagName === 'MENU');
@@ -344,47 +346,41 @@ const SANITIZE_DOM_BEFORE_PAGED = `(() => {
     }
   }
 
-  // 2) Convert TOC lists to divs (stability)
-  const tocNav = document.querySelector('nav.toc');
-  let tocListConverted = 0;
-  if (tocNav) {
-    const listNodes = Array.from(tocNav.querySelectorAll('ol,ul'));
-    for (const ln of listNodes) {
-      const div = document.createElement('div');
-      div.setAttribute('data-toc-list', '1');
-      if (ln.id) div.id = ln.id;
-      if (ln.getAttribute('class')) div.setAttribute('class', ln.getAttribute('class'));
+  // 2) Normalize TOC: chỉ cho phép #toc-list có <li> con trực tiếp
+  const nav = document.querySelector('nav.toc');
+  let tocFlattened = 0;
 
-      const children = Array.from(ln.children);
-      for (const ch of children) {
-        if (ch.tagName === 'LI') {
-          const row = document.createElement('div');
-          row.setAttribute('data-toc-row', '1');
-          if (ch.getAttribute('class')) row.setAttribute('class', ch.getAttribute('class'));
-          if (ch.getAttribute('style')) row.setAttribute('style', ch.getAttribute('style'));
-          row.innerHTML = ch.innerHTML;
-          div.appendChild(row);
-        } else {
-          div.appendChild(ch.cloneNode(true));
+  if (nav) {
+    const tocList = nav.querySelector('#toc-list');
+    if (tocList) {
+      // Nếu có nested <ol>/<ul> bên trong li (do template/HTML lồng), flatten
+      const nestedLists = Array.from(tocList.querySelectorAll('li ol, li ul'));
+      for (const nl of nestedLists) {
+        const parentLi = nl.closest('li');
+        if (!parentLi) continue;
+
+        // move child li lên cùng cấp ngay sau parent li
+        const childLis = Array.from(nl.querySelectorAll(':scope > li'));
+        for (const childLi of childLis) {
+          tocList.insertBefore(childLi, parentLi.nextSibling);
+          tocFlattened++;
         }
+        nl.remove();
       }
 
-      ln.replaceWith(div);
-      tocListConverted++;
-    }
-
-    const tocLis = Array.from(tocNav.querySelectorAll('li'));
-    for (const li of tocLis) {
-      const div = document.createElement('div');
-      div.setAttribute('data-toc-li', '1');
-      if (li.getAttribute('class')) div.setAttribute('class', li.getAttribute('class'));
-      if (li.getAttribute('style')) div.setAttribute('style', li.getAttribute('style'));
-      div.innerHTML = li.innerHTML;
-      li.replaceWith(div);
+      // Nếu có <li> không phải con trực tiếp (bị bọc bởi div/span), kéo lên
+      const deepLis = Array.from(tocList.querySelectorAll('ol li, ul li'));
+      // deepLis có thể chứa cả direct li, lọc ra những li mà parentElement != tocList
+      for (const li of deepLis) {
+        if (li.parentElement !== tocList) {
+          tocList.appendChild(li);
+          tocFlattened++;
+        }
+      }
     }
   }
 
-  window.__SANITIZE_REPORT__ = { orphanLi: orphanCount, tocListConverted };
+  window.__SANITIZE_REPORT__ = { orphanLi: orphanCount, tocFlattened };
 })();`;
 
 export async function POST(req: NextRequest) {
