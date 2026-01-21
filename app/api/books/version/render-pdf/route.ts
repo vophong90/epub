@@ -145,6 +145,26 @@ function makeAnchor(tocItemId: string) {
   return `toc-${tocItemId}`;
 }
 
+function stripLists(html: string) {
+  if (!html) return "";
+
+  // Convert list containers to div
+  let out = html
+    .replace(/<\s*ol(\s[^>]*)?>/gi, `<div data-list="ol"$1>`)
+    .replace(/<\s*ul(\s[^>]*)?>/gi, `<div data-list="ul"$1>`)
+    .replace(/<\s*menu(\s[^>]*)?>/gi, `<div data-list="menu"$1>`)
+    .replace(/<\s*\/\s*ol\s*>/gi, `</div>`)
+    .replace(/<\s*\/\s*ul\s*>/gi, `</div>`)
+    .replace(/<\s*\/\s*menu\s*>/gi, `</div>`);
+
+  // Convert list items to div
+  out = out
+    .replace(/<\s*li(\s[^>]*)?>/gi, `<div data-li="1"$1>`)
+    .replace(/<\s*\/\s*li\s*>/gi, `</div>`);
+
+  return out;
+}
+
 /* =========================
  * Pagination helpers (Supabase range paging)
  * ========================= */
@@ -307,17 +327,17 @@ async function launchBrowser() {
 }
 
 function injectTocListIntoTocHTML(tocHtml: string, tocList: string) {
-  // ✅ không dùng script sửa DOM nữa (tránh Paged “item doesn't belong to list”)
   if (!tocHtml) return tocHtml;
 
+  // ưu tiên container div#toc-list
   if (tocHtml.includes('id="toc-list"')) {
+    // insert ngay sau thẻ mở có id toc-list (div/ol/whatever)
     return tocHtml.replace(
-      /<ol[^>]*id="toc-list"[^>]*>/,
+      /<([a-zA-Z0-9]+)[^>]*id="toc-list"[^>]*>/,
       (m) => `${m}\n${tocList}\n`
     );
   }
 
-  // fallback: nếu template không có toc-list thì trả nguyên
   return tocHtml;
 }
 
@@ -561,10 +581,12 @@ export async function POST(req: NextRequest) {
             ? "h2"
             : "h3";
 
-        const bodyHtml =
+        const bodyHtmlRaw =
           n.html && n.html.trim()
-            ? n.html
-            : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
+          ? n.html
+          : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
+        
+        const bodyHtml = stripLists(bodyHtmlRaw);
 
         if (isPart) {
           return `
@@ -607,12 +629,11 @@ export async function POST(req: NextRequest) {
       const cls = isPart
         ? "toc-item toc-item--section"
         : "toc-item toc-item--chapter";
-
+      
       tocItems.push(`
-<li class="${cls}"${padAttr}>
-  <a href="#${esc(n.id)}">${label}</a>
-</li>`);
-    }
+      <div class="${cls}"${padAttr}>
+      <a href="#${esc(n.id)}">${label}</a>
+      </div>`);
 
     const tocList = tocItems.join("\n");
 
