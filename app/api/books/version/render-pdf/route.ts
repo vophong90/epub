@@ -10,8 +10,9 @@ import fs from "fs";
 import path from "path";
 
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { pathToFileURL } from "url";
-import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+
+// ✅ IMPORTANT: use legacy/build/pdf (NOT pdf.mjs) for server runtime stability
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -119,6 +120,22 @@ type TemplateRow = {
 
 function makeAnchor(tocItemId: string) {
   return `toc-${tocItemId}`;
+}
+
+/* =========================
+ * ✅ pdf.js worker setup (serverless-safe)
+ * ========================= */
+try {
+  // Even with disableWorker:true, pdf.js may create a "fake worker" that still
+  // needs a valid workerSrc. Point it to the packaged min worker module.
+  (pdfjsLib as any).GlobalWorkerOptions.workerSrc = new URL(
+    "pdfjs-dist/build/pdf.worker.min.mjs",
+    import.meta.url
+  ).toString();
+  (pdfjsLib as any).GlobalWorkerOptions.workerPort = null;
+  console.log("[render-pdf] pdfjs workerSrc set OK");
+} catch (e) {
+  console.error("[render-pdf] pdfjs workerSrc set FAILED:", e);
 }
 
 /* =========================
@@ -293,7 +310,6 @@ function absolutizeFontUrls(css: string, origin: string) {
 
 /**
  * Render a full HTML document to PDF buffer
- * Fix timeout: avoid networkidle0 + block external requests that can hang.
  */
 async function renderHtmlToPdf(browser: Browser, html: string, origin: string) {
   const page = await browser.newPage();
@@ -301,10 +317,8 @@ async function renderHtmlToPdf(browser: Browser, html: string, origin: string) {
   page.setDefaultNavigationTimeout(180000);
   page.setDefaultTimeout(180000);
 
-  // print css
   await page.emulateMediaType("print");
 
-  // Block external requests that may hang (remote fonts, analytics, etc.)
   const originHost = (() => {
     try {
       return new URL(origin).host;
@@ -317,42 +331,31 @@ async function renderHtmlToPdf(browser: Browser, html: string, origin: string) {
   page.on("request", (req) => {
     const url = req.url();
 
-    // Always allow data/blob
     if (url.startsWith("data:") || url.startsWith("blob:")) return req.continue();
 
-    // Allow same-origin http(s)
     if (url.startsWith("http://") || url.startsWith("https://")) {
       try {
         const u = new URL(url);
         if (originHost && u.host === originHost) return req.continue();
-        // block all cross-origin to avoid "networkidle0 never happens"
         return req.abort();
       } catch {
         return req.abort();
       }
     }
 
-    // Allow everything else (about:, file:, etc.)
     return req.continue();
   });
 
-  // Load html: DO NOT use networkidle0 (easy to hang)
   await page.setContent(html, {
     waitUntil: ["domcontentloaded", "load"],
     timeout: 180000,
   });
 
-  // Soft settle: wait for network to go idle-ish, but don't fail if it doesn't
   try {
-    // available in puppeteer >= 13
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
     await page.waitForNetworkIdle({ idleTime: 800, timeout: 25000 });
-  } catch {
-    // ignore
-  }
+  } catch {}
 
-  // small extra delay for layout/fonts
   await new Promise((r) => setTimeout(r, 300));
 
   const buf = await page.pdf({
@@ -376,26 +379,11 @@ async function countPdfPages(pdfBuffer: Buffer) {
  *   __ANCHOR__toc-<uuid>__
  */
 async function extractAnchorPagesFromPdf(contentPdf: Buffer) {
-  // ✅ tuyệt đối không set workerSrc
-  try {
-    (pdfjsLib as any).GlobalWorkerOptions.workerSrc = undefined;
-    (pdfjsLib as any).GlobalWorkerOptions.workerPort = null;
-  } catch {}
-
   const loadingTask = (pdfjsLib as any).getDocument({
     data: new Uint8Array(contentPdf),
-
-    // ✅ chạy same-thread, không worker
-    disableWorker: true,
-
-    // ✅ giảm các thứ hay gây lỗi serverless
-    isEvalSupported: false,
+    disableWorker: true, // ✅ chạy same-thread như bạn muốn
     useSystemFonts: true,
-    disableFontFace: true,
-
-    // ✅ tránh cố load CMap/standard fonts (tùy môi trường)
-    cMapPacked: true,
-    standardFontDataUrl: undefined,
+    isEvalSupported: false,
   });
 
   const pdf = await loadingTask.promise;
@@ -496,7 +484,6 @@ function buildContentBody(nodes: RenderNode[]) {
       continue;
     }
 
-    // Insert marker only for CHAPTER nodes
     const marker = isChapter
       ? `<div class="__pdf_anchor">__ANCHOR__${esc(n.id)}__</div>`
       : "";
@@ -597,7 +584,6 @@ async function stampFinalPdf(params: {
     const page = pages[i];
     const { width, height } = page.getSize();
 
-    // No stamping on cover pages
     if (i < coverPages) continue;
 
     const headerY = height - 28;
@@ -705,10 +691,7 @@ export async function POST(req: NextRequest) {
 
   const versionId = (body.version_id || "").toString().trim();
   if (!versionId) {
-    return NextResponse.json(
-      { error: "version_id là bắt buộc" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "version_id là bắt buộc" }, { status: 400 });
   }
 
   const { data: version, error: vErr } = await admin
@@ -718,8 +701,7 @@ export async function POST(req: NextRequest) {
     .maybeSingle<VersionRow>();
 
   if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 });
-  if (!version)
-    return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
+  if (!version) return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
 
   let templateId = (body.template_id || "").toString().trim();
   if (!templateId) templateId = version.template_id || "";
@@ -751,16 +733,12 @@ export async function POST(req: NextRequest) {
       .in("role", ["author", "editor"])
       .maybeSingle();
 
-    if (permErr)
-      return NextResponse.json({ error: permErr.message }, { status: 500 });
+    if (permErr) return NextResponse.json({ error: permErr.message }, { status: 500 });
     canRender = !!perm;
   }
 
   if (!canRender) {
-    return NextResponse.json(
-      { error: "Bạn không có quyền render PDF" },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: "Bạn không có quyền render PDF" }, { status: 403 });
   }
 
   const { data: book, error: bErr } = await admin
@@ -774,16 +752,13 @@ export async function POST(req: NextRequest) {
 
   const { data: tpl, error: tErr } = await admin
     .from("book_templates")
-    .select(
-      "id,name,css,cover_html,front_matter_html,toc_html,header_html,footer_html,page_size,page_margin_mm,toc_depth"
-    )
+    .select("id,name,css,cover_html,front_matter_html,toc_html,header_html,footer_html,page_size,page_margin_mm,toc_depth")
     .eq("id", templateId)
     .eq("is_active", true)
     .maybeSingle<TemplateRow>();
 
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
-  if (!tpl)
-    return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
+  if (!tpl) return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
 
   const tocDepth = Number.isFinite(Number(tpl.toc_depth))
     ? Math.min(6, Math.max(1, Number(tpl.toc_depth)))
@@ -869,7 +844,6 @@ export async function POST(req: NextRequest) {
       bodyHtml: `<main id="book-content">${contentBody}</main>`,
     });
 
-    // ✅ pass origin into renderHtmlToPdf()
     const coverPdf = await renderHtmlToPdf(browser, coverHtml, origin);
     const frontPdf = frontBody
       ? await renderHtmlToPdf(browser, frontHtml, origin)
@@ -908,8 +882,7 @@ export async function POST(req: NextRequest) {
               const nn = nodes[j];
               if (nn.kind === "section") break;
               if (nn.kind === "chapter") {
-                contentPageIndex =
-                  anchorMap.get(nn.toc_item_id.toLowerCase()) ?? null;
+                contentPageIndex = anchorMap.get(nn.toc_item_id.toLowerCase()) ?? null;
                 break;
               }
             }
@@ -917,7 +890,6 @@ export async function POST(req: NextRequest) {
         }
 
         const contentIdx = contentPageIndex ?? 0;
-
         const finalPageIndex0 = baseOffsetFinal + contentIdx;
         const displayPageNo = finalPageIndex0 - coverPages + 1;
 
@@ -989,11 +961,7 @@ export async function POST(req: NextRequest) {
       const from = cur.start0;
       const to = next ? Math.max(from, next.start0 - 1) : totalPages - 1;
 
-      chapterRanges.push({
-        from,
-        to,
-        title: cur.title,
-      });
+      chapterRanges.push({ from, to, title: cur.title });
     }
 
     const finalPdf = await stampFinalPdf({
