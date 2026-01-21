@@ -505,7 +505,7 @@ async function stampFinalPdf(params: {
 
   const doc = await PDFDocument.load(mergedPdf);
   const font = await doc.embedFont(StandardFonts.TimesRoman);
-  const fontBold = await doc.embedFont(StandardFonts.TimesBold);
+  const fontBold = await doc.embedFont(StandardFonts.TimesRomanBold);
 
   const pages = doc.getPages();
 
