@@ -255,7 +255,7 @@ function buildTocHtml(nodes: RenderNode[], tocDepth: number) {
 
   return `
 <section class="toc2" id="__toc">
-  <h1 class="toc2-title">Mục lục</h1>
+  <h1 class="toc2-title">MỤC LỤC</h1>
   <ol class="toc2-list">
     ${rows}
   </ol>
