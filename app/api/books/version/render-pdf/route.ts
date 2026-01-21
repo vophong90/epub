@@ -66,7 +66,6 @@ function loadCJKFontBase64() {
 }
 
 function loadPagedJSInline() {
-  // Bạn đang dùng public/paged.polyfill.js (tự copy vào public)
   const p = path.join(process.cwd(), "public", "paged.polyfill.js");
   try {
     if (fs.existsSync(p)) return fs.readFileSync(p, "utf8");
@@ -78,7 +77,7 @@ function loadPagedJSInline() {
 
 /**
  * ✅ QUAN TRỌNG:
- * - KHÔNG inject thêm CSS cho nav.toc ở đây nữa (vì template CSS đã có).
+ * - Không inject thêm CSS cho nav.toc ở đây nữa (template CSS tự lo).
  * - Chỉ inject rule tắt column-count sau khi paged render.
  */
 function injectPagedCSS(css: string) {
@@ -299,7 +298,7 @@ async function launchBrowser() {
 }
 
 function injectTocListIntoTocHTML(tocHtml: string, tocList: string) {
-  // ✅ không dùng script sửa DOM nữa (tránh Paged “item doesn't belong to list”)
+  // ✅ không dùng script sửa DOM nữa
   if (!tocHtml) return tocHtml;
 
   if (tocHtml.includes('id="toc-list"')) {
@@ -309,9 +308,75 @@ function injectTocListIntoTocHTML(tocHtml: string, tocList: string) {
     );
   }
 
-  // fallback: nếu template không có toc-list thì trả nguyên
   return tocHtml;
 }
+
+/**
+ * ✅ SUPER IMPORTANT: sanitize DOM trước Paged preview
+ * - Fix <li> orphan (li không nằm trong ul/ol/menu) => đổi thành <div>
+ * - (Optional nhưng cực ổn định) đổi list trong nav.toc => div để Paged không xử list TOC
+ */
+const SANITIZE_DOM_BEFORE_PAGED = `(() => {
+  // 1) Fix orphan <li>
+  const lis = Array.from(document.querySelectorAll('li'));
+  let orphanCount = 0;
+  for (const li of lis) {
+    const p = li.parentElement;
+    const ok = p && (p.tagName === 'UL' || p.tagName === 'OL' || p.tagName === 'MENU');
+    if (!ok) {
+      orphanCount++;
+      const div = document.createElement('div');
+      div.setAttribute('data-orphan-li', '1');
+      // giữ class/style nếu có
+      if (li.getAttribute('class')) div.setAttribute('class', li.getAttribute('class')!);
+      if (li.getAttribute('style')) div.setAttribute('style', li.getAttribute('style')!);
+      div.innerHTML = li.innerHTML;
+      li.replaceWith(div);
+    }
+  }
+
+  // 2) Convert TOC lists to divs (stability)
+  const tocNav = document.querySelector('nav.toc');
+  let tocListConverted = 0;
+  if (tocNav) {
+    const listNodes = Array.from(tocNav.querySelectorAll('ol,ul'));
+    for (const ln of listNodes) {
+      const div = document.createElement('div');
+      div.setAttribute('data-toc-list', '1');
+      if ((ln as HTMLElement).id) div.id = (ln as HTMLElement).id;
+      if ((ln as HTMLElement).getAttribute('class')) div.setAttribute('class', (ln as HTMLElement).getAttribute('class')!);
+      // chuyển con trực tiếp: li => div.row
+      const children = Array.from(ln.children);
+      for (const ch of children) {
+        if ((ch as HTMLElement).tagName === 'LI') {
+          const row = document.createElement('div');
+          row.setAttribute('data-toc-row', '1');
+          if ((ch as HTMLElement).getAttribute('class')) row.setAttribute('class', (ch as HTMLElement).getAttribute('class')!);
+          if ((ch as HTMLElement).getAttribute('style')) row.setAttribute('style', (ch as HTMLElement).getAttribute('style')!);
+          row.innerHTML = (ch as HTMLElement).innerHTML;
+          div.appendChild(row);
+        } else {
+          div.appendChild(ch.cloneNode(true));
+        }
+      }
+      ln.replaceWith(div);
+      tocListConverted++;
+    }
+    // nếu còn li trong nav.toc (lồng sâu), đổi nốt
+    const tocLis = Array.from(tocNav.querySelectorAll('li'));
+    for (const li of tocLis) {
+      const div = document.createElement('div');
+      div.setAttribute('data-toc-li', '1');
+      if ((li as HTMLElement).getAttribute('class')) div.setAttribute('class', (li as HTMLElement).getAttribute('class')!);
+      if ((li as HTMLElement).getAttribute('style')) div.setAttribute('style', (li as HTMLElement).getAttribute('style')!);
+      div.innerHTML = (li as HTMLElement).innerHTML;
+      li.replaceWith(div);
+    }
+  }
+
+  // log for debugging
+  (window as any).__SANITIZE_REPORT__ = { orphanLi: orphanCount, tocListConverted };
+})();`;
 
 export async function POST(req: NextRequest) {
   const supabase = getRouteClient();
@@ -432,11 +497,10 @@ export async function POST(req: NextRequest) {
   try {
     const origin = getSiteOrigin(req);
 
-    // load Paged.js inline
     const pagedInline = loadPagedJSInline();
     if (!pagedInline) {
       throw new Error(
-        "Paged.js not found. Ensure /public/paged.polyfill.js exists (or install pagedjs and bundle it)."
+        "Paged.js not found. Ensure /public/paged.polyfill.js exists."
       );
     }
 
@@ -455,7 +519,6 @@ export async function POST(req: NextRequest) {
     const header = token(tpl.header_html || "");
     const footer = token(tpl.footer_html || "");
 
-    // css: absolute fonts + inject only safe paged rules
     const cssAbs = (tpl.css || "")
       .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
       .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
@@ -463,7 +526,6 @@ export async function POST(req: NextRequest) {
 
     const cssFinal = injectPagedCSS(cssAbs);
 
-    // inline CJK font (fallback)
     const cjkBase64 = loadCJKFontBase64();
     const inlineFontCSS = cjkBase64
       ? `
@@ -476,7 +538,6 @@ export async function POST(req: NextRequest) {
 `
       : "";
 
-    // main content
     const main = nodes
       .map((n) => {
         const isPart = n.kind === "section";
@@ -519,11 +580,8 @@ export async function POST(req: NextRequest) {
       })
       .join("\n");
 
-    // TOC list (string HTML)
+    // TOC list
     const tocItems: string[] = [];
-    let partNo = 0;
-    let chapterNo = 0;
-
     for (const n of nodes) {
       const isPart = n.kind === "section";
       const isChapter = n.kind === "chapter";
@@ -532,13 +590,9 @@ export async function POST(req: NextRequest) {
       if (level > tocDepth) continue;
       if (!isPart && !isChapter) continue;
 
-      if (isPart) partNo += 1;
-      if (isChapter) chapterNo += 1;
-
       const pad = level === 2 ? 14 : 0;
       const padAttr = pad ? ` style="padding-left:${pad}px"` : "";
       const label = esc(n.title);
-
       const cls = isPart ? "toc-item toc-item--section" : "toc-item toc-item--chapter";
 
       tocItems.push(`
@@ -549,7 +603,6 @@ export async function POST(req: NextRequest) {
 
     const tocList = tocItems.join("\n");
 
-    // ✅ TOC HTML tĩnh: inject tocList trực tiếp, KHÔNG dùng script innerHTML
     const tocRaw = token(tpl.toc_html || "");
     const toc = injectTocListIntoTocHTML(tocRaw, tocList);
 
@@ -597,9 +650,7 @@ ${cssFinal}
     page.setDefaultNavigationTimeout(180000);
     page.setDefaultTimeout(180000);
 
-    // Paged.js paginate là “screen”
     await page.emulateMediaType("screen");
-
     await page.setContent(html, { waitUntil: "load", timeout: 180000 });
 
     // force eager images
@@ -672,6 +723,11 @@ ${cssFinal}
       );
     });
 
+    // ✅ sanitize DOM to avoid Paged list crash
+    await page.evaluate(SANITIZE_DOM_BEFORE_PAGED);
+    const sanitizeReport = await page.evaluate(() => (window as any).__SANITIZE_REPORT__ || null);
+    console.log("[render-pdf] sanitize report:", sanitizeReport);
+
     // ✅ run Paged.js paginate and wait pages created
     await page.evaluate(async () => {
       const w = window as any;
@@ -691,10 +747,8 @@ ${cssFinal}
       );
     });
 
-    // ensure pages exist
     await page.waitForSelector(".pagedjs_pages", { timeout: 180000 });
 
-    // export PDF
     const pdfBuffer = await page.pdf({
       format: "A4",
       printBackground: true,
