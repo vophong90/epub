@@ -187,7 +187,10 @@ async function fetchAllTocContentsByItemIds(
   return all;
 }
 
-async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNode[]> {
+async function buildNodesFromDB(
+  admin: any,
+  versionId: string
+): Promise<RenderNode[]> {
   const tocItems = await fetchAllTocItemsByVersion(admin, versionId);
   if (!tocItems.length) return [];
 
@@ -213,7 +216,11 @@ async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNo
 
   const nodes: RenderNode[] = [];
 
-  function walk(parentId: string | null, depth: number, currentChapterTitle: string) {
+  function walk(
+    parentId: string | null,
+    depth: number,
+    currentChapterTitle: string
+  ) {
     const kids = children.get(parentId) || [];
     for (const it of kids) {
       const anchor = makeAnchor(it.id);
@@ -230,7 +237,11 @@ async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNo
           : "heading";
 
       const chapterTitle =
-        kind === "chapter" ? it.title : kind === "section" ? "" : currentChapterTitle;
+        kind === "chapter"
+          ? it.title
+          : kind === "section"
+          ? ""
+          : currentChapterTitle;
 
       nodes.push({
         id: anchor,
@@ -262,6 +273,8 @@ async function launchBrowser() {
       ...chromium.args,
       "--disable-features=LazyImageLoading,LazyFrameLoading",
       "--font-render-hinting=none",
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
     ],
     executablePath,
     headless: true,
@@ -277,21 +290,69 @@ function absolutizeFontUrls(css: string, origin: string) {
     .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
 }
 
-/** Render a full HTML document to PDF buffer (no page.evaluate at all) */
-async function renderHtmlToPdf(browser: Browser, html: string) {
+/**
+ * Render a full HTML document to PDF buffer
+ * Fix timeout: avoid networkidle0 + block external requests that can hang.
+ */
+async function renderHtmlToPdf(browser: Browser, html: string, origin: string) {
   const page = await browser.newPage();
 
   page.setDefaultNavigationTimeout(180000);
   page.setDefaultTimeout(180000);
 
-  // Ensure print css
+  // print css
   await page.emulateMediaType("print");
 
-  // Load html
-  await page.setContent(html, { waitUntil: "networkidle0", timeout: 180000 });
+  // Block external requests that may hang (remote fonts, analytics, etc.)
+  const originHost = (() => {
+    try {
+      return new URL(origin).host;
+    } catch {
+      return "";
+    }
+  })();
 
-  // Give a tiny settle for fonts/images (no evaluate)
-  await new Promise((r) => setTimeout(r, 200));
+  await page.setRequestInterception(true);
+  page.on("request", (req) => {
+    const url = req.url();
+
+    // Always allow data/blob
+    if (url.startsWith("data:") || url.startsWith("blob:")) return req.continue();
+
+    // Allow same-origin http(s)
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      try {
+        const u = new URL(url);
+        if (originHost && u.host === originHost) return req.continue();
+        // block all cross-origin to avoid "networkidle0 never happens"
+        return req.abort();
+      } catch {
+        return req.abort();
+      }
+    }
+
+    // Allow everything else (about:, file:, etc.)
+    return req.continue();
+  });
+
+  // Load html: DO NOT use networkidle0 (easy to hang)
+  await page.setContent(html, {
+    waitUntil: ["domcontentloaded", "load"],
+    timeout: 180000,
+  });
+
+  // Soft settle: wait for network to go idle-ish, but don't fail if it doesn't
+  try {
+    // available in puppeteer >= 13
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    await page.waitForNetworkIdle({ idleTime: 800, timeout: 25000 });
+  } catch {
+    // ignore
+  }
+
+  // small extra delay for layout/fonts
+  await page.waitForTimeout(300);
 
   const buf = await page.pdf({
     format: "A4",
@@ -314,7 +375,9 @@ async function countPdfPages(pdfBuffer: Buffer) {
  *   __ANCHOR__toc-<uuid>__
  */
 async function extractAnchorPagesFromPdf(contentPdf: Buffer) {
-  const loadingTask = (pdfjsLib as any).getDocument({ data: new Uint8Array(contentPdf) });
+  const loadingTask = (pdfjsLib as any).getDocument({
+    data: new Uint8Array(contentPdf),
+  });
   const pdf = await loadingTask.promise;
 
   const map = new Map<string, number>(); // toc_item_id -> pageIndex(0-based in content.pdf)
@@ -412,7 +475,7 @@ function buildContentBody(nodes: RenderNode[]) {
       continue;
     }
 
-    // Insert marker only for CHAPTER nodes (we use it to compute running header)
+    // Insert marker only for CHAPTER nodes
     const marker = isChapter
       ? `<div class="__pdf_anchor">__ANCHOR__${esc(n.id)}__</div>`
       : "";
@@ -488,13 +551,6 @@ type ChapterRange = {
   title: string;
 };
 
-/**
- * Stamp header/footer/page number on final PDF:
- * - No page number on cover pages.
- * - Page number starts at 1 right after cover.
- * - Header left = book.title
- * - Header right = chapter title (by chapter ranges), blank if none.
- */
 async function stampFinalPdf(params: {
   mergedPdf: Buffer;
   coverPages: number;
@@ -520,17 +576,15 @@ async function stampFinalPdf(params: {
     const page = pages[i];
     const { width, height } = page.getSize();
 
-    // Skip stamping on cover pages entirely? (You asked only "bỏ số trang ở cover thôi")
-    // We'll still stamp header on cover? Usually no. We'll not stamp anything on cover pages for cleanliness.
+    // No stamping on cover pages
     if (i < coverPages) continue;
 
-    const headerY = height - 28; // ~ top margin area
+    const headerY = height - 28;
     const footerY = 18;
 
     const leftText = truncateText(bookTitle, 70);
     const rightText = truncateText(getChapterTitleForPage(i), 70);
 
-    // header left
     page.drawText(leftText, {
       x: 40,
       y: headerY,
@@ -539,7 +593,6 @@ async function stampFinalPdf(params: {
       color: rgb(0.27, 0.27, 0.27),
     });
 
-    // header right
     if (rightText) {
       const textWidth = font.widthOfTextAtSize(rightText, 8.5);
       page.drawText(rightText, {
@@ -551,7 +604,6 @@ async function stampFinalPdf(params: {
       });
     }
 
-    // footer page number (continuous after cover)
     const pageNo = i - coverPages + 1;
     const pageNoStr = String(pageNo);
     const pnWidth = fontBold.widthOfTextAtSize(pageNoStr, 10);
@@ -584,7 +636,12 @@ async function mergePdfs(buffers: Buffer[]) {
 
 /** Build TOC entries only for section/chapter according to toc_depth */
 function buildTocEntries(nodes: RenderNode[], tocDepth: number) {
-  const entries: Array<{ toc_item_id: string; label: string; level: number; kind: string }> = [];
+  const entries: Array<{
+    toc_item_id: string;
+    label: string;
+    level: number;
+    kind: string;
+  }> = [];
 
   for (const n of nodes) {
     const isPart = n.kind === "section";
@@ -627,7 +684,10 @@ export async function POST(req: NextRequest) {
 
   const versionId = (body.version_id || "").toString().trim();
   if (!versionId) {
-    return NextResponse.json({ error: "version_id là bắt buộc" }, { status: 400 });
+    return NextResponse.json(
+      { error: "version_id là bắt buộc" },
+      { status: 400 }
+    );
   }
 
   const { data: version, error: vErr } = await admin
@@ -637,7 +697,8 @@ export async function POST(req: NextRequest) {
     .maybeSingle<VersionRow>();
 
   if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 });
-  if (!version) return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
+  if (!version)
+    return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
 
   let templateId = (body.template_id || "").toString().trim();
   if (!templateId) templateId = version.template_id || "";
@@ -669,12 +730,16 @@ export async function POST(req: NextRequest) {
       .in("role", ["author", "editor"])
       .maybeSingle();
 
-    if (permErr) return NextResponse.json({ error: permErr.message }, { status: 500 });
+    if (permErr)
+      return NextResponse.json({ error: permErr.message }, { status: 500 });
     canRender = !!perm;
   }
 
   if (!canRender) {
-    return NextResponse.json({ error: "Bạn không có quyền render PDF" }, { status: 403 });
+    return NextResponse.json(
+      { error: "Bạn không có quyền render PDF" },
+      { status: 403 }
+    );
   }
 
   const { data: book, error: bErr } = await admin
@@ -696,7 +761,8 @@ export async function POST(req: NextRequest) {
     .maybeSingle<TemplateRow>();
 
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
-  if (!tpl) return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
+  if (!tpl)
+    return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
 
   const tocDepth = Number.isFinite(Number(tpl.toc_depth))
     ? Math.min(6, Math.max(1, Number(tpl.toc_depth)))
@@ -735,7 +801,6 @@ export async function POST(req: NextRequest) {
         .replaceAll("{{CHAPTER_TITLE}}", "")
         .replaceAll("{{SITE_ORIGIN}}", origin);
 
-    // CSS final (no paged injection)
     const cssAbs = absolutizeFontUrls(tpl.css || "", origin);
 
     const cjkBase64 = loadCJKFontBase64();
@@ -752,7 +817,6 @@ export async function POST(req: NextRequest) {
 
     const browser = await launchBrowser();
 
-    // Build nodes
     const nodes = await buildNodesFromDB(admin, versionId);
 
     // PASS 1: render cover / front / content (no toc yet)
@@ -784,21 +848,20 @@ export async function POST(req: NextRequest) {
       bodyHtml: `<main id="book-content">${contentBody}</main>`,
     });
 
-    const coverPdf = await renderHtmlToPdf(browser, coverHtml);
+    // ✅ pass origin into renderHtmlToPdf()
+    const coverPdf = await renderHtmlToPdf(browser, coverHtml, origin);
     const frontPdf = frontBody
-      ? await renderHtmlToPdf(browser, frontHtml)
+      ? await renderHtmlToPdf(browser, frontHtml, origin)
       : Buffer.from(await (await PDFDocument.create()).save());
 
-    const contentPdf = await renderHtmlToPdf(browser, contentHtml);
+    const contentPdf = await renderHtmlToPdf(browser, contentHtml, origin);
 
     const coverPages = await countPdfPages(coverPdf);
     const frontPages = frontBody ? await countPdfPages(frontPdf) : 0;
 
-    // Extract chapter anchors from content.pdf
     const anchorMap = await extractAnchorPagesFromPdf(contentPdf);
     console.log("[render-pdf] anchors found:", anchorMap.size);
 
-    // Determine chapter nodes (for running header right)
     const chapterNodes = nodes.filter((n) => n.kind === "chapter");
 
     // PASS 2: iterative TOC render until tocPages stable
@@ -808,41 +871,34 @@ export async function POST(req: NextRequest) {
     let tocPagesGuess = 1;
 
     for (let iter = 0; iter < 5; iter++) {
-      const baseOffsetFinal = coverPages + frontPages + tocPagesGuess; // where content starts in FINAL pdf (0-based pages)
+      const baseOffsetFinal = coverPages + frontPages + tocPagesGuess;
 
-      // compute page numbers for each toc entry
       const entriesWithPage = tocEntriesMeta.map((e) => {
-        // anchor we used in content markers is __ANCHOR__toc-<uuid>__
-        // in buildContentBody marker uses n.id = "toc-<uuid>"
-        // so here we search page of that uuid: anchorMap expects uuid, not "toc-uuid"
         const uuid = e.toc_item_id.toLowerCase();
 
-        // content page index (0-based) where the chapter starts
-        // If entry is "section" and has no marker (we only mark chapters), fallback to first child chapter
         let contentPageIndex: number | null = null;
 
         if (e.kind === "chapter") {
           contentPageIndex = anchorMap.get(uuid) ?? null;
         } else {
-          // section: find first chapter under this section in node order
           const idx = nodes.findIndex((n) => n.toc_item_id === e.toc_item_id);
           if (idx >= 0) {
             for (let j = idx + 1; j < nodes.length; j++) {
               const nn = nodes[j];
               if (nn.kind === "section") break;
               if (nn.kind === "chapter") {
-                contentPageIndex = anchorMap.get(nn.toc_item_id.toLowerCase()) ?? null;
+                contentPageIndex =
+                  anchorMap.get(nn.toc_item_id.toLowerCase()) ?? null;
                 break;
               }
             }
           }
         }
 
-        // If still missing, set page as 0 (will look wrong but avoids crash)
         const contentIdx = contentPageIndex ?? 0;
 
-        const finalPageIndex0 = baseOffsetFinal + contentIdx; // 0-based in final pdf
-        const displayPageNo = finalPageIndex0 - coverPages + 1; // numbering starts after cover
+        const finalPageIndex0 = baseOffsetFinal + contentIdx;
+        const displayPageNo = finalPageIndex0 - coverPages + 1;
 
         return {
           label: e.label,
@@ -864,7 +920,7 @@ export async function POST(req: NextRequest) {
         bodyHtml: tocBody,
       });
 
-      const tocPdfCandidate = await renderHtmlToPdf(browser, tocHtml);
+      const tocPdfCandidate = await renderHtmlToPdf(browser, tocHtml, origin);
       const tocPages = await countPdfPages(tocPdfCandidate);
 
       tocPdf = tocPdfCandidate;
@@ -883,8 +939,6 @@ export async function POST(req: NextRequest) {
     const tocPagesFinal = await countPdfPages(tocPdf);
     const contentStartFinal0 = coverPages + frontPages + tocPagesFinal;
 
-    // Build chapter ranges (FINAL pdf 0-based)
-    // We locate start page for each chapter (from content anchors), then compute end by next start - 1
     const chapterStartsFinal: Array<{ start0: number; title: string }> = [];
 
     for (const ch of chapterNodes) {
@@ -921,7 +975,6 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Stamp header/footer/page numbers
     const finalPdf = await stampFinalPdf({
       mergedPdf: mergedBeforeStamp,
       coverPages,
@@ -931,7 +984,6 @@ export async function POST(req: NextRequest) {
 
     await browser.close();
 
-    // upload
     const pdf_path = `book/${book.id}/version/${version.id}/render/${renderId}.pdf`;
 
     const { error: upErr } = await admin.storage
