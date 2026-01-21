@@ -228,9 +228,8 @@ async function buildNodesFromDB(
   return nodes;
 }
 
-/** Build TOC HTML with target-counter() => page number auto */
+/** Build TOC HTML (KHÔNG dùng leader(), tránh rớt dòng) */
 function buildTocHtml(nodes: RenderNode[], tocDepth: number) {
-  // chỉ lấy section/chapter theo depth
   const entries = nodes
     .filter((n) => n.kind === "section" || n.kind === "chapter")
     .filter((n) => (n.kind === "section" ? 1 : 2) <= tocDepth)
@@ -245,12 +244,15 @@ function buildTocHtml(nodes: RenderNode[], tocDepth: number) {
       const pad = e.level === 2 ? 18 : 0;
       return `
 <li class="toc-item level-${e.level}" style="padding-left:${pad}px">
-  <a class="toc-link" href="${esc(e.href)}">${esc(e.label)}</a>
+  <a class="toc-link" href="${esc(e.href)}">
+    <span class="toc-label">${esc(e.label)}</span>
+    <span class="toc-dots"></span>
+    <span class="toc-page" data-target="${esc(e.href)}"></span>
+  </a>
 </li>`;
     })
     .join("\n");
 
-  // CSS quan trọng: leader + target-counter
   return `
 <section class="toc2" id="__toc">
   <h1 class="toc2-title">Mục lục</h1>
@@ -258,30 +260,6 @@ function buildTocHtml(nodes: RenderNode[], tocDepth: number) {
     ${rows}
   </ol>
 </section>
-
-<style>
-.toc2{ break-after: page; page-break-after: always; margin: 0; }
-.toc2-title{
-  text-align:center;
-  font-weight:800;
-  font-size: 14pt;
-  margin: 0 0 16px 0;
-}
-.toc2-list{ list-style:none; padding:0; margin:0; }
-.toc-item{ margin: 2px 0; }
-.toc-link{
-  text-decoration:none;
-  color: inherit;
-  display: block;
-}
-
-/* ✅ số trang tự động: Prince/DocRaptor */
-.toc-link::after{
-  content: leader('.') " " target-counter(attr(href), page);
-  float: right;
-  font-variant-numeric: tabular-nums;
-}
-</style>
 `;
 }
 
