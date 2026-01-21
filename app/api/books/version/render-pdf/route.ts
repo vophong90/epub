@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRouteClient } from "@/lib/supabaseServer";
 import { getAdminClient } from "@/lib/supabase-admin";
+import puppeteer, { type Browser } from "puppeteer-core";
 
 import chromium from "@sparticuz/chromium-min";
 import puppeteer from "puppeteer-core";
@@ -278,7 +279,7 @@ function absolutizeFontUrls(css: string, origin: string) {
 }
 
 /** Render a full HTML document to PDF buffer (no page.evaluate at all) */
-async function renderHtmlToPdf(browser: puppeteer.Browser, html: string) {
+async function renderHtmlToPdf(browser: Browser, html: string) {
   const page = await browser.newPage();
 
   page.setDefaultNavigationTimeout(180000);
