@@ -291,7 +291,7 @@ async function renderHtmlToPdf(browser: Browser, html: string) {
   await page.setContent(html, { waitUntil: "networkidle0", timeout: 180000 });
 
   // Give a tiny settle for fonts/images (no evaluate)
-  await page.waitForTimeout(200);
+  await new Promise((r) => setTimeout(r, 200));
 
   const buf = await page.pdf({
     format: "A4",
