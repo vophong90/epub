@@ -9,6 +9,9 @@ import puppeteer from "puppeteer-core";
 import fs from "fs";
 import path from "path";
 
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -65,35 +68,7 @@ function loadCJKFontBase64() {
   }
 }
 
-function loadPagedJSInline() {
-  // Bạn đang dùng public/paged.polyfill.js (tự copy vào public)
-  const p = path.join(process.cwd(), "public", "paged.polyfill.js");
-  try {
-    if (fs.existsSync(p)) return fs.readFileSync(p, "utf8");
-  } catch (e) {
-    console.error("❌ Cannot load /public/paged.polyfill.js", e);
-  }
-  return null;
-}
-
-/**
- * ✅ QUAN TRỌNG:
- * - KHÔNG inject thêm CSS cho nav.toc ở đây nữa (vì template CSS đã có).
- * - Chỉ inject rule tắt column-count sau khi paged render.
- */
-function injectPagedCSS(css: string) {
-  return `
-${css}
-
-/* khi pagedjs render pages, tắt column-count để không xung đột pagination */
-.pagedjs_pages #book-content{
-  column-count: auto !important;
-  -webkit-column-count: auto !important;
-}
-`;
-}
-
-/** DB row types tối giản */
+/** DB row types */
 type TocItemRow = {
   id: string;
   parent_id: string | null;
@@ -110,13 +85,13 @@ type TocContentRow = {
 };
 
 type RenderNode = {
-  id: string; // anchor
+  id: string; // anchor id in HTML
   toc_item_id: string;
   title: string;
   slug: string;
   kind: "section" | "chapter" | "heading";
   depth: number;
-  chapterTitle: string;
+  chapterTitle: string; // running header right
   html: string;
 };
 
@@ -145,34 +120,9 @@ function makeAnchor(tocItemId: string) {
   return `toc-${tocItemId}`;
 }
 
-/**
- * Strip lists in content body to avoid Paged.js list crashes
- * (Không đụng TOC; chỉ dùng cho nội dung chương)
- */
-function stripLists(html: string) {
-  if (!html) return "";
-
-  // Convert list containers to div, preserve attrs safely
-  let out = html
-    .replace(/<\s*ol(\s[^>]*)?>/gi, (_m, attrs) => `<div data-list="ol"${attrs || ""}>`)
-    .replace(/<\s*ul(\s[^>]*)?>/gi, (_m, attrs) => `<div data-list="ul"${attrs || ""}>`)
-    .replace(/<\s*menu(\s[^>]*)?>/gi, (_m, attrs) => `<div data-list="menu"${attrs || ""}>`)
-    .replace(/<\s*\/\s*ol\s*>/gi, `</div>`)
-    .replace(/<\s*\/\s*ul\s*>/gi, `</div>`)
-    .replace(/<\s*\/\s*menu\s*>/gi, `</div>`);
-
-  // Convert list items to div
-  out = out
-    .replace(/<\s*li(\s[^>]*)?>/gi, (_m, attrs) => `<div data-li="1"${attrs || ""}>`)
-    .replace(/<\s*\/\s*li\s*>/gi, `</div>`);
-
-  return out;
-}
-
 /* =========================
- * Pagination helpers (Supabase range paging)
+ * Supabase range paging
  * ========================= */
-
 async function fetchAllTocItemsByVersion(
   admin: any,
   versionId: string
@@ -237,10 +187,7 @@ async function fetchAllTocContentsByItemIds(
   return all;
 }
 
-async function buildNodesFromDB(
-  admin: any,
-  versionId: string
-): Promise<RenderNode[]> {
+async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNode[]> {
   const tocItems = await fetchAllTocItemsByVersion(admin, versionId);
   if (!tocItems.length) return [];
 
@@ -252,7 +199,7 @@ async function buildNodesFromDB(
   const contentByItem = new Map<string, TocContentRow>();
   for (const c of tocContents) contentByItem.set(c.toc_item_id, c);
 
-  // build children map
+  // children map
   const children = new Map<string | null, TocItemRow[]>();
   for (const it of tocItems) {
     const key = it.parent_id ?? null;
@@ -266,11 +213,7 @@ async function buildNodesFromDB(
 
   const nodes: RenderNode[] = [];
 
-  function walk(
-    parentId: string | null,
-    depth: number,
-    currentChapterTitle: string
-  ) {
+  function walk(parentId: string | null, depth: number, currentChapterTitle: string) {
     const kids = children.get(parentId) || [];
     for (const it of kids) {
       const anchor = makeAnchor(it.id);
@@ -287,11 +230,7 @@ async function buildNodesFromDB(
           : "heading";
 
       const chapterTitle =
-        kind === "chapter"
-          ? it.title
-          : kind === "section"
-          ? ""
-          : currentChapterTitle;
+        kind === "chapter" ? it.title : kind === "section" ? "" : currentChapterTitle;
 
       nodes.push({
         id: anchor,
@@ -322,6 +261,7 @@ async function launchBrowser() {
     args: [
       ...chromium.args,
       "--disable-features=LazyImageLoading,LazyFrameLoading",
+      "--font-render-hinting=none",
     ],
     executablePath,
     headless: true,
@@ -330,78 +270,340 @@ async function launchBrowser() {
   return browser;
 }
 
-function injectTocListIntoTocHTML(tocHtml: string, tocList: string) {
-  if (!tocHtml) return tocHtml;
+function absolutizeFontUrls(css: string, origin: string) {
+  return (css || "")
+    .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
+    .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
+    .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
+}
 
-  if (tocHtml.includes('id="toc-list"')) {
-    // insert ngay sau thẻ mở có id toc-list (ol/div/whatever)
-    return tocHtml.replace(
-      /<([a-zA-Z0-9]+)[^>]*id="toc-list"[^>]*>/,
-      (m) => `${m}\n${tocList}\n`
-    );
-  }
+/** Render a full HTML document to PDF buffer (no page.evaluate at all) */
+async function renderHtmlToPdf(browser: puppeteer.Browser, html: string) {
+  const page = await browser.newPage();
 
-  return tocHtml;
+  page.setDefaultNavigationTimeout(180000);
+  page.setDefaultTimeout(180000);
+
+  // Ensure print css
+  await page.emulateMediaType("print");
+
+  // Load html
+  await page.setContent(html, { waitUntil: "networkidle0", timeout: 180000 });
+
+  // Give a tiny settle for fonts/images (no evaluate)
+  await page.waitForTimeout(200);
+
+  const buf = await page.pdf({
+    format: "A4",
+    printBackground: true,
+    preferCSSPageSize: true,
+  });
+
+  await page.close();
+  return Buffer.from(buf);
+}
+
+async function countPdfPages(pdfBuffer: Buffer) {
+  const doc = await PDFDocument.load(pdfBuffer);
+  return doc.getPageCount();
 }
 
 /**
- * ✅ SANITIZE LIST DOM (giữ TOC dạng <ol><li>)
- * - Fix mọi <li> mồ côi (không có parent UL/OL/MENU) => đổi sang <div>
- * - Dọn nested list sai trong nav.toc: đảm bảo nav.toc #toc-list chỉ chứa LI trực tiếp
+ * Extract chapter anchors from content.pdf by scanning text.
+ * Markers are embedded as tiny text:
+ *   __ANCHOR__toc-<uuid>__
  */
-const SANITIZE_DOM_BEFORE_PAGED = `(() => {
-  // 1) Fix orphan <li> toàn trang
-  const lis = Array.from(document.querySelectorAll('li'));
-  let orphanCount = 0;
+async function extractAnchorPagesFromPdf(contentPdf: Buffer) {
+  const loadingTask = (pdfjsLib as any).getDocument({ data: new Uint8Array(contentPdf) });
+  const pdf = await loadingTask.promise;
 
-  for (const li of lis) {
-    const p = li.parentElement;
-    const ok = p && (p.tagName === 'UL' || p.tagName === 'OL' || p.tagName === 'MENU');
-    if (!ok) {
-      orphanCount++;
-      const div = document.createElement('div');
-      div.setAttribute('data-orphan-li', '1');
-      if (li.getAttribute('class')) div.setAttribute('class', li.getAttribute('class')!);
-      if (li.getAttribute('style')) div.setAttribute('style', li.getAttribute('style')!);
-      div.innerHTML = li.innerHTML;
-      li.replaceWith(div);
-    }
-  }
+  const map = new Map<string, number>(); // toc_item_id -> pageIndex(0-based in content.pdf)
 
-  // 2) Normalize TOC: #toc-list chỉ chứa LI trực tiếp
-  const nav = document.querySelector('nav.toc');
-  let tocFlattened = 0;
+  const re = /__ANCHOR__toc-([0-9a-fA-F-]{36})__/g;
 
-  if (nav) {
-    const tocList = nav.querySelector('#toc-list');
-    if (tocList) {
-      // bỏ nested <ol>/<ul> trong toc-list (nếu có)
-      const nestedLists = Array.from(tocList.querySelectorAll('li ol, li ul'));
-      for (const nl of nestedLists) {
-        const parentLi = nl.closest('li');
-        if (!parentLi) continue;
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const tc = await page.getTextContent();
+    const text = (tc.items || [])
+      .map((it: any) => (typeof it.str === "string" ? it.str : ""))
+      .join(" ");
 
-        const childLis = Array.from(nl.querySelectorAll(':scope > li'));
-        for (const childLi of childLis) {
-          tocList.insertBefore(childLi, parentLi.nextSibling);
-          tocFlattened++;
-        }
-        nl.remove();
-      }
-
-      // Nếu có li bị bọc sâu, kéo về direct child
-      const allLis = Array.from(tocList.querySelectorAll('li'));
-      for (const li of allLis) {
-        if (li.parentElement !== tocList) {
-          tocList.appendChild(li);
-          tocFlattened++;
-        }
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const tocId = m[1].toLowerCase();
+      if (!map.has(tocId)) {
+        map.set(tocId, p - 1);
       }
     }
   }
 
-  (window as any).__SANITIZE_REPORT__ = { orphanLi: orphanCount, tocFlattened };
-})();`;
+  return map;
+}
+
+function buildBaseHtmlDoc(params: {
+  origin: string;
+  title: string;
+  cssFinal: string;
+  inlineFontCSS: string;
+  bodyHtml: string;
+}) {
+  const { origin, title, cssFinal, inlineFontCSS, bodyHtml } = params;
+
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<base href="${origin}/" />
+<title>${esc(title)}</title>
+<style>
+${inlineFontCSS}
+${cssFinal}
+</style>
+</head>
+<body>
+${bodyHtml}
+</body>
+</html>`;
+}
+
+/** Build content HTML with invisible anchor marker at the start of each chapter */
+function buildContentBody(nodes: RenderNode[]) {
+  const out: string[] = [];
+
+  out.push(`
+<style>
+.__pdf_anchor{
+  font-size: 1px;
+  color: transparent;
+  line-height: 1px;
+  height: 0;
+  overflow: hidden;
+}
+</style>
+`);
+
+  for (const n of nodes) {
+    const isPart = n.kind === "section";
+    const isChapter = n.kind === "chapter";
+
+    const tag =
+      n.kind === "section"
+        ? "h1"
+        : isChapter
+        ? "h1"
+        : n.depth === 2
+        ? "h2"
+        : "h3";
+
+    const bodyHtml =
+      n.html && n.html.trim()
+        ? n.html
+        : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
+
+    if (isPart) {
+      out.push(`
+<section class="part" id="${esc(n.id)}"
+  data-toc-item="${esc(n.toc_item_id)}"
+  data-kind="section"
+  data-depth="${n.depth}"
+  data-chapter-title="">
+  <h1 class="part-title">${esc(n.title)}</h1>
+</section>`);
+      continue;
+    }
+
+    // Insert marker only for CHAPTER nodes (we use it to compute running header)
+    const marker = isChapter
+      ? `<div class="__pdf_anchor">__ANCHOR__${esc(n.id)}__</div>`
+      : "";
+
+    out.push(`
+<section class="${isChapter ? "chapter" : "heading"}" id="${esc(n.id)}"
+  data-toc-item="${esc(n.toc_item_id)}"
+  data-kind="${esc(n.kind)}"
+  data-depth="${n.depth}"
+  data-chapter-title="${esc(n.chapterTitle)}">
+  ${marker}
+  <${tag} class="${isChapter ? "chapter-title" : ""}">${esc(n.title)}</${tag}>
+  ${isChapter ? `<div class="chapter-body">${bodyHtml}</div>` : bodyHtml}
+</section>`);
+  }
+
+  return out.join("\n");
+}
+
+function buildTocBody(params: {
+  bookTitle: string;
+  entries: Array<{ label: string; pageNo: number; level: number }>;
+}) {
+  const { bookTitle, entries } = params;
+
+  const rows = entries
+    .map((e) => {
+      const pad = e.level === 2 ? 18 : 0;
+      return `<div class="toc-row" style="padding-left:${pad}px">
+  <div class="toc-label">${esc(e.label)}</div>
+  <div class="toc-page">${e.pageNo}</div>
+</div>`;
+    })
+    .join("\n");
+
+  return `
+<section class="toc2">
+  <h1 class="toc2-title">Mục lục</h1>
+  <div class="toc2-list">
+    ${rows}
+  </div>
+</section>
+
+<style>
+.toc2{ break-after: page; page-break-after: always; margin: 0; }
+.toc2-title{
+  text-align:center;
+  font-weight:800;
+  font-size: 14pt;
+  margin: 0 0 16px 0;
+}
+.toc2-row, .toc-row{
+  display:flex;
+  gap: 12px;
+  align-items: baseline;
+  margin: 2px 0;
+}
+.toc-label{ flex: 1; }
+.toc-page{ width: 48px; text-align: right; font-variant-numeric: tabular-nums; }
+</style>
+`;
+}
+
+function truncateText(s: string, maxChars: number) {
+  const t = (s || "").trim();
+  if (t.length <= maxChars) return t;
+  return t.slice(0, Math.max(0, maxChars - 1)) + "…";
+}
+
+type ChapterRange = {
+  from: number; // inclusive 0-based in FINAL pdf
+  to: number; // inclusive 0-based
+  title: string;
+};
+
+/**
+ * Stamp header/footer/page number on final PDF:
+ * - No page number on cover pages.
+ * - Page number starts at 1 right after cover.
+ * - Header left = book.title
+ * - Header right = chapter title (by chapter ranges), blank if none.
+ */
+async function stampFinalPdf(params: {
+  mergedPdf: Buffer;
+  coverPages: number;
+  bookTitle: string;
+  chapterRanges: ChapterRange[];
+}) {
+  const { mergedPdf, coverPages, bookTitle, chapterRanges } = params;
+
+  const doc = await PDFDocument.load(mergedPdf);
+  const font = await doc.embedFont(StandardFonts.TimesRoman);
+  const fontBold = await doc.embedFont(StandardFonts.TimesBold);
+
+  const pages = doc.getPages();
+
+  function getChapterTitleForPage(pageIndex: number) {
+    for (const r of chapterRanges) {
+      if (pageIndex >= r.from && pageIndex <= r.to) return r.title;
+    }
+    return "";
+  }
+
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i];
+    const { width, height } = page.getSize();
+
+    // Skip stamping on cover pages entirely? (You asked only "bỏ số trang ở cover thôi")
+    // We'll still stamp header on cover? Usually no. We'll not stamp anything on cover pages for cleanliness.
+    if (i < coverPages) continue;
+
+    const headerY = height - 28; // ~ top margin area
+    const footerY = 18;
+
+    const leftText = truncateText(bookTitle, 70);
+    const rightText = truncateText(getChapterTitleForPage(i), 70);
+
+    // header left
+    page.drawText(leftText, {
+      x: 40,
+      y: headerY,
+      size: 8.5,
+      font: font,
+      color: rgb(0.27, 0.27, 0.27),
+    });
+
+    // header right
+    if (rightText) {
+      const textWidth = font.widthOfTextAtSize(rightText, 8.5);
+      page.drawText(rightText, {
+        x: Math.max(40, width - 40 - textWidth),
+        y: headerY,
+        size: 8.5,
+        font: font,
+        color: rgb(0.27, 0.27, 0.27),
+      });
+    }
+
+    // footer page number (continuous after cover)
+    const pageNo = i - coverPages + 1;
+    const pageNoStr = String(pageNo);
+    const pnWidth = fontBold.widthOfTextAtSize(pageNoStr, 10);
+
+    page.drawText(pageNoStr, {
+      x: width / 2 - pnWidth / 2,
+      y: footerY,
+      size: 10,
+      font: fontBold,
+      color: rgb(0.1, 0.1, 0.1),
+    });
+  }
+
+  const out = await doc.save();
+  return Buffer.from(out);
+}
+
+async function mergePdfs(buffers: Buffer[]) {
+  const outDoc = await PDFDocument.create();
+
+  for (const buf of buffers) {
+    const src = await PDFDocument.load(buf);
+    const copied = await outDoc.copyPages(src, src.getPageIndices());
+    for (const p of copied) outDoc.addPage(p);
+  }
+
+  const bytes = await outDoc.save();
+  return Buffer.from(bytes);
+}
+
+/** Build TOC entries only for section/chapter according to toc_depth */
+function buildTocEntries(nodes: RenderNode[], tocDepth: number) {
+  const entries: Array<{ toc_item_id: string; label: string; level: number; kind: string }> = [];
+
+  for (const n of nodes) {
+    const isPart = n.kind === "section";
+    const isChapter = n.kind === "chapter";
+    const level = isPart ? 1 : isChapter ? 2 : 999;
+
+    if (level > tocDepth) continue;
+    if (!isPart && !isChapter) continue;
+
+    entries.push({
+      toc_item_id: n.toc_item_id,
+      label: n.title,
+      level,
+      kind: n.kind,
+    });
+  }
+
+  return entries;
+}
 
 export async function POST(req: NextRequest) {
   const supabase = getRouteClient();
@@ -412,8 +614,9 @@ export async function POST(req: NextRequest) {
     error: uErr,
   } = await supabase.auth.getUser();
 
-  if (uErr || !user)
+  if (uErr || !user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   let body: Body = {};
   try {
@@ -423,8 +626,9 @@ export async function POST(req: NextRequest) {
   }
 
   const versionId = (body.version_id || "").toString().trim();
-  if (!versionId)
+  if (!versionId) {
     return NextResponse.json({ error: "version_id là bắt buộc" }, { status: 400 });
+  }
 
   const { data: version, error: vErr } = await admin
     .from("book_versions")
@@ -433,16 +637,16 @@ export async function POST(req: NextRequest) {
     .maybeSingle<VersionRow>();
 
   if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 });
-  if (!version)
-    return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
+  if (!version) return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
 
   let templateId = (body.template_id || "").toString().trim();
   if (!templateId) templateId = version.template_id || "";
-  if (!templateId)
+  if (!templateId) {
     return NextResponse.json(
       { error: "Chưa xác định được template cho phiên bản này" },
       { status: 400 }
     );
+  }
 
   // quyền
   const { data: profile, error: pErr } = await supabase
@@ -469,8 +673,9 @@ export async function POST(req: NextRequest) {
     canRender = !!perm;
   }
 
-  if (!canRender)
+  if (!canRender) {
     return NextResponse.json({ error: "Bạn không có quyền render PDF" }, { status: 403 });
+  }
 
   const { data: book, error: bErr } = await admin
     .from("books")
@@ -495,9 +700,9 @@ export async function POST(req: NextRequest) {
 
   const tocDepth = Number.isFinite(Number(tpl.toc_depth))
     ? Math.min(6, Math.max(1, Number(tpl.toc_depth)))
-    : 1;
+    : 2;
 
-  // render job
+  // create render job
   const { data: render, error: rInsErr } = await admin
     .from("book_renders")
     .insert({
@@ -522,16 +727,6 @@ export async function POST(req: NextRequest) {
   try {
     const origin = getSiteOrigin(req);
 
-    // load Paged.js inline
-    const pagedInline = loadPagedJSInline();
-    if (!pagedInline) {
-      throw new Error(
-        "Paged.js not found. Ensure /public/paged.polyfill.js exists (or install pagedjs and bundle it)."
-      );
-    }
-
-    const nodes = await buildNodesFromDB(admin, versionId);
-
     const year = new Date().getFullYear().toString();
     const token = (s?: string) =>
       (s || "")
@@ -540,20 +735,9 @@ export async function POST(req: NextRequest) {
         .replaceAll("{{CHAPTER_TITLE}}", "")
         .replaceAll("{{SITE_ORIGIN}}", origin);
 
-    const cover = token(tpl.cover_html || "");
-    const front = token(tpl.front_matter_html || "");
-    const header = token(tpl.header_html || "");
-    const footer = token(tpl.footer_html || "");
+    // CSS final (no paged injection)
+    const cssAbs = absolutizeFontUrls(tpl.css || "", origin);
 
-    // css: absolute fonts + inject only safe paged rules
-    const cssAbs = (tpl.css || "")
-      .replaceAll('url("/fonts/', `url("${origin}/fonts/`)
-      .replaceAll("url('/fonts/", `url("${origin}/fonts/`)
-      .replaceAll("url(/fonts/", `url(${origin}/fonts/`);
-
-    const cssFinal = injectPagedCSS(cssAbs);
-
-    // inline CJK font (fallback)
     const cjkBase64 = loadCJKFontBase64();
     const inlineFontCSS = cjkBase64
       ? `
@@ -566,228 +750,190 @@ export async function POST(req: NextRequest) {
 `
       : "";
 
-    // main content
-    const main = nodes
-      .map((n) => {
-        const isPart = n.kind === "section";
-        const isChapter = n.kind === "chapter";
+    const browser = await launchBrowser();
 
-        const tag =
-          n.kind === "section"
-            ? "h1"
-            : isChapter
-            ? "h1"
-            : n.depth === 2
-            ? "h2"
-            : "h3";
+    // Build nodes
+    const nodes = await buildNodesFromDB(admin, versionId);
 
-        const bodyHtmlRaw =
-          n.html && n.html.trim()
-            ? n.html
-            : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
+    // PASS 1: render cover / front / content (no toc yet)
+    const coverBody = token(tpl.cover_html || "");
+    const frontBody = token(tpl.front_matter_html || "");
+    const contentBody = buildContentBody(nodes);
 
-        const bodyHtml = stripLists(bodyHtmlRaw);
+    const coverHtml = buildBaseHtmlDoc({
+      origin,
+      title: `${book.title} – cover`,
+      cssFinal: cssAbs,
+      inlineFontCSS,
+      bodyHtml: coverBody || "",
+    });
 
-        if (isPart) {
-          return `
-<section class="part" id="${esc(n.id)}"
-  data-toc-item="${esc(n.toc_item_id)}"
-  data-kind="section"
-  data-depth="${n.depth}"
-  data-chapter-title="">
-  <h1 class="part-title">${esc(n.title)}</h1>
-</section>`;
+    const frontHtml = buildBaseHtmlDoc({
+      origin,
+      title: `${book.title} – front`,
+      cssFinal: cssAbs,
+      inlineFontCSS,
+      bodyHtml: frontBody || "",
+    });
+
+    const contentHtml = buildBaseHtmlDoc({
+      origin,
+      title: `${book.title} – content`,
+      cssFinal: cssAbs,
+      inlineFontCSS,
+      bodyHtml: `<main id="book-content">${contentBody}</main>`,
+    });
+
+    const coverPdf = await renderHtmlToPdf(browser, coverHtml);
+    const frontPdf = frontBody ? await renderHtmlToPdf(browser, frontHtml) : Buffer.from(await PDFDocument.create().save());
+    const contentPdf = await renderHtmlToPdf(browser, contentHtml);
+
+    const coverPages = await countPdfPages(coverPdf);
+    const frontPages = frontBody ? await countPdfPages(frontPdf) : 0;
+
+    // Extract chapter anchors from content.pdf
+    const anchorMap = await extractAnchorPagesFromPdf(contentPdf);
+    console.log("[render-pdf] anchors found:", anchorMap.size);
+
+    // Determine chapter nodes (for running header right)
+    const chapterNodes = nodes.filter((n) => n.kind === "chapter");
+
+    // PASS 2: iterative TOC render until tocPages stable
+    const tocEntriesMeta = buildTocEntries(nodes, tocDepth);
+
+    let tocPdf: Buffer | null = null;
+    let tocPagesGuess = 1;
+
+    for (let iter = 0; iter < 5; iter++) {
+      const baseOffsetFinal = coverPages + frontPages + tocPagesGuess; // where content starts in FINAL pdf (0-based pages)
+
+      // compute page numbers for each toc entry
+      const entriesWithPage = tocEntriesMeta.map((e) => {
+        // anchor we used in content markers is __ANCHOR__toc-<uuid>__
+        // in buildContentBody marker uses n.id = "toc-<uuid>"
+        // so here we search page of that uuid: anchorMap expects uuid, not "toc-uuid"
+        const uuid = e.toc_item_id.toLowerCase();
+
+        // content page index (0-based) where the chapter starts
+        // If entry is "section" and has no marker (we only mark chapters), fallback to first child chapter
+        let contentPageIndex: number | null = null;
+
+        if (e.kind === "chapter") {
+          contentPageIndex = anchorMap.get(uuid) ?? null;
+        } else {
+          // section: find first chapter under this section in node order
+          const idx = nodes.findIndex((n) => n.toc_item_id === e.toc_item_id);
+          if (idx >= 0) {
+            for (let j = idx + 1; j < nodes.length; j++) {
+              const nn = nodes[j];
+              if (nn.kind === "section") break;
+              if (nn.kind === "chapter") {
+                contentPageIndex = anchorMap.get(nn.toc_item_id.toLowerCase()) ?? null;
+                break;
+              }
+            }
+          }
         }
 
-        return `
-<section class="${isChapter ? "chapter" : "heading"}" id="${esc(n.id)}"
-  data-toc-item="${esc(n.toc_item_id)}"
-  data-kind="${esc(n.kind)}"
-  data-depth="${n.depth}"
-  data-chapter-title="${esc(n.chapterTitle)}">
-  <${tag} class="${isChapter ? "chapter-title" : ""}">${esc(n.title)}</${tag}>
-  ${isChapter ? `<div class="chapter-body">${bodyHtml}</div>` : bodyHtml}
-</section>`;
-      })
-      .join("\n");
+        // If still missing, set page as 0 (will look wrong but avoids crash)
+        const contentIdx = contentPageIndex ?? 0;
 
-    // TOC list (string HTML) - ✅ đúng chuẩn: <ol> chỉ chứa <li>
-    const tocItems: string[] = [];
-    for (const n of nodes) {
-      const isPart = n.kind === "section";
-      const isChapter = n.kind === "chapter";
-      const level = isPart ? 1 : isChapter ? 2 : 999;
+        const finalPageIndex0 = baseOffsetFinal + contentIdx; // 0-based in final pdf
+        const displayPageNo = finalPageIndex0 - coverPages + 1; // numbering starts after cover
 
-      if (level > tocDepth) continue;
-      if (!isPart && !isChapter) continue;
+        return {
+          label: e.label,
+          pageNo: Math.max(1, displayPageNo),
+          level: e.level,
+        };
+      });
 
-      const pad = level === 2 ? 14 : 0;
-      const padAttr = pad ? ` style="padding-left:${pad}px"` : "";
-      const label = esc(n.title);
+      const tocBody = buildTocBody({
+        bookTitle: book.title,
+        entries: entriesWithPage,
+      });
 
-      const cls = isPart
-        ? "toc-item toc-item--section"
-        : "toc-item toc-item--chapter";
+      const tocHtml = buildBaseHtmlDoc({
+        origin,
+        title: `${book.title} – toc`,
+        cssFinal: cssAbs,
+        inlineFontCSS,
+        bodyHtml: tocBody,
+      });
 
-      tocItems.push(`
-<li class="${cls}"${padAttr}>
-  <a href="#${esc(n.id)}">${label}</a>
-</li>`);
+      const tocPdfCandidate = await renderHtmlToPdf(browser, tocHtml);
+      const tocPages = await countPdfPages(tocPdfCandidate);
+
+      tocPdf = tocPdfCandidate;
+
+      if (tocPages === tocPagesGuess) {
+        console.log("[render-pdf] TOC pages stable:", tocPages);
+        break;
+      }
+
+      console.log("[render-pdf] TOC pages changed:", tocPagesGuess, "->", tocPages);
+      tocPagesGuess = tocPages;
     }
 
-    const tocList = tocItems.join("\n");
+    if (!tocPdf) throw new Error("TOC render failed");
 
-    // ✅ TOC HTML tĩnh: inject tocList trực tiếp
-    const tocRaw = token(tpl.toc_html || "");
-    const toc = injectTocListIntoTocHTML(tocRaw, tocList);
+    const tocPagesFinal = await countPdfPages(tocPdf);
+    const contentStartFinal0 = coverPages + frontPages + tocPagesFinal;
 
-    const html = `<!doctype html>
-<html>
-<head>
-<meta charset="utf-8"/>
-<base href="${origin}/" />
-<title>${esc(book.title)} – v${version.version_no}</title>
-<style>
-${inlineFontCSS}
-${cssFinal}
-</style>
-<script>${pagedInline}</script>
-</head>
-<body>
-  ${cover || ""}
-  ${front || ""}
-  ${header || ""}
-  ${footer || ""}
+    // Build chapter ranges (FINAL pdf 0-based)
+    // We locate start page for each chapter (from content anchors), then compute end by next start - 1
+    const chapterStartsFinal: Array<{ start0: number; title: string }> = [];
 
-  ${toc || ""}
+    for (const ch of chapterNodes) {
+      const uuid = ch.toc_item_id.toLowerCase();
+      const contentIdx = anchorMap.get(uuid);
+      if (typeof contentIdx !== "number") continue;
 
-  <main id="book-content">
-    ${main}
-  </main>
-</body>
-</html>`;
+      const start0 = contentStartFinal0 + contentIdx;
+      chapterStartsFinal.push({ start0, title: ch.title });
+    }
 
-    const browser = await launchBrowser();
-    const page = await browser.newPage();
+    chapterStartsFinal.sort((a, b) => a.start0 - b.start0);
 
-    page.on("console", (msg) =>
-      console.log("[render-pdf][browser]", msg.type(), msg.text())
-    );
-    page.on("pageerror", (err: unknown) => {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : typeof err === "string"
-          ? err
-          : JSON.stringify(err);
-      console.log("[render-pdf][pageerror]", msg);
-    });
-    page.on("requestfailed", (r) =>
-      console.log("[render-pdf][requestfailed]", r.url(), r.failure()?.errorText)
-    );
+    const mergedBeforeStamp = await mergePdfs([
+      coverPdf,
+      ...(frontPages ? [frontPdf] : []),
+      tocPdf,
+      contentPdf,
+    ]);
 
-    page.setDefaultNavigationTimeout(180000);
-    page.setDefaultTimeout(180000);
+    const totalPages = await countPdfPages(mergedBeforeStamp);
 
-    await page.emulateMediaType("screen");
-    await page.setContent(html, { waitUntil: "load", timeout: 180000 });
+    const chapterRanges: ChapterRange[] = [];
+    for (let i = 0; i < chapterStartsFinal.length; i++) {
+      const cur = chapterStartsFinal[i];
+      const next = chapterStartsFinal[i + 1];
+      const from = cur.start0;
+      const to = next ? Math.max(from, next.start0 - 1) : totalPages - 1;
 
-    // force eager images
-    await page.evaluate(() => {
-      document.querySelectorAll("img").forEach((img) => {
-        try {
-          // @ts-ignore
-          img.loading = "eager";
-          // @ts-ignore
-          img.decoding = "sync";
-          const src = img.getAttribute("src");
-          if (src) img.setAttribute("src", src);
-        } catch {}
+      chapterRanges.push({
+        from,
+        to,
+        title: cur.title,
       });
-    });
+    }
 
-    // wait fonts + images settle
-    await page.evaluate(async () => {
-      // @ts-ignore
-      if (document.fonts && document.fonts.ready) {
-        // @ts-ignore
-        await document.fonts.ready;
-      }
-
-      const imgs = Array.from(document.images || []);
-      await Promise.all(
-        imgs.map(async (img) => {
-          if (!img) return;
-
-          if (!img.complete) {
-            await new Promise((res) => {
-              img.addEventListener("load", () => res(null), { once: true });
-              img.addEventListener("error", () => res(null), { once: true });
-            });
-          }
-
-          // @ts-ignore
-          if (img.decode) {
-            try {
-              // @ts-ignore
-              await img.decode();
-            } catch {}
-          }
-        })
-      );
-    });
-
-    // ✅ sanitize DOM to avoid Paged list crash
-    await page.evaluate(SANITIZE_DOM_BEFORE_PAGED);
-
-    const sanitizeReport = await page.evaluate(() => {
-      // @ts-ignore
-      return (window as any).__SANITIZE_REPORT__ || null;
-    });
-    console.log("[render-pdf] sanitize report:", sanitizeReport);
-
-    // ✅ run Paged.js paginate
-    await page.evaluate(async () => {
-      // @ts-ignore
-      if (document.fonts && document.fonts.ready) {
-        // @ts-ignore
-        await document.fonts.ready;
-      }
-
-      // @ts-ignore
-      const w = window as any;
-
-      if (w.PagedPolyfill && w.PagedPolyfill.preview) {
-        await w.PagedPolyfill.preview();
-        return;
-      }
-
-      if (w.Paged && w.Paged.preview) {
-        await w.Paged.preview();
-        return;
-      }
-
-      throw new Error(
-        "Paged.js loaded but no preview() found (PagedPolyfill.preview / Paged.preview)."
-      );
-    });
-
-    await page.waitForSelector(".pagedjs_pages", { timeout: 180000 });
-
-    const pdfBuffer = await page.pdf({
-      format: "A4",
-      printBackground: true,
-      preferCSSPageSize: true,
-      margin: undefined,
+    // Stamp header/footer/page numbers
+    const finalPdf = await stampFinalPdf({
+      mergedPdf: mergedBeforeStamp,
+      coverPages,
+      bookTitle: book.title,
+      chapterRanges,
     });
 
     await browser.close();
 
+    // upload
     const pdf_path = `book/${book.id}/version/${version.id}/render/${renderId}.pdf`;
 
     const { error: upErr } = await admin.storage
       .from(BUCKET_PREVIEW)
-      .upload(pdf_path, pdfBuffer, {
+      .upload(pdf_path, finalPdf, {
         contentType: "application/pdf",
         upsert: true,
       });
@@ -816,6 +962,12 @@ ${cssFinal}
       ok: true,
       render_id: renderId,
       preview_url: signed.signedUrl,
+      meta: {
+        cover_pages: coverPages,
+        front_pages: frontPages,
+        toc_pages: tocPagesFinal,
+        total_pages: totalPages,
+      },
     });
   } catch (e: any) {
     console.error("[render-pdf] ERROR:", e);
