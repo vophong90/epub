@@ -980,3 +980,31 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+
+export async function GET() {
+  return NextResponse.json(
+    {
+      ok: true,
+      route: "/api/books/version/render-pdf",
+      methods: ["POST"],
+      note: "If you see this on production, route is deployed correctly.",
+    },
+    {
+      status: 200,
+      headers: {
+        "Cache-Control": "no-store",
+      },
+    }
+  );
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: {
+      Allow: "POST, GET, OPTIONS",
+      "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+      "Access-Control-Allow-Headers": "content-type, authorization",
+    },
+  });
+}
