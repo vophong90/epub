@@ -4,7 +4,6 @@ import { getRouteClient } from "@/lib/supabaseServer";
 import { getAdminClient } from "@/lib/supabase-admin";
 
 import puppeteer, { type Browser } from "puppeteer-core";
-import { createRequire } from "module";
 import chromium from "@sparticuz/chromium-min";
 
 import fs from "fs";
