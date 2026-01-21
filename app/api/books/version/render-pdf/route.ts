@@ -10,23 +10,8 @@ import fs from "fs";
 import path from "path";
 
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { createRequire } from "module";
 import { pathToFileURL } from "url";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
-
-const require = createRequire(import.meta.url);
-
-try {
-  const workerPath = require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
-  const absWorkerPath = path.isAbsolute(workerPath)
-    ? workerPath
-    : path.resolve(process.cwd(), workerPath);
-
-  (pdfjsLib as any).GlobalWorkerOptions.workerSrc = pathToFileURL(absWorkerPath).toString();
-  (pdfjsLib as any).GlobalWorkerOptions.workerPort = null;
-} catch (e) {
-  console.error("[render-pdf] set pdfjs workerSrc failed:", e);
-}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -391,11 +376,26 @@ async function countPdfPages(pdfBuffer: Buffer) {
  *   __ANCHOR__toc-<uuid>__
  */
 async function extractAnchorPagesFromPdf(contentPdf: Buffer) {
+  // ✅ tuyệt đối không set workerSrc
+  try {
+    (pdfjsLib as any).GlobalWorkerOptions.workerSrc = undefined;
+    (pdfjsLib as any).GlobalWorkerOptions.workerPort = null;
+  } catch {}
+
   const loadingTask = (pdfjsLib as any).getDocument({
     data: new Uint8Array(contentPdf),
-    disableWorker: true, // ✅ cực quan trọng
-    useSystemFonts: true,
+
+    // ✅ chạy same-thread, không worker
+    disableWorker: true,
+
+    // ✅ giảm các thứ hay gây lỗi serverless
     isEvalSupported: false,
+    useSystemFonts: true,
+    disableFontFace: true,
+
+    // ✅ tránh cố load CMap/standard fonts (tùy môi trường)
+    cMapPacked: true,
+    standardFontDataUrl: undefined,
   });
 
   const pdf = await loadingTask.promise;
@@ -418,7 +418,6 @@ async function extractAnchorPagesFromPdf(contentPdf: Buffer) {
       }
     }
   } finally {
-    // ✅ cleanup
     await pdf.destroy?.();
   }
 
