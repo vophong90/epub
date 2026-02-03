@@ -1,6 +1,6 @@
 // app/api/toc/move-to-section/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser } from "../_helpers"; // ✅ sửa lại đường dẫn
+import { requireUser } from "../_helpers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,7 +24,8 @@ type TocItemRow = {
 function normalizeUuidish(v: unknown): string | null {
   if (v === null || v === undefined) return null;
   const s = String(v).trim();
-  if (!s || s.toLowerCase() === "null") return null;
+  if (!s || s.toLowerCase() === "null" || s.toLowerCase() === "undefined")
+    return null;
   return s;
 }
 
@@ -38,7 +39,7 @@ async function requireEditorByVersionId(
     return {
       ok: false,
       res: NextResponse.json(
-        { error: "version_id không hợp lệ" },
+        { error: "book_version_id không hợp lệ" },
         { status: 400 }
       ),
     };
@@ -77,7 +78,7 @@ async function requireEditorByVersionId(
     };
   }
 
-  return { ok: true };
+  return { ok: true as const };
 }
 
 export async function POST(req: NextRequest) {
@@ -86,23 +87,21 @@ export async function POST(req: NextRequest) {
 
   let body: Body = {};
   try {
-    body = await req.json();
+    body = (await req.json()) as Body;
   } catch {
     body = {};
   }
 
-  const book_version_id = normalizeUuidish(body.book_version_id);
+  let book_version_id = normalizeUuidish(body.book_version_id);
   const section_id = normalizeUuidish(body.section_id);
+
   const chapter_ids = Array.isArray(body.chapter_ids)
-    ? body.chapter_ids.map((x) => normalizeUuidish(x)).filter(Boolean) as string[]
+    ? (body.chapter_ids
+        .map((x) => normalizeUuidish(x))
+        .filter(Boolean) as string[])
     : [];
 
-  if (!book_version_id) {
-    return NextResponse.json(
-      { error: "book_version_id là bắt buộc" },
-      { status: 400 }
-    );
-  }
+  // 0) Validate tối thiểu
   if (!section_id) {
     return NextResponse.json(
       { error: "section_id là bắt buộc" },
@@ -116,14 +115,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const gate = await requireEditorByVersionId(
-    supabase,
-    user!.id,
-    book_version_id
-  );
-  if (!gate.ok) return (gate as any).res;
-
-  // 1) Kiểm tra section hợp lệ
+  // 1) Lấy section (đồng thời suy ra book_version_id nếu thiếu)
   const { data: section, error: sErr } = await supabase
     .from("toc_items")
     .select("id,book_version_id,parent_id,kind,order_index")
@@ -139,20 +131,36 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (!book_version_id) book_version_id = normalizeUuidish(sec.book_version_id);
+
+  if (!book_version_id) {
+    return NextResponse.json(
+      { error: "Không suy ra được book_version_id" },
+      { status: 400 }
+    );
+  }
+
+  // 2) Gate quyền editor theo version
+  const gate = await requireEditorByVersionId(
+    supabase,
+    user!.id,
+    book_version_id
+  );
+  if (!gate.ok) return (gate as any).res;
+
+  // 3) Validate section đúng version, đúng kind, đúng root
   if (sec.book_version_id !== book_version_id) {
     return NextResponse.json(
       { error: "Section không thuộc phiên bản sách này" },
       { status: 400 }
     );
   }
-
   if (sec.kind !== "section") {
     return NextResponse.json(
       { error: "Mục được chọn không phải là PHẦN (section)" },
       { status: 400 }
     );
   }
-
   if (sec.parent_id !== null) {
     return NextResponse.json(
       { error: "Section phải là mục root (parent_id = null)" },
@@ -160,7 +168,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 2) Lấy các chương cần move, chỉ nhận chapter root
+  // 4) Lấy các chương cần move trong đúng version
   const { data: chaptersRaw, error: cErr } = await supabase
     .from("toc_items")
     .select("id,book_version_id,parent_id,kind,order_index")
@@ -176,9 +184,24 @@ export async function POST(req: NextRequest) {
 
   const chaptersAll = (chaptersRaw || []) as TocItemRow[];
 
+  // Chỉ nhận chapter root (parent_id null)
   const chaptersToMove = chaptersAll.filter(
-    (ch) => ch.kind === "chapter" && ch.parent_id === null && ch.id !== section_id
+    (ch) => ch.kind === "chapter" && ch.parent_id === null
   );
+
+  // Nếu client gửi IDs mà không match được rows
+  const foundIds = new Set(chaptersAll.map((c) => c.id));
+  const missingIds = chapter_ids.filter((id) => !foundIds.has(id));
+
+  if (missingIds.length) {
+    return NextResponse.json(
+      {
+        error: "Một số chapter_ids không hợp lệ hoặc không thuộc phiên bản này",
+        missing_ids: missingIds,
+      },
+      { status: 400 }
+    );
+  }
 
   if (!chaptersToMove.length) {
     return NextResponse.json(
@@ -187,7 +210,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Sắp theo thứ tự tick
+  // Sắp theo thứ tự client tick
   const orderIndexMap = new Map<string, number>();
   chapter_ids.forEach((id, idx) => orderIndexMap.set(id, idx));
   chaptersToMove.sort(
@@ -195,7 +218,7 @@ export async function POST(req: NextRequest) {
       (orderIndexMap.get(a.id) ?? 0) - (orderIndexMap.get(b.id) ?? 0)
   );
 
-  // 3) Lấy order_index lớn nhất trong section
+  // 5) Lấy order_index lớn nhất trong section (children)
   const { data: lastChild, error: lcErr } = await supabase
     .from("toc_items")
     .select("order_index")
@@ -215,7 +238,7 @@ export async function POST(req: NextRequest) {
   let nextOrder =
     ((lastChild as { order_index: number } | null)?.order_index ?? 0) + 1;
 
-  // 4) Move từng chương
+  // 6) Move từng chương
   for (const ch of chaptersToMove) {
     const { error: upErr } = await supabase
       .from("toc_items")
@@ -223,7 +246,8 @@ export async function POST(req: NextRequest) {
         parent_id: section_id,
         order_index: nextOrder++,
       })
-      .eq("id", ch.id);
+      .eq("id", ch.id)
+      .eq("book_version_id", book_version_id);
 
     if (upErr) {
       return NextResponse.json(
@@ -235,6 +259,8 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({
     ok: true,
+    book_version_id,
+    section_id,
     moved_count: chaptersToMove.length,
   });
 }
