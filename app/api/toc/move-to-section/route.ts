@@ -184,11 +184,6 @@ export async function POST(req: NextRequest) {
 
   const chaptersAll = (chaptersRaw || []) as TocItemRow[];
 
-  // Chỉ nhận chapter root (parent_id null)
-  const chaptersToMove = chaptersAll.filter(
-    (ch) => ch.kind === "chapter" && ch.parent_id === null
-  );
-
   // Nếu client gửi IDs mà không match được rows
   const foundIds = new Set(chaptersAll.map((c) => c.id));
   const missingIds = chapter_ids.filter((id) => !foundIds.has(id));
@@ -203,11 +198,21 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // ✅ Cho phép chuyển chương từ phần khác:
+  // nhận mọi "chapter" trong version (không bắt buộc parent_id === null)
+  // đồng thời loại những chương đã nằm trong section mục tiêu để khỏi update vô nghĩa
+  const chaptersToMove = chaptersAll.filter(
+    (ch) => ch.kind === "chapter" && ch.parent_id !== section_id
+  );
+
+  // Không còn gì để chuyển => OK (0 moved)
   if (!chaptersToMove.length) {
-    return NextResponse.json(
-      { error: "Không có chương root hợp lệ để đưa vào PHẦN này" },
-      { status: 400 }
-    );
+    return NextResponse.json({
+      ok: true,
+      book_version_id,
+      section_id,
+      moved_count: 0,
+    });
   }
 
   // Sắp theo thứ tự client tick
