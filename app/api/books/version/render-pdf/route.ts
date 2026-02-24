@@ -247,20 +247,50 @@ async function buildNodesFromDB(
 
 /** Build TOC HTML */
 function buildTocHtml(nodes: RenderNode[], tocDepth: number) {
+  // map để biết parent của 1 node là gì
+  const byId = new Map(nodes.map((n) => [n.toc_item_id, n]));
+
   const entries = nodes
     .filter((n) => n.kind === "section" || n.kind === "chapter")
     .filter((n) => (n.kind === "section" ? 1 : 2) <= tocDepth)
-    .map((n) => ({
-      label: n.title,
-      href: `#${n.id}`,
-      level: n.kind === "section" ? 1 : 2,
-    }));
+    .map((n) => {
+      const level = n.kind === "section" ? 1 : 2;
+
+      let extraClass = "";
+
+      if (n.kind === "chapter") {
+        if (!n.parent_id) {
+          // chapter root → không thuộc phần
+          extraClass = "unnumbered";
+        } else {
+          const parent = byId.get(n.parent_id);
+          if (parent?.kind === "section") {
+            extraClass = "numbered";
+          } else {
+            extraClass = "unnumbered";
+          }
+        }
+      }
+
+      return {
+        label: n.title,
+        href: `#${n.id}`,
+        level,
+        extraClass,
+      };
+    });
 
   const rows = entries
     .map((e) => {
       const pad = e.level === 2 ? 18 : 0;
+
+      const cls =
+        e.level === 2
+          ? `toc-item level-${e.level} ${e.extraClass}`
+          : `toc-item level-${e.level}`;
+
       return `
-<li class="toc-item level-${e.level}" style="padding-left:${pad}px">
+<li class="${cls}" style="padding-left:${pad}px">
   <a class="toc-link" href="${esc(e.href)}">
     <span class="toc-label">${esc(e.label)}</span>
     <span class="toc-dots"></span>
