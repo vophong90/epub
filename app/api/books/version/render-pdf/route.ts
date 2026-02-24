@@ -85,6 +85,11 @@ type TemplateRow = {
   css: string | null;
   cover_html: string | null;
   front_matter_html: string | null;
+
+  // ✅ NEW: thêm 2 phần
+  abbrev_html: string | null;
+  index_html: string | null;
+
   toc_html: string | null;
   header_html: string | null;
   footer_html: string | null;
@@ -158,7 +163,10 @@ async function fetchAllTocContentsByItemIds(admin: any, tocItemIds: string[]) {
   return all;
 }
 
-async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNode[]> {
+async function buildNodesFromDB(
+  admin: any,
+  versionId: string
+): Promise<RenderNode[]> {
   const tocItems = await fetchAllTocItemsByVersion(admin, versionId);
   if (!tocItems.length) return [];
 
@@ -214,7 +222,9 @@ async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNo
           ? "chapter"
           : it.kind === "heading"
           ? "heading"
-          : (it.parent_id == null ? "chapter" : "heading");
+          : it.parent_id == null
+          ? "chapter"
+          : "heading";
 
       nodes.push({
         id: anchor,
@@ -323,7 +333,10 @@ export async function POST(req: NextRequest) {
 
   const versionId = (body.version_id || "").toString().trim();
   if (!versionId) {
-    return NextResponse.json({ error: "version_id là bắt buộc" }, { status: 400 });
+    return NextResponse.json(
+      { error: "version_id là bắt buộc" },
+      { status: 400 }
+    );
   }
 
   const { data: version, error: vErr } = await admin
@@ -333,7 +346,8 @@ export async function POST(req: NextRequest) {
     .maybeSingle<VersionRow>();
 
   if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 });
-  if (!version) return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
+  if (!version)
+    return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
 
   let templateId = (body.template_id || "").toString().trim();
   if (!templateId) templateId = version.template_id || "";
@@ -365,12 +379,16 @@ export async function POST(req: NextRequest) {
       .in("role", ["author", "editor"])
       .maybeSingle();
 
-    if (permErr) return NextResponse.json({ error: permErr.message }, { status: 500 });
+    if (permErr)
+      return NextResponse.json({ error: permErr.message }, { status: 500 });
     canRender = !!perm;
   }
 
   if (!canRender) {
-    return NextResponse.json({ error: "Bạn không có quyền render PDF" }, { status: 403 });
+    return NextResponse.json(
+      { error: "Bạn không có quyền render PDF" },
+      { status: 403 }
+    );
   }
 
   const { data: book, error: bErr } = await admin
@@ -382,9 +400,12 @@ export async function POST(req: NextRequest) {
   if (bErr) return NextResponse.json({ error: bErr.message }, { status: 500 });
   if (!book) return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
 
+  // ✅ NEW: select thêm abbrev_html, index_html
   const { data: tpl, error: tErr } = await admin
     .from("book_templates")
-    .select("id,name,css,cover_html,front_matter_html,toc_html,header_html,footer_html,page_size,page_margin_mm,toc_depth")
+    .select(
+      "id,name,css,cover_html,front_matter_html,abbrev_html,index_html,toc_html,header_html,footer_html,page_size,page_margin_mm,toc_depth"
+    )
     .eq("id", templateId)
     .eq("is_active", true)
     .maybeSingle<TemplateRow>();
@@ -442,6 +463,10 @@ html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 
     const coverBody = token(tpl.cover_html || "");
     const frontBody = token(tpl.front_matter_html || "");
+
+    // ✅ NEW: 2 phần extra (có thể rỗng)
+    const abbrevBody = token(tpl.abbrev_html || "");
+    const indexBody = token(tpl.index_html || "");
 
     const tocBody =
       tpl.toc_html && tpl.toc_html.trim()
@@ -509,13 +534,17 @@ html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 
     closePartBodyIfOpen();
 
+    // ✅ NEW: ghép theo thứ tự:
+    // cover -> lời mở đầu -> danh mục viết tắt -> mục lục -> nội dung -> index
     const fullBody = `
 ${coverBody}
 ${frontBody}
+${abbrevBody}
 ${tocBody}
 <main id="book-content">
 ${contentOut}
 </main>
+${indexBody}
 `;
 
     const fullHtml = buildBaseHtmlDoc({
