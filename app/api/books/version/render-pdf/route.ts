@@ -14,7 +14,7 @@ const SIGNED_EXPIRES_SEC = 60 * 10;
 type Body = {
   version_id?: string;
   template_id?: string;
-  test?: boolean; // optional: override test flag (true/false)
+  test?: boolean;
 };
 
 function esc(s: string) {
@@ -62,9 +62,9 @@ type TocContentRow = {
 };
 
 type RenderNode = {
-  id: string; // anchor id in HTML
+  id: string;
   toc_item_id: string;
-  parent_id: string | null; // ✅ needed to prevent “kéo nhầm vào phần”
+  parent_id: string | null;
   title: string;
   slug: string;
   kind: "section" | "chapter" | "heading";
@@ -100,10 +100,7 @@ function makeAnchor(tocItemId: string) {
 /* =========================
  * Supabase range paging
  * ========================= */
-async function fetchAllTocItemsByVersion(
-  admin: any,
-  versionId: string
-): Promise<TocItemRow[]> {
+async function fetchAllTocItemsByVersion(admin: any, versionId: string) {
   const PAGE = 1000;
   let from = 0;
   const all: TocItemRow[] = [];
@@ -129,10 +126,7 @@ async function fetchAllTocItemsByVersion(
   return all;
 }
 
-async function fetchAllTocContentsByItemIds(
-  admin: any,
-  tocItemIds: string[]
-): Promise<TocContentRow[]> {
+async function fetchAllTocContentsByItemIds(admin: any, tocItemIds: string[]) {
   if (!tocItemIds.length) return [];
 
   const ID_CHUNK = 500;
@@ -164,10 +158,7 @@ async function fetchAllTocContentsByItemIds(
   return all;
 }
 
-async function buildNodesFromDB(
-  admin: any,
-  versionId: string
-): Promise<RenderNode[]> {
+async function buildNodesFromDB(admin: any, versionId: string): Promise<RenderNode[]> {
   const tocItems = await fetchAllTocItemsByVersion(admin, versionId);
   if (!tocItems.length) return [];
 
@@ -187,14 +178,12 @@ async function buildNodesFromDB(
     children.get(key)!.push(it);
   }
 
-  // ✅ FIX A: sort root-level so “chapter không thuộc phần” luôn đứng trước “section/PHẦN”
+  // ✅ Root-level: chapter không thuộc phần đứng trước section
   for (const [k, arr] of children.entries()) {
     arr.sort((a, b) => {
       if (k === null) {
-        const ra =
-          a.kind === "chapter" ? 0 : a.kind === "section" ? 1 : 2;
-        const rb =
-          b.kind === "chapter" ? 0 : b.kind === "section" ? 1 : 2;
+        const ra = a.kind === "chapter" ? 0 : a.kind === "section" ? 1 : 2;
+        const rb = b.kind === "chapter" ? 0 : b.kind === "section" ? 1 : 2;
         if (ra !== rb) return ra - rb;
       }
       return (a.order_index ?? 0) - (b.order_index ?? 0);
@@ -213,19 +202,24 @@ async function buildNodesFromDB(
       const cj = c?.content_json || {};
       const html = typeof cj?.html === "string" ? cj.html : "";
 
-      // ✅ FIX #1: KHÔNG suy luận depth=1 => chapter.
-      // Nếu DB chưa set kind, mặc định coi là "heading".
+      // ✅ FIX CHUẨN:
+      // - nếu DB set kind => dùng đúng
+      // - nếu kind null:
+      //    + root-level (parent_id null) => CHAPTER
+      //    + non-root => HEADING
       const kind: "section" | "chapter" | "heading" =
         it.kind === "section"
           ? "section"
           : it.kind === "chapter"
           ? "chapter"
-          : "heading";
+          : it.kind === "heading"
+          ? "heading"
+          : (it.parent_id == null ? "chapter" : "heading");
 
       nodes.push({
         id: anchor,
         toc_item_id: it.id,
-        parent_id: it.parent_id ?? null, // ✅ ADD
+        parent_id: it.parent_id ?? null,
         title: it.title,
         slug: it.slug,
         kind,
@@ -241,7 +235,7 @@ async function buildNodesFromDB(
   return nodes;
 }
 
-/** Build TOC HTML (KHÔNG dùng leader(), tránh rớt dòng) */
+/** Build TOC HTML */
 function buildTocHtml(nodes: RenderNode[], tocDepth: number) {
   const entries = nodes
     .filter((n) => n.kind === "section" || n.kind === "chapter")
@@ -329,10 +323,7 @@ export async function POST(req: NextRequest) {
 
   const versionId = (body.version_id || "").toString().trim();
   if (!versionId) {
-    return NextResponse.json(
-      { error: "version_id là bắt buộc" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "version_id là bắt buộc" }, { status: 400 });
   }
 
   const { data: version, error: vErr } = await admin
@@ -342,11 +333,7 @@ export async function POST(req: NextRequest) {
     .maybeSingle<VersionRow>();
 
   if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 });
-  if (!version)
-    return NextResponse.json(
-      { error: "Không tìm thấy version" },
-      { status: 404 }
-    );
+  if (!version) return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
 
   let templateId = (body.template_id || "").toString().trim();
   if (!templateId) templateId = version.template_id || "";
@@ -378,16 +365,12 @@ export async function POST(req: NextRequest) {
       .in("role", ["author", "editor"])
       .maybeSingle();
 
-    if (permErr)
-      return NextResponse.json({ error: permErr.message }, { status: 500 });
+    if (permErr) return NextResponse.json({ error: permErr.message }, { status: 500 });
     canRender = !!perm;
   }
 
   if (!canRender) {
-    return NextResponse.json(
-      { error: "Bạn không có quyền render PDF" },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: "Bạn không có quyền render PDF" }, { status: 403 });
   }
 
   const { data: book, error: bErr } = await admin
@@ -397,24 +380,17 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
 
   if (bErr) return NextResponse.json({ error: bErr.message }, { status: 500 });
-  if (!book)
-    return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
+  if (!book) return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
 
   const { data: tpl, error: tErr } = await admin
     .from("book_templates")
-    .select(
-      "id,name,css,cover_html,front_matter_html,toc_html,header_html,footer_html,page_size,page_margin_mm,toc_depth"
-    )
+    .select("id,name,css,cover_html,front_matter_html,toc_html,header_html,footer_html,page_size,page_margin_mm,toc_depth")
     .eq("id", templateId)
     .eq("is_active", true)
     .maybeSingle<TemplateRow>();
 
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
-  if (!tpl)
-    return NextResponse.json(
-      { error: "Không tìm thấy template" },
-      { status: 404 }
-    );
+  if (!tpl) return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
 
   const tocDepth = Number.isFinite(Number(tpl.toc_depth))
     ? Math.min(6, Math.max(1, Number(tpl.toc_depth)))
@@ -453,7 +429,6 @@ export async function POST(req: NextRequest) {
         .replaceAll("{{CHAPTER_TITLE}}", "")
         .replaceAll("{{SITE_ORIGIN}}", origin);
 
-    // base css
     const basePagedCss = `
 @page { size: A4; margin: 20mm; }
 @page:first { }
@@ -473,8 +448,7 @@ html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         ? token(tpl.toc_html)
         : buildTocHtml(nodes, tocDepth);
 
-    // ✅ FIX #2: Wrap chapters under each part into .part-body
-    // and mark chapters inside parts as ".chapter numbered"
+    // Build content with part-body wrap
     let contentOut = "";
     let partBodyOpen = false;
 
@@ -486,8 +460,7 @@ html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     };
 
     for (const n of nodes) {
-      // ✅ FIX B: nếu đang mở part-body mà gặp node root-level (parent_id=null)
-      // và node đó KHÔNG phải "section" => nó KHÔNG thuộc phần => đóng part-body trước
+      // nếu đang mở part-body mà gặp root-level không phải section => đóng
       if (partBodyOpen && n.parent_id === null && n.kind !== "section") {
         closePartBodyIfOpen();
       }
@@ -510,7 +483,6 @@ html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
           ? n.html
           : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
 
-        // If we are currently inside a part-body -> numbered
         const cls = partBodyOpen ? "chapter numbered" : "chapter unnumbered";
 
         contentOut += `
@@ -535,17 +507,14 @@ html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 `;
     }
 
-    // close last part body
     closePartBodyIfOpen();
-
-    const contentBody = contentOut;
 
     const fullBody = `
 ${coverBody}
 ${frontBody}
 ${tocBody}
 <main id="book-content">
-${contentBody}
+${contentOut}
 </main>
 `;
 
@@ -600,11 +569,7 @@ ${contentBody}
       ok: true,
       render_id: renderId,
       preview_url: signed.signedUrl,
-      meta: {
-        toc_depth: tocDepth,
-        nodes: nodes.length,
-        test: testFlag,
-      },
+      meta: { toc_depth: tocDepth, nodes: nodes.length, test: testFlag },
     });
   } catch (e: any) {
     console.error("[render-pdf] ERROR:", e);
@@ -619,11 +584,7 @@ ${contentBody}
       .eq("id", renderId);
 
     return NextResponse.json(
-      {
-        error: "Render PDF failed",
-        detail: e?.message || String(e),
-        render_id: renderId,
-      },
+      { error: "Render PDF failed", detail: e?.message || String(e), render_id: renderId },
       { status: 500 }
     );
   }
@@ -631,16 +592,8 @@ ${contentBody}
 
 export async function GET() {
   return NextResponse.json(
-    {
-      ok: true,
-      route: "/api/books/version/render-pdf",
-      methods: ["POST"],
-      note: "DocRaptor enabled",
-    },
-    {
-      status: 200,
-      headers: { "Cache-Control": "no-store" },
-    }
+    { ok: true, route: "/api/books/version/render-pdf", methods: ["POST"], note: "DocRaptor enabled" },
+    { status: 200, headers: { "Cache-Control": "no-store" } }
   );
 }
 
