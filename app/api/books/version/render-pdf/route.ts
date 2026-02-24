@@ -201,12 +201,12 @@ async function buildNodesFromDB(
       const cj = c?.content_json || {};
       const html = typeof cj?.html === "string" ? cj.html : "";
 
+      // ✅ FIX #1: KHÔNG suy luận depth=1 => chapter.
+      // Nếu DB chưa set kind, mặc định coi là "heading".
       const kind: "section" | "chapter" | "heading" =
         it.kind === "section"
           ? "section"
           : it.kind === "chapter"
-          ? "chapter"
-          : depth === 1
           ? "chapter"
           : "heading";
 
@@ -271,7 +271,6 @@ function buildBaseHtmlDoc(params: {
 }) {
   const { origin, title, cssFinal, bodyHtml } = params;
 
-  // ✅ base href để các url tương đối (/fonts, /images) resolve đúng
   return `<!doctype html>
 <html>
 <head>
@@ -317,7 +316,10 @@ export async function POST(req: NextRequest) {
 
   const versionId = (body.version_id || "").toString().trim();
   if (!versionId) {
-    return NextResponse.json({ error: "version_id là bắt buộc" }, { status: 400 });
+    return NextResponse.json(
+      { error: "version_id là bắt buộc" },
+      { status: 400 }
+    );
   }
 
   const { data: version, error: vErr } = await admin
@@ -327,7 +329,8 @@ export async function POST(req: NextRequest) {
     .maybeSingle<VersionRow>();
 
   if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 });
-  if (!version) return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
+  if (!version)
+    return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
 
   let templateId = (body.template_id || "").toString().trim();
   if (!templateId) templateId = version.template_id || "";
@@ -359,12 +362,16 @@ export async function POST(req: NextRequest) {
       .in("role", ["author", "editor"])
       .maybeSingle();
 
-    if (permErr) return NextResponse.json({ error: permErr.message }, { status: 500 });
+    if (permErr)
+      return NextResponse.json({ error: permErr.message }, { status: 500 });
     canRender = !!perm;
   }
 
   if (!canRender) {
-    return NextResponse.json({ error: "Bạn không có quyền render PDF" }, { status: 403 });
+    return NextResponse.json(
+      { error: "Bạn không có quyền render PDF" },
+      { status: 403 }
+    );
   }
 
   const { data: book, error: bErr } = await admin
@@ -374,17 +381,21 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
 
   if (bErr) return NextResponse.json({ error: bErr.message }, { status: 500 });
-  if (!book) return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
+  if (!book)
+    return NextResponse.json({ error: "Không tìm thấy book" }, { status: 404 });
 
   const { data: tpl, error: tErr } = await admin
     .from("book_templates")
-    .select("id,name,css,cover_html,front_matter_html,toc_html,header_html,footer_html,page_size,page_margin_mm,toc_depth")
+    .select(
+      "id,name,css,cover_html,front_matter_html,toc_html,header_html,footer_html,page_size,page_margin_mm,toc_depth"
+    )
     .eq("id", templateId)
     .eq("is_active", true)
     .maybeSingle<TemplateRow>();
 
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
-  if (!tpl) return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
+  if (!tpl)
+    return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
 
   const tocDepth = Number.isFinite(Number(tpl.toc_depth))
     ? Math.min(6, Math.max(1, Number(tpl.toc_depth)))
@@ -420,10 +431,10 @@ export async function POST(req: NextRequest) {
       (s || "")
         .replaceAll("{{BOOK_TITLE}}", esc(book.title))
         .replaceAll("{{YEAR}}", esc(year))
-        .replaceAll("{{CHAPTER_TITLE}}", "") // nếu template bạn còn dùng
+        .replaceAll("{{CHAPTER_TITLE}}", "")
         .replaceAll("{{SITE_ORIGIN}}", origin);
 
-    // ✅ CSS: thêm rules Paged Media cơ bản + absolutize /fonts
+    // base css
     const basePagedCss = `
 @page { size: A4; margin: 20mm; }
 @page:first { }
@@ -435,54 +446,76 @@ html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 
     const nodes = await buildNodesFromDB(admin, versionId);
 
-    // cover/front/content (content là 1 luồng HTML duy nhất để engine tự dàn trang)
     const coverBody = token(tpl.cover_html || "");
     const frontBody = token(tpl.front_matter_html || "");
 
-    // ✅ TOC: ưu tiên tpl.toc_html nếu bạn muốn tự thiết kế,
-    // nếu không có thì dùng buildTocHtml() auto.
     const tocBody =
-      (tpl.toc_html && tpl.toc_html.trim())
+      tpl.toc_html && tpl.toc_html.trim()
         ? token(tpl.toc_html)
         : buildTocHtml(nodes, tocDepth);
 
-    // ✅ Build content sections: section/chapter/heading
-    // - Quan trọng: mỗi mục có id = anchor để TOC target-counter bắt đúng trang
-    const contentBody = nodes
-      .map((n) => {
-        if (n.kind === "section") {
-          return `
+    // ✅ FIX #2: Wrap chapters under each part into .part-body
+    // and mark chapters inside parts as ".chapter numbered"
+    let contentOut = "";
+    let partBodyOpen = false;
+
+    const closePartBodyIfOpen = () => {
+      if (partBodyOpen) {
+        contentOut += `</div>\n`;
+        partBodyOpen = false;
+      }
+    };
+
+    for (const n of nodes) {
+      if (n.kind === "section") {
+        // close previous part body if any
+        closePartBodyIfOpen();
+
+        contentOut += `
 <section class="part" id="${esc(n.id)}">
   <h1 class="part-title">${esc(n.title)}</h1>
-</section>`;
-        }
+</section>
+<div class="part-body" data-part="${esc(n.id)}">
+`;
+        partBodyOpen = true;
+        continue;
+      }
 
-        if (n.kind === "chapter") {
-          const inner = n.html?.trim()
-            ? n.html
-            : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
-
-          return `
-<section class="chapter" id="${esc(n.id)}">
-  <h1 class="chapter-title">${esc(n.title)}</h1>
-  <div class="chapter-body">${inner}</div>
-</section>`;
-        }
-
-        // heading (nếu bạn muốn heading cũng link được từ TOC sau này)
+      if (n.kind === "chapter") {
         const inner = n.html?.trim()
           ? n.html
           : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
 
-        return `
+        // If we are currently inside a part-body -> numbered
+        const cls = partBodyOpen ? "chapter numbered" : "chapter unnumbered";
+
+        contentOut += `
+<section class="${cls}" id="${esc(n.id)}">
+  <h1 class="chapter-title">${esc(n.title)}</h1>
+  <div class="chapter-body">${inner}</div>
+</section>
+`;
+        continue;
+      }
+
+      // heading
+      const inner = n.html?.trim()
+        ? n.html
+        : `<p style="color:#777;"><em>(Chưa có nội dung)</em></p>`;
+
+      contentOut += `
 <section class="heading" id="${esc(n.id)}">
   <h2 class="heading-title">${esc(n.title)}</h2>
   <div class="heading-body">${inner}</div>
-</section>`;
-      })
-      .join("\n");
+</section>
+`;
+    }
 
-    // ✅ Gộp full HTML 1 lần (DocRaptor sẽ tự chia trang + tự ra TOC page numbers)
+    // close last part body
+    closePartBodyIfOpen();
+
+    const contentBody = contentOut;
+
     const fullBody = `
 ${coverBody}
 ${frontBody}
@@ -499,13 +532,10 @@ ${contentBody}
       bodyHtml: fullBody,
     });
 
-    // ✅ test flag
-    // - Nếu bạn dùng Free plan: nên để true (trial)
-    // - Khi nâng plan production: set false
     const testFlag =
       typeof body.test === "boolean"
         ? body.test
-        : process.env.NODE_ENV !== "production"; // dev=true, prod=false
+        : process.env.NODE_ENV !== "production";
 
     const pdfBuffer = await renderPdfWithDocRaptor({
       html: fullHtml,
