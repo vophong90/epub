@@ -64,6 +64,7 @@ type TocContentRow = {
 type RenderNode = {
   id: string; // anchor id in HTML
   toc_item_id: string;
+  parent_id: string | null; // ✅ needed to prevent “kéo nhầm vào phần”
   title: string;
   slug: string;
   kind: "section" | "chapter" | "heading";
@@ -185,8 +186,19 @@ async function buildNodesFromDB(
     if (!children.has(key)) children.set(key, []);
     children.get(key)!.push(it);
   }
+
+  // ✅ FIX A: sort root-level so “chapter không thuộc phần” luôn đứng trước “section/PHẦN”
   for (const [k, arr] of children.entries()) {
-    arr.sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0));
+    arr.sort((a, b) => {
+      if (k === null) {
+        const ra =
+          a.kind === "chapter" ? 0 : a.kind === "section" ? 1 : 2;
+        const rb =
+          b.kind === "chapter" ? 0 : b.kind === "section" ? 1 : 2;
+        if (ra !== rb) return ra - rb;
+      }
+      return (a.order_index ?? 0) - (b.order_index ?? 0);
+    });
     children.set(k, arr);
   }
 
@@ -213,6 +225,7 @@ async function buildNodesFromDB(
       nodes.push({
         id: anchor,
         toc_item_id: it.id,
+        parent_id: it.parent_id ?? null, // ✅ ADD
         title: it.title,
         slug: it.slug,
         kind,
@@ -330,7 +343,10 @@ export async function POST(req: NextRequest) {
 
   if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 });
   if (!version)
-    return NextResponse.json({ error: "Không tìm thấy version" }, { status: 404 });
+    return NextResponse.json(
+      { error: "Không tìm thấy version" },
+      { status: 404 }
+    );
 
   let templateId = (body.template_id || "").toString().trim();
   if (!templateId) templateId = version.template_id || "";
@@ -395,7 +411,10 @@ export async function POST(req: NextRequest) {
 
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
   if (!tpl)
-    return NextResponse.json({ error: "Không tìm thấy template" }, { status: 404 });
+    return NextResponse.json(
+      { error: "Không tìm thấy template" },
+      { status: 404 }
+    );
 
   const tocDepth = Number.isFinite(Number(tpl.toc_depth))
     ? Math.min(6, Math.max(1, Number(tpl.toc_depth)))
@@ -467,8 +486,13 @@ html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     };
 
     for (const n of nodes) {
+      // ✅ FIX B: nếu đang mở part-body mà gặp node root-level (parent_id=null)
+      // và node đó KHÔNG phải "section" => nó KHÔNG thuộc phần => đóng part-body trước
+      if (partBodyOpen && n.parent_id === null && n.kind !== "section") {
+        closePartBodyIfOpen();
+      }
+
       if (n.kind === "section") {
-        // close previous part body if any
         closePartBodyIfOpen();
 
         contentOut += `
