@@ -3,15 +3,32 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
+import { createClient } from "@supabase/supabase-js";
 import { getAdminClient } from "@/lib/supabase-admin";
 
 const BUCKET = "published_pdfs";
 const EXPIRES_SEC = 60; // link tải ngắn hơn
 
+function getServerSupabaseFromRequest(req: NextRequest) {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+  return createClient(supabaseUrl, supabaseAnonKey, {
+    global: {
+      headers: {
+        cookie: req.headers.get("cookie") ?? "",
+      },
+    },
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+}
+
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -25,11 +42,11 @@ export async function GET(
       );
     }
 
-    const supa = createRouteHandlerClient({ cookies });
+    const serverSupabase = getServerSupabaseFromRequest(req);
     const {
       data: { user },
       error: authErr,
-    } = await supa.auth.getUser();
+    } = await serverSupabase.auth.getUser();
 
     if (authErr || !user) {
       return NextResponse.json(
@@ -42,7 +59,7 @@ export async function GET(
 
     const { data: pub, error: pubErr } = await admin
       .from("book_publications")
-      .select("pdf_path")
+      .select("pdf_path, visibility, is_active")
       .eq("book_id", bookId)
       .eq("is_active", true)
       .maybeSingle();
@@ -72,6 +89,7 @@ export async function GET(
         {
           error: "Không tạo được link tải",
           detail: signErr?.message,
+          visibility: pub.visibility ?? "public_open",
         },
         { status: 500 }
       );
