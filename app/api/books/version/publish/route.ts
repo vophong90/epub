@@ -1,3 +1,4 @@
+// app/api/books/version/publish/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getRouteClient } from "@/lib/supabaseServer";
 import { getAdminClient } from "@/lib/supabase-admin";
@@ -23,6 +24,7 @@ export async function POST(req: NextRequest) {
   const supabase = getRouteClient();
   const admin = getAdminClient();
 
+  // 1) lấy user
   const {
     data: { user },
     error: uErr,
@@ -32,6 +34,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // 2) check admin
   const { data: profile, error: pErr } = await supabase
     .from("profiles")
     .select("id,system_role")
@@ -49,6 +52,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // 3) parse input
   const contentType = req.headers.get("content-type") || "";
 
   let versionId = "";
@@ -92,6 +96,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // 4) lấy version
   const { data: version, error: vErr } = await supabase
     .from("book_versions")
     .select("id,book_id,version_no,status")
@@ -116,10 +121,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // 5) upload pdf nếu có
   let pdf_path = "";
 
   if (pdfFile) {
     const safeName = `v${version.version_no}-${version.id}.pdf`;
+
     pdf_path = `book/${version.book_id}/published/${safeName}`;
 
     const buf = Buffer.from(await pdfFile.arrayBuffer());
@@ -148,6 +155,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // 6) deactivate publication cũ
   const { error: deErr } = await admin
     .from("book_publications")
     .update({ is_active: false })
@@ -161,6 +169,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // 7) insert publication mới
   const { data: pub, error: insErr } = await admin
     .from("book_publications")
     .insert({
@@ -171,45 +180,18 @@ export async function POST(req: NextRequest) {
       is_active: true,
       published_by: user.id,
       published_at: new Date().toISOString(),
-      preview_bucket: "published_previews",
-      preview_prefix: null,
-      preview_page_count: 0,
-      preview_status: "pending",
-      preview_error: null,
     })
-    .select(
-      "id,book_id,version_id,pdf_path,visibility,is_active,published_at,preview_status"
-    )
+    .select("id,book_id,version_id,pdf_path,visibility,is_active,published_at")
     .maybeSingle();
 
-  if (insErr || !pub) {
+  if (insErr) {
     return NextResponse.json(
-      { error: "Tạo publication thất bại", detail: insErr?.message },
+      { error: "Tạo publication thất bại", detail: insErr.message },
       { status: 500 }
     );
   }
 
-  const { error: jobErr } = await admin
-    .from("book_preview_jobs")
-    .insert({
-      publication_id: pub.id,
-      book_id: pub.book_id,
-      version_id: pub.version_id,
-      pdf_path: pub.pdf_path,
-      status: "queued",
-      attempts: 0,
-    });
-
-  if (jobErr) {
-    return NextResponse.json(
-      {
-        error: "Publish PDF thành công nhưng không tạo được preview job",
-        detail: jobErr.message,
-      },
-      { status: 500 }
-    );
-  }
-
+  // 8) update version
   const nowIso = new Date().toISOString();
 
   const { data: updated, error: verUpErr } = await supabase
@@ -231,8 +213,5 @@ export async function POST(req: NextRequest) {
     ok: true,
     version: updated,
     publication: pub,
-    preview_job: {
-      status: "queued",
-    },
   });
 }
