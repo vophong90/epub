@@ -8,9 +8,12 @@ export const dynamic = "force-dynamic";
 
 const BUCKET = "published_pdfs";
 
+type PublicationVisibility = "public_open" | "internal_only";
+
 type JsonBody = {
   version_id?: string;
-  pdf_path?: string; // nếu đã upload trước rồi truyền path vào
+  pdf_path?: string;
+  visibility?: PublicationVisibility;
 };
 
 function isFile(v: unknown): v is File {
@@ -18,10 +21,10 @@ function isFile(v: unknown): v is File {
 }
 
 export async function POST(req: NextRequest) {
-  const supabase = getRouteClient(); // session từ cookies
-  const admin = getAdminClient(); // service role (server-only)
+  const supabase = getRouteClient();
+  const admin = getAdminClient();
 
-  // 1) Lấy user hiện tại
+  // 1) lấy user
   const {
     data: { user },
     error: uErr,
@@ -31,43 +34,52 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // 2) Check admin (profiles.system_role)
+  // 2) check admin
   const { data: profile, error: pErr } = await supabase
     .from("profiles")
     .select("id,system_role")
     .eq("id", user.id)
     .maybeSingle();
 
-  if (pErr) return NextResponse.json({ error: pErr.message }, { status: 500 });
+  if (pErr) {
+    return NextResponse.json({ error: pErr.message }, { status: 500 });
+  }
 
-  // ✅ đúng schema của anh: system_role
   if (!profile || profile.system_role !== "admin") {
     return NextResponse.json(
-      { error: "Chỉ admin mới được publish phiên bản sách" },
+      { error: "Chỉ admin mới được publish sách" },
       { status: 403 }
     );
   }
 
-  // 3) Parse input: hỗ trợ JSON hoặc multipart/form-data
+  // 3) parse input
   const contentType = req.headers.get("content-type") || "";
+
   let versionId = "";
   let pdfPathFromBody = "";
+  let visibility: PublicationVisibility = "public_open";
   let pdfFile: File | null = null;
 
   if (contentType.includes("multipart/form-data")) {
     const fd = await req.formData();
+
     versionId = (fd.get("version_id") || "").toString();
+    visibility = (fd.get("visibility") as PublicationVisibility) || "public_open";
+
     const f = fd.get("pdf");
     pdfFile = isFile(f) ? f : null;
   } else {
     let body: JsonBody = {};
+
     try {
       body = await req.json();
     } catch {
       body = {};
     }
+
     versionId = (body.version_id || "").toString();
     pdfPathFromBody = (body.pdf_path || "").toString();
+    visibility = body.visibility || "public_open";
   }
 
   if (!versionId) {
@@ -77,37 +89,44 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 4) Lấy book_versions hiện tại (cần version_no để đặt tên file)
-  const { data: version, error: vErr } = await supabase
-    .from("book_versions")
-    .select("id,book_id,version_no,status,locked_by,locked_at,approved_by,approved_at")
-    .eq("id", versionId)
-    .maybeSingle();
-
-  if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 });
-  if (!version) {
+  if (!["public_open", "internal_only"].includes(visibility)) {
     return NextResponse.json(
-      { error: "Không tìm thấy phiên bản sách" },
-      { status: 404 }
-    );
-  }
-
-  // Anh đang muốn chặn republish → giữ nguyên
-  if (version.status === "published") {
-    return NextResponse.json(
-      { error: "Phiên bản này đã được publish trước đó" },
+      { error: "visibility không hợp lệ" },
       { status: 400 }
     );
   }
 
-  // 5) Xác định pdf_path:
-  // - nếu multipart: upload file lên storage
-  // - nếu JSON: dùng pdf_path truyền vào
+  // 4) lấy version
+  const { data: version, error: vErr } = await supabase
+    .from("book_versions")
+    .select("id,book_id,version_no,status")
+    .eq("id", versionId)
+    .maybeSingle();
+
+  if (vErr) {
+    return NextResponse.json({ error: vErr.message }, { status: 500 });
+  }
+
+  if (!version) {
+    return NextResponse.json(
+      { error: "Không tìm thấy version" },
+      { status: 404 }
+    );
+  }
+
+  if (version.status === "published") {
+    return NextResponse.json(
+      { error: "Version này đã publish rồi" },
+      { status: 400 }
+    );
+  }
+
+  // 5) upload pdf nếu có
   let pdf_path = "";
 
   if (pdfFile) {
-    // Upload file lên storage (bucket private)
     const safeName = `v${version.version_no}-${version.id}.pdf`;
+
     pdf_path = `book/${version.book_id}/published/${safeName}`;
 
     const buf = Buffer.from(await pdfFile.arrayBuffer());
@@ -131,12 +150,12 @@ export async function POST(req: NextRequest) {
 
   if (!pdf_path) {
     return NextResponse.json(
-      { error: "Thiếu PDF. Gửi multipart với field 'pdf' hoặc JSON có pdf_path." },
+      { error: "Thiếu pdf_path hoặc file pdf" },
       { status: 400 }
     );
   }
 
-  // 6) Deactivate publication cũ (tránh vướng unique index: 1 active/book)
+  // 6) deactivate publication cũ
   const { error: deErr } = await admin
     .from("book_publications")
     .update({ is_active: false })
@@ -150,18 +169,19 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 7) Insert publication mới is_active=true
+  // 7) insert publication mới
   const { data: pub, error: insErr } = await admin
     .from("book_publications")
     .insert({
       book_id: version.book_id,
       version_id: version.id,
       pdf_path,
+      visibility,
       is_active: true,
       published_by: user.id,
       published_at: new Date().toISOString(),
     })
-    .select("id,book_id,version_id,pdf_path,is_active,published_at")
+    .select("id,book_id,version_id,pdf_path,visibility,is_active,published_at")
     .maybeSingle();
 
   if (insErr) {
@@ -171,7 +191,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 8) Update status -> published, locked_by, locked_at
+  // 8) update version
   const nowIso = new Date().toISOString();
 
   const { data: updated, error: verUpErr } = await supabase
@@ -182,7 +202,7 @@ export async function POST(req: NextRequest) {
       locked_at: nowIso,
     })
     .eq("id", versionId)
-    .select("id,book_id,version_no,status,locked_by,locked_at,approved_by,approved_at")
+    .select("id,book_id,version_no,status")
     .maybeSingle();
 
   if (verUpErr) {
