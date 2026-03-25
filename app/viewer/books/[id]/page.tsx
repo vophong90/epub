@@ -289,7 +289,7 @@ export default function ViewerBookPage() {
   }, [bookId]);
 
   const zoomOut = () =>
-    setScaleBoost((s) => Math.max(0.7, +(s - 0.1).toFixed(2)));
+    setScaleBoost((s) => Math.max(0.2, +(s - 0.1).toFixed(2)));
 
   const zoomIn = () =>
     setScaleBoost((s) => Math.min(1.8, +(s + 0.1).toFixed(2)));
