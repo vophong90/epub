@@ -19,7 +19,6 @@ type PdfUrlResponse = {
 
 function isMobileDevice() {
   if (typeof window === "undefined") return false;
-
   const ua = window.navigator.userAgent || "";
   return /Android|iPhone|iPad|iPod|IEMobile|Opera Mini|Mobile/i.test(ua);
 }
@@ -64,8 +63,7 @@ export default function ViewerBookPage() {
 
       if (!alive) return;
 
-      const loggedIn = !!user;
-      setIsLoggedIn(loggedIn);
+      setIsLoggedIn(!!user);
 
       const res = await fetch(
         `/api/viewer/pdf-url?book_id=${encodeURIComponent(bookId)}`,
@@ -80,9 +78,7 @@ export default function ViewerBookPage() {
 
       if (!alive) return;
 
-      if (j?.visibility) {
-        setVisibility(j.visibility);
-      }
+      if (j?.visibility) setVisibility(j.visibility);
 
       if (!res.ok) {
         const apiError = j?.error || `HTTP ${res.status}`;
@@ -119,7 +115,12 @@ export default function ViewerBookPage() {
   const needsLoginToView =
     !isLoggedIn && visibility === "internal_only" && !pdfUrl;
 
-  const canShowPreview = !!pdfUrl && enablePreview && !isMobile;
+  const canShowDesktopPreview = !!pdfUrl && enablePreview && !isMobile;
+
+  const openMobileViewer = () => {
+    if (!pdfUrl) return;
+    window.location.href = pdfUrl;
+  };
 
   return (
     <div className="mx-auto max-w-6xl p-6">
@@ -168,6 +169,16 @@ export default function ViewerBookPage() {
               Tắt xem trước
             </button>
           )}
+
+          {!!pdfUrl && isMobile && (
+            <button
+              type="button"
+              className={BTN}
+              onClick={openMobileViewer}
+            >
+              Xem trên mobile
+            </button>
+          )}
         </div>
       </div>
 
@@ -192,9 +203,8 @@ export default function ViewerBookPage() {
 
       {isMobile && pdfUrl && (
         <div className="mb-3 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm text-orange-800">
-          Xem trước PDF tự động đã được tắt trên mobile để tránh trình duyệt tự
-          mở hoặc tự tải file. Muốn tải file, hãy dùng nút “Tải PDF” sau khi đăng
-          nhập.
+          Trên mobile, hệ thống sẽ không tự mở PDF để tránh tự tải file khi vừa
+          vào trang. Hãy bấm <b>Xem trên mobile</b> khi bạn thật sự muốn mở tài liệu.
         </div>
       )}
 
@@ -207,7 +217,7 @@ export default function ViewerBookPage() {
         </div>
       )}
 
-      {!loading && !err && canShowPreview && (
+      {!loading && !err && canShowDesktopPreview && (
         <div
           className="select-none"
           onCopy={(e) => e.preventDefault()}
