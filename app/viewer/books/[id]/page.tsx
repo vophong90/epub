@@ -34,8 +34,6 @@ export default function ViewerBookPage() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [visibility, setVisibility] = useState<Visibility | null>(null);
   const [isMobile, setIsMobile] = useState(false);
-
-  // Chỉ bật preview khi user chủ động bấm
   const [enablePreview, setEnablePreview] = useState(false);
 
   useEffect(() => {
@@ -169,17 +167,6 @@ export default function ViewerBookPage() {
             >
               Tắt xem trước
             </button>
-          )}
-
-          {!!pdfUrl && !isMobile && (
-            <a
-              className={BTN}
-              href={pdfUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Mở tab mới
-            </a>
           )}
         </div>
       </div>
