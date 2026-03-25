@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 type PubRow = {
@@ -12,49 +11,82 @@ type PubRow = {
 };
 
 const CARD = "rounded-xl border bg-white p-4 shadow-sm";
-const BTN = "inline-flex items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium hover:bg-gray-50";
+const BTN =
+  "inline-flex items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium hover:bg-gray-50";
 
 export default function ViewerHomePage() {
-  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<PubRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   useEffect(() => {
+    let alive = true;
+
     (async () => {
       setErr(null);
+      setLoading(true);
 
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        router.replace("/login");
-        return;
-      }
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
-      // list tất cả sách đã publish (is_active=true) — mọi user login đều xem
+      if (!alive) return;
+      setIsLoggedIn(!!user);
+
       const { data, error } = await supabase
         .from("book_publications")
         .select("book_id, published_at, books(title, unit_name)")
         .eq("is_active", true)
         .order("published_at", { ascending: false });
 
-      if (error) setErr(error.message);
-      setRows((data as any) || []);
+      if (!alive) return;
+
+      if (error) {
+        setErr(error.message);
+        setRows([]);
+        setLoading(false);
+        return;
+      }
+
+      setRows((data as PubRow[]) || []);
       setLoading(false);
     })();
-  }, [router]);
+
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   return (
     <div className="mx-auto max-w-5xl p-6">
       <div className="mb-4 flex items-end justify-between gap-3">
-        <h1 className="text-xl font-semibold">Thư viện (Viewer)</h1>
-        <Link className={BTN} href="/books">Về workspace</Link>
+        <div>
+          <h1 className="text-xl font-semibold">Thư viện</h1>
+          <div className="mt-1 text-sm text-gray-600">
+            Ai cũng có thể xem. Chỉ người dùng đã đăng nhập mới được tải PDF.
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <Link className={BTN} href="/books">
+            Về workspace
+          </Link>
+          {!isLoggedIn && (
+            <Link className={BTN} href="/login">
+              Đăng nhập
+            </Link>
+          )}
+        </div>
       </div>
 
       {loading && <div className="text-sm text-gray-600">Đang tải…</div>}
       {err && <div className="text-sm text-red-600">Lỗi: {err}</div>}
 
       {!loading && !err && rows.length === 0 && (
-        <div className="text-sm text-gray-600">Chưa có sách nào được publish PDF.</div>
+        <div className="text-sm text-gray-600">
+          Chưa có sách nào được publish PDF.
+        </div>
       )}
 
       <div className="grid grid-cols-1 gap-3">
@@ -67,13 +99,36 @@ export default function ViewerHomePage() {
                 </div>
                 <div className="text-sm text-gray-600">
                   {r.books?.unit_name || ""} • Publish:{" "}
-                  {r.published_at ? new Date(r.published_at).toLocaleString() : ""}
+                  {r.published_at
+                    ? new Date(r.published_at).toLocaleString()
+                    : ""}
                 </div>
               </div>
 
-              <Link className={BTN} href={`/viewer/books/${r.book_id}`}>
-                Mở PDF
-              </Link>
+              <div className="flex gap-2">
+                <Link className={BTN} href={`/viewer/books/${r.book_id}`}>
+                  Xem PDF
+                </Link>
+
+                {isLoggedIn ? (
+                  <a
+                    className={BTN}
+                    href={`/api/viewer/books/${encodeURIComponent(
+                      r.book_id
+                    )}/download`}
+                  >
+                    Tải PDF
+                  </a>
+                ) : (
+                  <button
+                    className={`${BTN} cursor-not-allowed opacity-50`}
+                    disabled
+                    title="Đăng nhập để tải PDF"
+                  >
+                    Tải PDF
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         ))}
