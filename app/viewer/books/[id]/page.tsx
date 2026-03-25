@@ -9,11 +9,20 @@ const BTN =
   "inline-flex items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium hover:bg-gray-50";
 const FRAME = "w-full h-[78vh] rounded-xl border bg-white";
 
+type Visibility = "public_open" | "internal_only";
+
 type PdfUrlResponse = {
   url?: string;
-  visibility?: "public_open" | "internal_only";
+  visibility?: Visibility;
   error?: string;
 };
+
+function isMobileDevice() {
+  if (typeof window === "undefined") return false;
+
+  const ua = window.navigator.userAgent || "";
+  return /Android|iPhone|iPad|iPod|IEMobile|Opera Mini|Mobile/i.test(ua);
+}
 
 export default function ViewerBookPage() {
   const params = useParams<{ id: string }>();
@@ -23,7 +32,15 @@ export default function ViewerBookPage() {
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [visibility, setVisibility] = useState<"public_open" | "internal_only" | null>(null);
+  const [visibility, setVisibility] = useState<Visibility | null>(null);
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Chỉ bật preview khi user chủ động bấm
+  const [enablePreview, setEnablePreview] = useState(false);
+
+  useEffect(() => {
+    setIsMobile(isMobileDevice());
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -41,6 +58,7 @@ export default function ViewerBookPage() {
       setLoading(true);
       setPdfUrl(null);
       setVisibility(null);
+      setEnablePreview(false);
 
       const {
         data: { user },
@@ -71,7 +89,6 @@ export default function ViewerBookPage() {
       if (!res.ok) {
         const apiError = j?.error || `HTTP ${res.status}`;
 
-        // Trường hợp sách nội bộ mà chưa đăng nhập
         if (
           res.status === 401 ||
           res.status === 403 ||
@@ -104,6 +121,8 @@ export default function ViewerBookPage() {
   const needsLoginToView =
     !isLoggedIn && visibility === "internal_only" && !pdfUrl;
 
+  const canShowPreview = !!pdfUrl && enablePreview && !isMobile;
+
   return (
     <div className="mx-auto max-w-6xl p-6">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -116,7 +135,7 @@ export default function ViewerBookPage() {
           </Link>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {isLoggedIn && (
             <a
               className={BTN}
@@ -132,7 +151,27 @@ export default function ViewerBookPage() {
             </Link>
           )}
 
-          {pdfUrl && (
+          {!!pdfUrl && !isMobile && !enablePreview && (
+            <button
+              type="button"
+              className={BTN}
+              onClick={() => setEnablePreview(true)}
+            >
+              Bật xem trước
+            </button>
+          )}
+
+          {!!pdfUrl && !isMobile && enablePreview && (
+            <button
+              type="button"
+              className={BTN}
+              onClick={() => setEnablePreview(false)}
+            >
+              Tắt xem trước
+            </button>
+          )}
+
+          {!!pdfUrl && !isMobile && (
             <a
               className={BTN}
               href={pdfUrl}
@@ -147,7 +186,8 @@ export default function ViewerBookPage() {
 
       {!isLoggedIn && visibility === "public_open" && (
         <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          Đây là tài liệu công khai. Bạn có thể xem mà không cần đăng nhập. Muốn tải PDF thì cần đăng nhập.
+          Đây là tài liệu công khai. Bạn có thể xem mà không cần đăng nhập. Muốn
+          tải PDF thì cần đăng nhập.
         </div>
       )}
 
@@ -163,10 +203,24 @@ export default function ViewerBookPage() {
         </div>
       )}
 
+      {isMobile && pdfUrl && (
+        <div className="mb-3 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm text-orange-800">
+          Xem trước PDF tự động đã được tắt trên mobile để tránh trình duyệt tự
+          mở hoặc tự tải file. Muốn tải file, hãy dùng nút “Tải PDF” sau khi đăng
+          nhập.
+        </div>
+      )}
+
       {loading && <div className="text-sm text-gray-600">Đang tải PDF…</div>}
       {err && <div className="text-sm text-red-600">Lỗi: {err}</div>}
 
-      {!loading && !err && pdfUrl && (
+      {!loading && !err && pdfUrl && !isMobile && !enablePreview && (
+        <div className="rounded-xl border border-dashed bg-gray-50 p-6 text-sm text-gray-700">
+          PDF đã sẵn sàng. Bấm <b>Bật xem trước</b> để mở trực tiếp trong trang.
+        </div>
+      )}
+
+      {!loading && !err && canShowPreview && (
         <div
           className="select-none"
           onCopy={(e) => e.preventDefault()}
