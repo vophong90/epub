@@ -3,10 +3,31 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 import { getAdminClient } from "@/lib/supabase-admin";
 
 const BUCKET = "published_pdfs";
 const EXPIRES_SEC = 60 * 10; // 10 phút
+
+type Visibility = "public_open" | "internal_only";
+
+function getServerSupabaseFromRequest(req: NextRequest) {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+  return createClient(supabaseUrl, supabaseAnonKey, {
+    global: {
+      headers: {
+        cookie: req.headers.get("cookie") ?? "",
+      },
+    },
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -24,7 +45,7 @@ export async function GET(req: NextRequest) {
 
     const { data: pub, error: pubErr } = await admin
       .from("book_publications")
-      .select("pdf_path, published_at, version_id")
+      .select("pdf_path, published_at, version_id, visibility")
       .eq("book_id", book_id)
       .eq("is_active", true)
       .maybeSingle();
@@ -43,6 +64,35 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    const visibility: Visibility = pub.visibility ?? "public_open";
+
+    // Kiểm tra đăng nhập bằng client gắn cookie request hiện tại
+    const serverSupabase = getServerSupabaseFromRequest(req);
+    const {
+      data: { user },
+      error: userErr,
+    } = await serverSupabase.auth.getUser();
+
+    if (userErr) {
+      return NextResponse.json(
+        { error: "Không xác thực được người dùng", detail: userErr.message },
+        { status: 401 }
+      );
+    }
+
+    const isLoggedIn = !!user;
+
+    // Sách nội bộ: phải đăng nhập mới được xem
+    if (visibility === "internal_only" && !isLoggedIn) {
+      return NextResponse.json(
+        {
+          error: "Tài liệu này thuộc phạm vi nội bộ. Bạn cần đăng nhập để xem PDF.",
+          visibility,
+        },
+        { status: 403 }
+      );
+    }
+
     const { data: signed, error: signErr } = await admin.storage
       .from(BUCKET)
       .createSignedUrl(pub.pdf_path, EXPIRES_SEC);
@@ -52,6 +102,7 @@ export async function GET(req: NextRequest) {
         {
           error: "Không tạo được signed url",
           detail: signErr?.message,
+          visibility,
         },
         { status: 500 }
       );
@@ -61,6 +112,7 @@ export async function GET(req: NextRequest) {
       url: signed.signedUrl,
       published_at: pub.published_at,
       version_id: pub.version_id,
+      visibility,
       expires_in: EXPIRES_SEC,
     });
   } catch (e: any) {
