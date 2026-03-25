@@ -24,16 +24,24 @@ type PdfUrlResponse = {
   error?: string;
 };
 
+function isMobileDevice() {
+  if (typeof window === "undefined") return false;
+  const ua = window.navigator.userAgent || "";
+  return /Android|iPhone|iPad|iPod|IEMobile|Opera Mini|Mobile/i.test(ua);
+}
+
 function PageCanvas({
   pdf,
   pageNumber,
   width,
-  scaleBoost = 1.4,
+  scaleBoost,
+  isMobile,
 }: {
   pdf: any;
   pageNumber: number;
   width: number;
-  scaleBoost?: number;
+  scaleBoost: number;
+  isMobile: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [loading, setLoading] = useState(true);
@@ -52,7 +60,7 @@ function PageCanvas({
           obs.disconnect();
         }
       },
-      { rootMargin: "300px" }
+      { rootMargin: "500px" }
     );
 
     obs.observe(canvas);
@@ -71,7 +79,12 @@ function PageCanvas({
       try {
         const page = await pdf.getPage(pageNumber);
         const unscaledViewport = page.getViewport({ scale: 1 });
-        const fitScale = width / unscaledViewport.width;
+
+        // Desktop: fit theo khung đọc
+        // Mobile: cố ý render rộng hơn màn hình để chữ không bị teo,
+        // người dùng có thể cuộn ngang để đọc.
+        const baseWidth = isMobile ? Math.max(width * 1.8, 900) : width;
+        const fitScale = baseWidth / unscaledViewport.width;
         const scale = fitScale * scaleBoost;
 
         const viewport = page.getViewport({ scale });
@@ -96,9 +109,7 @@ function PageCanvas({
 
         await renderTask.promise;
 
-        if (!cancelled) {
-          setLoading(false);
-        }
+        if (!cancelled) setLoading(false);
       } catch (e: any) {
         if (!cancelled) {
           setErr(e?.message || "Render trang thất bại");
@@ -112,29 +123,29 @@ function PageCanvas({
     return () => {
       cancelled = true;
     };
-  }, [pdf, pageNumber, width, isVisible, scaleBoost]);
+  }, [pdf, pageNumber, width, scaleBoost, isVisible, isMobile]);
 
   return (
-    <div className="mb-5">
+    <div className="mb-6">
       <div className="mb-2 text-center text-sm text-gray-500">Trang {pageNumber}</div>
 
-      <div className="flex justify-center">
-        <div className="relative">
-          {loading && (
-            <div className="mb-2 text-center text-sm text-gray-500">
-              Đang tải trang {pageNumber}…
-            </div>
-          )}
+      {loading && (
+        <div className="mb-2 text-center text-sm text-gray-500">
+          Đang tải trang {pageNumber}…
+        </div>
+      )}
 
-          {err && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {err}
-            </div>
-          )}
+      {err && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {err}
+        </div>
+      )}
 
+      <div className="overflow-x-auto">
+        <div className="flex justify-center min-w-max">
           <canvas
             ref={canvasRef}
-            className="max-w-full rounded-lg border bg-white shadow-sm"
+            className="rounded-lg border bg-white shadow-sm"
             onContextMenu={(e) => e.preventDefault()}
             onDragStart={(e) => e.preventDefault()}
             style={{
@@ -156,13 +167,21 @@ export default function ViewerBookPage() {
 
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [pdf, setPdf] = useState<any>(null);
   const [numPages, setNumPages] = useState(0);
   const [width, setWidth] = useState(900);
   const [visibility, setVisibility] = useState<Visibility | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [scaleBoost, setScaleBoost] = useState(1.35);
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Mobile mặc định zoom lớn hơn để đọc được
+  const [scaleBoost, setScaleBoost] = useState(1.0);
+
+  useEffect(() => {
+    const mobile = isMobileDevice();
+    setIsMobile(mobile);
+    setScaleBoost(mobile ? 1.35 : 1.0);
+  }, []);
 
   useEffect(() => {
     function updateWidth() {
@@ -199,7 +218,6 @@ export default function ViewerBookPage() {
 
         setLoading(true);
         setErr(null);
-        setPdfUrl(null);
         setPdf(null);
         setNumPages(0);
 
@@ -223,13 +241,10 @@ export default function ViewerBookPage() {
 
         if (!alive) return;
 
-        if (j?.visibility) {
-          setVisibility(j.visibility);
-        }
+        if (j?.visibility) setVisibility(j.visibility);
 
         if (!res.ok) {
-          const apiError = j?.error || `HTTP ${res.status}`;
-          setErr(apiError);
+          setErr(j?.error || `HTTP ${res.status}`);
           setLoading(false);
           return;
         }
@@ -239,8 +254,6 @@ export default function ViewerBookPage() {
           setLoading(false);
           return;
         }
-
-        setPdfUrl(j.url);
 
         const task = getDocument({
           url: j.url,
@@ -274,11 +287,14 @@ export default function ViewerBookPage() {
     };
   }, [bookId]);
 
-  const zoomOut = () => setScaleBoost((s) => Math.max(0.8, +(s - 0.1).toFixed(2)));
-  const zoomIn = () => setScaleBoost((s) => Math.min(2.2, +(s + 0.1).toFixed(2)));
+  const zoomOut = () =>
+    setScaleBoost((s) => Math.max(0.8, +Math.max(s - 0.15, 0.8).toFixed(2)));
+
+  const zoomIn = () =>
+    setScaleBoost((s) => Math.min(2.4, +Math.min(s + 0.15, 2.4).toFixed(2)));
 
   return (
-    <div className="mx-auto max-w-6xl p-4 md:p-6">
+    <div className="mx-auto max-w-6xl p-3 md:p-6">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Link className={BTN} href="/viewer">
@@ -322,8 +338,16 @@ export default function ViewerBookPage() {
       )}
 
       <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
-        Trình đọc hiện dùng pdf.js để hiển thị trực tiếp trong web, không dùng viewer
-        PDF mặc định của trình duyệt, nên sẽ tránh lỗi mobile tự mở hoặc tự tải file.
+        Trình đọc hiện dùng pdf.js để hiển thị trực tiếp trong web.
+        {isMobile ? (
+          <>
+            {" "}
+            Trên mobile, trang được hiển thị lớn hơn và có thể <b>vuốt ngang</b> để
+            đọc rõ hơn.
+          </>
+        ) : (
+          <> Bạn có thể dùng nút A- / A+ để thay đổi độ phóng to.</>
+        )}
       </div>
 
       {loading && (
@@ -349,7 +373,7 @@ export default function ViewerBookPage() {
             </div>
           </div>
 
-          <div ref={containerRef} className={`${CARD} p-4 md:p-6`}>
+          <div ref={containerRef} className={`${CARD} p-3 md:p-6`}>
             {Array.from({ length: numPages }, (_, i) => i + 1).map((pageNumber) => (
               <PageCanvas
                 key={pageNumber}
@@ -357,6 +381,7 @@ export default function ViewerBookPage() {
                 pageNumber={pageNumber}
                 width={width}
                 scaleBoost={scaleBoost}
+                isMobile={isMobile}
               />
             ))}
           </div>
