@@ -5,14 +5,27 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
 type BookInfo = {
+  id: string;
   title: string | null;
   unit_name: string | null;
 };
 
+type VersionInfo = {
+  id: string;
+  version_no: number | null;
+  status: string | null;
+};
+
+type Visibility = "public_open" | "internal_only";
+
 type PubRow = {
+  id: string;
   book_id: string;
+  version_id: string;
   published_at: string | null;
+  visibility: Visibility;
   books: BookInfo | BookInfo[] | null;
+  book_versions: VersionInfo | VersionInfo[] | null;
 };
 
 const CARD = "rounded-xl border bg-white p-4 shadow-sm";
@@ -25,6 +38,18 @@ function normalizeBookInfo(
   if (!books) return null;
   if (Array.isArray(books)) return books[0] ?? null;
   return books;
+}
+
+function normalizeVersionInfo(
+  version: VersionInfo | VersionInfo[] | null | undefined
+): VersionInfo | null {
+  if (!version) return null;
+  if (Array.isArray(version)) return version[0] ?? null;
+  return version;
+}
+
+function visibilityLabel(v: Visibility) {
+  return v === "public_open" ? "Công khai" : "Nội bộ";
 }
 
 export default function ViewerHomePage() {
@@ -49,7 +74,23 @@ export default function ViewerHomePage() {
 
       const { data, error } = await supabase
         .from("book_publications")
-        .select("book_id, published_at, books(title, unit_name)")
+        .select(`
+          id,
+          book_id,
+          version_id,
+          visibility,
+          published_at,
+          books!inner (
+            id,
+            title,
+            unit_name
+          ),
+          book_versions!inner (
+            id,
+            version_no,
+            status
+          )
+        `)
         .eq("is_active", true)
         .order("published_at", { ascending: false });
 
@@ -77,7 +118,8 @@ export default function ViewerHomePage() {
         <div>
           <h1 className="text-xl font-semibold">Thư viện</h1>
           <div className="mt-1 text-sm text-gray-600">
-            Ai cũng có thể xem. Chỉ người dùng đã đăng nhập mới được tải PDF.
+            Ai cũng có thể xem thông tin sách. Sách công khai xem được ngay;
+            sách nội bộ cần đăng nhập để xem PDF.
           </div>
         </div>
 
@@ -98,33 +140,53 @@ export default function ViewerHomePage() {
 
       {!loading && !err && rows.length === 0 && (
         <div className="text-sm text-gray-600">
-          Chưa có sách nào được publish PDF.
+          Chưa có sách nào được phát hành.
         </div>
       )}
 
       <div className="grid grid-cols-1 gap-3">
         {rows.map((r) => {
           const book = normalizeBookInfo(r.books);
+          const version = normalizeVersionInfo(r.book_versions);
+          const canViewPdf =
+            r.visibility === "public_open" || isLoggedIn;
 
           return (
-            <div key={r.book_id} className={CARD}>
+            <div key={r.id} className={CARD}>
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-base font-semibold">
                     {book?.title || "(Không có tiêu đề)"}
                   </div>
-                  <div className="text-sm text-gray-600">
-                    {book?.unit_name || ""} • Publish:{" "}
+
+                  <div className="mt-1 text-sm text-gray-600">
+                    {book?.unit_name || "—"}
+                    {" • "}
+                    Phiên bản: {version?.version_no ?? "—"}
+                    {" • "}
+                    Loại: {visibilityLabel(r.visibility)}
+                    {" • "}
+                    Publish:{" "}
                     {r.published_at
                       ? new Date(r.published_at).toLocaleString()
-                      : ""}
+                      : "—"}
                   </div>
                 </div>
 
                 <div className="flex gap-2">
-                  <Link className={BTN} href={`/viewer/books/${r.book_id}`}>
-                    Xem PDF
-                  </Link>
+                  {canViewPdf ? (
+                    <Link className={BTN} href={`/viewer/books/${r.book_id}`}>
+                      Xem PDF
+                    </Link>
+                  ) : (
+                    <Link
+                      className={`${BTN} text-gray-600`}
+                      href="/login"
+                      title="Đăng nhập để xem PDF nội bộ"
+                    >
+                      Đăng nhập để xem
+                    </Link>
+                  )}
 
                   {isLoggedIn ? (
                     <a
