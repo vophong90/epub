@@ -9,6 +9,12 @@ const BTN =
   "inline-flex items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium hover:bg-gray-50";
 const FRAME = "w-full h-[78vh] rounded-xl border bg-white";
 
+type PdfUrlResponse = {
+  url?: string;
+  visibility?: "public_open" | "internal_only";
+  error?: string;
+};
+
 export default function ViewerBookPage() {
   const params = useParams<{ id: string }>();
   const bookId = useMemo(() => params?.id ?? "", [params]);
@@ -17,6 +23,7 @@ export default function ViewerBookPage() {
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [visibility, setVisibility] = useState<"public_open" | "internal_only" | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -33,6 +40,7 @@ export default function ViewerBookPage() {
       setErr(null);
       setLoading(true);
       setPdfUrl(null);
+      setVisibility(null);
 
       const {
         data: { user },
@@ -40,7 +48,8 @@ export default function ViewerBookPage() {
 
       if (!alive) return;
 
-      setIsLoggedIn(!!user);
+      const loggedIn = !!user;
+      setIsLoggedIn(loggedIn);
 
       const res = await fetch(
         `/api/viewer/pdf-url?book_id=${encodeURIComponent(bookId)}`,
@@ -51,12 +60,28 @@ export default function ViewerBookPage() {
         }
       );
 
-      const j = await res.json().catch(() => ({}));
+      const j: PdfUrlResponse = await res.json().catch(() => ({}));
 
       if (!alive) return;
 
+      if (j?.visibility) {
+        setVisibility(j.visibility);
+      }
+
       if (!res.ok) {
-        setErr(j?.error || `HTTP ${res.status}`);
+        const apiError = j?.error || `HTTP ${res.status}`;
+
+        // Trường hợp sách nội bộ mà chưa đăng nhập
+        if (
+          res.status === 401 ||
+          res.status === 403 ||
+          /đăng nhập|login|unauthorized|forbidden/i.test(apiError)
+        ) {
+          setErr("Tài liệu này thuộc phạm vi nội bộ. Bạn cần đăng nhập để xem PDF.");
+        } else {
+          setErr(apiError);
+        }
+
         setLoading(false);
         return;
       }
@@ -75,6 +100,9 @@ export default function ViewerBookPage() {
       alive = false;
     };
   }, [bookId]);
+
+  const needsLoginToView =
+    !isLoggedIn && visibility === "internal_only" && !pdfUrl;
 
   return (
     <div className="mx-auto max-w-6xl p-6">
@@ -98,6 +126,12 @@ export default function ViewerBookPage() {
             </a>
           )}
 
+          {needsLoginToView && (
+            <Link className={BTN} href="/login">
+              Đăng nhập để xem
+            </Link>
+          )}
+
           {pdfUrl && (
             <a
               className={BTN}
@@ -111,10 +145,21 @@ export default function ViewerBookPage() {
         </div>
       </div>
 
-      {!isLoggedIn && (
+      {!isLoggedIn && visibility === "public_open" && (
         <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          Bạn có thể xem tài liệu mà không cần đăng nhập. Chỉ người dùng đã đăng
-          nhập mới được tải PDF.
+          Đây là tài liệu công khai. Bạn có thể xem mà không cần đăng nhập. Muốn tải PDF thì cần đăng nhập.
+        </div>
+      )}
+
+      {!isLoggedIn && visibility === "internal_only" && !pdfUrl && (
+        <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+          Đây là tài liệu nội bộ. Bạn cần đăng nhập để xem PDF.
+        </div>
+      )}
+
+      {isLoggedIn && visibility === "internal_only" && (
+        <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+          Bạn đang xem tài liệu nội bộ.
         </div>
       )}
 
