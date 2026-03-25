@@ -4,15 +4,28 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
+type BookInfo = {
+  title: string | null;
+  unit_name: string | null;
+};
+
 type PubRow = {
   book_id: string;
-  published_at: string;
-  books: { title: string; unit_name: string } | null;
+  published_at: string | null;
+  books: BookInfo | BookInfo[] | null;
 };
 
 const CARD = "rounded-xl border bg-white p-4 shadow-sm";
 const BTN =
   "inline-flex items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium hover:bg-gray-50";
+
+function normalizeBookInfo(
+  books: BookInfo | BookInfo[] | null | undefined
+): BookInfo | null {
+  if (!books) return null;
+  if (Array.isArray(books)) return books[0] ?? null;
+  return books;
+}
 
 export default function ViewerHomePage() {
   const [loading, setLoading] = useState(true);
@@ -49,7 +62,7 @@ export default function ViewerHomePage() {
         return;
       }
 
-      setRows((data as PubRow[]) || []);
+      setRows((data ?? []) as unknown as PubRow[]);
       setLoading(false);
     })();
 
@@ -90,48 +103,52 @@ export default function ViewerHomePage() {
       )}
 
       <div className="grid grid-cols-1 gap-3">
-        {rows.map((r) => (
-          <div key={r.book_id} className={CARD}>
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-base font-semibold">
-                  {r.books?.title || "(Không có tiêu đề)"}
-                </div>
-                <div className="text-sm text-gray-600">
-                  {r.books?.unit_name || ""} • Publish:{" "}
-                  {r.published_at
-                    ? new Date(r.published_at).toLocaleString()
-                    : ""}
-                </div>
-              </div>
+        {rows.map((r) => {
+          const book = normalizeBookInfo(r.books);
 
-              <div className="flex gap-2">
-                <Link className={BTN} href={`/viewer/books/${r.book_id}`}>
-                  Xem PDF
-                </Link>
+          return (
+            <div key={r.book_id} className={CARD}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-base font-semibold">
+                    {book?.title || "(Không có tiêu đề)"}
+                  </div>
+                  <div className="text-sm text-gray-600">
+                    {book?.unit_name || ""} • Publish:{" "}
+                    {r.published_at
+                      ? new Date(r.published_at).toLocaleString()
+                      : ""}
+                  </div>
+                </div>
 
-                {isLoggedIn ? (
-                  <a
-                    className={BTN}
-                    href={`/api/viewer/books/${encodeURIComponent(
-                      r.book_id
-                    )}/download`}
-                  >
-                    Tải PDF
-                  </a>
-                ) : (
-                  <button
-                    className={`${BTN} cursor-not-allowed opacity-50`}
-                    disabled
-                    title="Đăng nhập để tải PDF"
-                  >
-                    Tải PDF
-                  </button>
-                )}
+                <div className="flex gap-2">
+                  <Link className={BTN} href={`/viewer/books/${r.book_id}`}>
+                    Xem PDF
+                  </Link>
+
+                  {isLoggedIn ? (
+                    <a
+                      className={BTN}
+                      href={`/api/viewer/books/${encodeURIComponent(
+                        r.book_id
+                      )}/download`}
+                    >
+                      Tải PDF
+                    </a>
+                  ) : (
+                    <button
+                      className={`${BTN} cursor-not-allowed opacity-50`}
+                      disabled
+                      title="Đăng nhập để tải PDF"
+                    >
+                      Tải PDF
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
