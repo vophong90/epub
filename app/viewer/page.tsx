@@ -118,8 +118,7 @@ export default function ViewerHomePage() {
         <div>
           <h1 className="text-xl font-semibold">Thư viện</h1>
           <div className="mt-1 text-sm text-gray-600">
-            Ai cũng có thể xem thông tin sách. Sách công khai xem được ngay;
-            sách nội bộ cần đăng nhập để xem PDF.
+            Sách công khai xem được ngay. Sách nội bộ cần đăng nhập để xem PDF.
           </div>
         </div>
 
