@@ -31,11 +31,13 @@ function PageCanvas({
   pageNumber,
   width,
   scaleBoost,
+  isMobile,
 }: {
   pdf: any;
   pageNumber: number;
   width: number;
   scaleBoost: number;
+  isMobile: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [loading, setLoading] = useState(true);
@@ -72,14 +74,15 @@ function PageCanvas({
 
       try {
         const page = await pdf.getPage(pageNumber);
-
         const unscaledViewport = page.getViewport({ scale: 1 });
 
-        const fitScale = width / unscaledViewport.width;
+        // Sửa để mobile fit theo chiều ngang container, không ép rộng hơn màn hình
+        const horizontalPadding = isMobile ? 8 : 0;
+        const targetWidth = Math.max(280, width - horizontalPadding);
+        const fitScale = targetWidth / unscaledViewport.width;
         const scale = fitScale * scaleBoost;
 
         const viewport = page.getViewport({ scale });
-
         const canvas = canvasRef.current!;
         const context = canvas.getContext("2d");
 
@@ -89,7 +92,6 @@ function PageCanvas({
 
         canvas.width = Math.floor(viewport.width * outputScale);
         canvas.height = Math.floor(viewport.height * outputScale);
-
         canvas.style.width = `${Math.floor(viewport.width)}px`;
         canvas.style.height = `${Math.floor(viewport.height)}px`;
 
@@ -116,13 +118,11 @@ function PageCanvas({
     return () => {
       cancelled = true;
     };
-  }, [pdf, pageNumber, width, scaleBoost, isVisible]);
+  }, [pdf, pageNumber, width, scaleBoost, isVisible, isMobile]);
 
   return (
     <div className="mb-6">
-      <div className="mb-2 text-center text-sm text-gray-500">
-        Trang {pageNumber}
-      </div>
+      <div className="mb-2 text-center text-sm text-gray-500">Trang {pageNumber}</div>
 
       {loading && (
         <div className="mb-2 text-center text-sm text-gray-500">
@@ -140,7 +140,7 @@ function PageCanvas({
         <div className="flex justify-center">
           <canvas
             ref={canvasRef}
-            className="rounded-lg border bg-white shadow-sm"
+            className="rounded-lg border bg-white shadow-sm max-w-full"
             onContextMenu={(e) => e.preventDefault()}
             onDragStart={(e) => e.preventDefault()}
             style={{
@@ -167,15 +167,18 @@ export default function ViewerBookPage() {
   const [width, setWidth] = useState(900);
   const [visibility, setVisibility] = useState<Visibility | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-
-  const [scaleBoost, setScaleBoost] = useState(1.0);
-  const [visiblePages, setVisiblePages] = useState(12);
   const [isMobile, setIsMobile] = useState(false);
+
+  // Mobile mặc định 100% để fit màn hình tốt hơn
+  const [scaleBoost, setScaleBoost] = useState(1.0);
+
+  // Mobile chỉ render một phần trước để tránh quá tải
+  const [visiblePages, setVisiblePages] = useState(12);
 
   useEffect(() => {
     const mobile = isMobileDevice();
     setIsMobile(mobile);
-    setScaleBoost(1.0);
+    setScaleBoost(mobile ? 1.0 : 1.0);
     setVisiblePages(mobile ? 8 : 20);
   }, []);
 
@@ -193,7 +196,6 @@ export default function ViewerBookPage() {
     if (containerRef.current) ro.observe(containerRef.current);
 
     window.addEventListener("resize", updateWidth);
-
     return () => {
       ro.disconnect();
       window.removeEventListener("resize", updateWidth);
@@ -206,17 +208,23 @@ export default function ViewerBookPage() {
     (async () => {
       try {
         if (!bookId) {
-          setErr("Thiếu book id.");
-          setLoading(false);
+          if (alive) {
+            setErr("Thiếu book id.");
+            setLoading(false);
+          }
           return;
         }
+
+        setLoading(true);
+        setErr(null);
+        setPdf(null);
+        setNumPages(0);
 
         const {
           data: { user },
         } = await supabase.auth.getUser();
 
         if (!alive) return;
-
         setIsLoggedIn(!!user);
 
         const res = await fetch(
@@ -229,6 +237,8 @@ export default function ViewerBookPage() {
         );
 
         const j: PdfUrlResponse = await res.json().catch(() => ({}));
+
+        if (!alive) return;
 
         if (j?.visibility) setVisibility(j.visibility);
 
@@ -246,14 +256,22 @@ export default function ViewerBookPage() {
 
         const task = getDocument({
           url: j.url,
+          withCredentials: false,
           disableAutoFetch: true,
           disableStream: true,
           disableRange: true,
+          useWorkerFetch: false,
+          isEvalSupported: false,
         });
 
         const loadedPdf = await task.promise;
 
-        if (!alive) return;
+        if (!alive) {
+          try {
+            await loadedPdf.destroy();
+          } catch {}
+          return;
+        }
 
         setPdf(loadedPdf);
         setNumPages(loadedPdf.numPages || 0);
@@ -291,8 +309,12 @@ export default function ViewerBookPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <button className={BTN} onClick={zoomOut}>A-</button>
-          <button className={BTN} onClick={zoomIn}>A+</button>
+          <button type="button" className={BTN} onClick={zoomOut}>
+            A-
+          </button>
+          <button type="button" className={BTN} onClick={zoomIn}>
+            A+
+          </button>
 
           {isLoggedIn && (
             <a
@@ -303,6 +325,23 @@ export default function ViewerBookPage() {
             </a>
           )}
         </div>
+      </div>
+
+      {!isLoggedIn && visibility === "public_open" && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Đây là tài liệu công khai. Bạn có thể xem trực tiếp trên web. Muốn tải PDF
+          cần đăng nhập.
+        </div>
+      )}
+
+      {!isLoggedIn && visibility === "internal_only" && (
+        <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          Đây là tài liệu nội bộ. Bạn cần đăng nhập để xem tài liệu.
+        </div>
+      )}
+
+      <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
+        Trên thiết bị di động, hệ thống chỉ tải một phần trang, bạn có thể bấm “Xem thêm trang” để xem đầy đủ nội dung.
       </div>
 
       {loading && (
@@ -318,32 +357,46 @@ export default function ViewerBookPage() {
       )}
 
       {!loading && !err && pdf && (
-        <div ref={containerRef} className={`${CARD} p-3 md:p-6`}>
-          {Array.from({ length: pagesToRender }, (_, i) => i + 1).map(
-            (pageNumber) => (
+        <>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-white px-4 py-3 text-sm text-gray-700 shadow-sm">
+            <div>
+              Tổng số trang: <b>{numPages}</b>
+            </div>
+            <div>
+              Đang hiển thị: <b>{pagesToRender}</b> / {numPages} trang
+            </div>
+            <div>
+              Tỷ lệ hiển thị: <b>{Math.round(scaleBoost * 100)}%</b>
+            </div>
+          </div>
+
+          <div ref={containerRef} className={`${CARD} overflow-hidden p-3 md:p-6`}>
+            {Array.from({ length: pagesToRender }, (_, i) => i + 1).map((pageNumber) => (
               <PageCanvas
                 key={pageNumber}
                 pdf={pdf}
                 pageNumber={pageNumber}
                 width={width}
                 scaleBoost={scaleBoost}
+                isMobile={isMobile}
               />
-            )
-          )}
+            ))}
 
-          {pagesToRender < numPages && (
-            <div className="mt-4 flex justify-center">
-              <button
-                className={BTN}
-                onClick={() =>
-                  setVisiblePages((n) => Math.min(n + 8, numPages))
-                }
-              >
-                Xem thêm trang
-              </button>
-            </div>
-          )}
-        </div>
+            {pagesToRender < numPages && (
+              <div className="mt-4 flex justify-center">
+                <button
+                  type="button"
+                  className={BTN}
+                  onClick={() =>
+                    setVisiblePages((n) => Math.min(n + (isMobile ? 6 : 12), numPages))
+                  }
+                >
+                  Xem thêm trang
+                </button>
+              </div>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
