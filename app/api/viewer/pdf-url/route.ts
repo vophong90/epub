@@ -3,31 +3,13 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { getRouteClient } from "@/lib/supabaseServer";
 import { getAdminClient } from "@/lib/supabase-admin";
 
 const BUCKET = "published_pdfs";
-const EXPIRES_SEC = 60 * 10; // 10 phút
+const EXPIRES_SEC = 60 * 10;
 
 type Visibility = "public_open" | "internal_only";
-
-function getServerSupabaseFromRequest(req: NextRequest) {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
-  return createClient(supabaseUrl, supabaseAnonKey, {
-    global: {
-      headers: {
-        cookie: req.headers.get("cookie") ?? "",
-      },
-    },
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-    },
-  });
-}
 
 export async function GET(req: NextRequest) {
   try {
@@ -66,31 +48,26 @@ export async function GET(req: NextRequest) {
 
     const visibility: Visibility = pub.visibility ?? "public_open";
 
-    // Kiểm tra đăng nhập bằng client gắn cookie request hiện tại
-    const serverSupabase = getServerSupabaseFromRequest(req);
-    const {
-      data: { user },
-      error: userErr,
-    } = await serverSupabase.auth.getUser();
+    // Chỉ kiểm tra đăng nhập khi thật sự cần
+    let isLoggedIn = false;
 
-    if (userErr) {
-      return NextResponse.json(
-        { error: "Không xác thực được người dùng", detail: userErr.message },
-        { status: 401 }
-      );
-    }
+    if (visibility === "internal_only") {
+      const supabase = getRouteClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
-    const isLoggedIn = !!user;
+      isLoggedIn = !!user;
 
-    // Sách nội bộ: phải đăng nhập mới được xem
-    if (visibility === "internal_only" && !isLoggedIn) {
-      return NextResponse.json(
-        {
-          error: "Tài liệu này thuộc phạm vi nội bộ. Bạn cần đăng nhập để xem PDF.",
-          visibility,
-        },
-        { status: 403 }
-      );
+      if (!isLoggedIn) {
+        return NextResponse.json(
+          {
+            error: "Tài liệu này thuộc phạm vi nội bộ. Bạn cần đăng nhập để xem PDF.",
+            visibility,
+          },
+          { status: 401 }
+        );
+      }
     }
 
     const { data: signed, error: signErr } = await admin.storage
@@ -114,6 +91,8 @@ export async function GET(req: NextRequest) {
       version_id: pub.version_id,
       visibility,
       expires_in: EXPIRES_SEC,
+      requires_login: visibility === "internal_only",
+      is_logged_in: isLoggedIn,
     });
   } catch (e: any) {
     return NextResponse.json(
