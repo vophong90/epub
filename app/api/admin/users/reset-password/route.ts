@@ -10,7 +10,7 @@ type Body = {
   profile_id?: string;
 };
 
-const DEFAULT_PASSWORD = "12345678@";
+const DEFAULT_PASSWORD = "Epub@2026#";
 
 export async function POST(req: NextRequest) {
   const supabase = getRouteClient();
