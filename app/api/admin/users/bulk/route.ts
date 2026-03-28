@@ -27,10 +27,7 @@ async function ensureAdmin() {
 
   if (pErr) {
     return {
-      errorRes: NextResponse.json(
-        { error: pErr.message },
-        { status: 500 }
-      ),
+      errorRes: NextResponse.json({ error: pErr.message }, { status: 500 }),
     };
   }
 
@@ -77,10 +74,7 @@ export async function POST(req: NextRequest) {
     .filter((l) => l.length > 0);
 
   if (!lines.length) {
-    return NextResponse.json(
-      { error: "File CSV rỗng" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "File CSV rỗng" }, { status: 400 });
   }
 
   let startIdx = 0;
@@ -95,13 +89,19 @@ export async function POST(req: NextRequest) {
   for (let i = startIdx; i < lines.length; i++) {
     const raw = lines[i];
     if (!raw) continue;
+
     const cols = raw.split(",");
     if (cols.length < 2) {
-      errors.push({ line: i + 1, raw, error: "Không đủ cột (cần full_name,email)" });
+      errors.push({
+        line: i + 1,
+        raw,
+        error: "Không đủ cột (cần full_name,email)",
+      });
       continue;
     }
+
     const full_name = cols[0]?.trim();
-    const email = cols[1]?.trim();
+    const email = cols[1]?.trim().toLowerCase();
 
     if (!full_name || !email) {
       errors.push({
@@ -131,18 +131,22 @@ export async function POST(req: NextRequest) {
 
       const uid = createdUser.user.id;
 
-      const { error: pErr } = await admin.from("profiles").insert({
-        id: uid,
-        email,
-        name: full_name,
-        system_role: "viewer",
-      });
+      // profiles đã được trigger on_auth_user_created tạo tự động
+      // ở đây chỉ update thêm thông tin cần thiết
+      const { error: updErr } = await admin
+        .from("profiles")
+        .update({
+          email,
+          name: full_name,
+          system_role: "viewer",
+        })
+        .eq("id", uid);
 
-      if (pErr) {
+      if (updErr) {
         errors.push({
           line: i + 1,
           raw,
-          error: "Tạo profile thất bại: " + pErr.message,
+          error: "Cập nhật profile thất bại: " + updErr.message,
         });
         continue;
       }
