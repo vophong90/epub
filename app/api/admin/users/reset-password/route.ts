@@ -13,10 +13,10 @@ type Body = {
 const DEFAULT_PASSWORD = "12345678@";
 
 export async function POST(req: NextRequest) {
-  const supabase = getRouteClient(); // client dùng cookie (session user)
-  const admin = getAdminClient();    // service-role client
+  const supabase = getRouteClient();
+  const admin = getAdminClient();
 
-  // 1) Check đang đăng nhập
+  // 1) Kiểm tra đang đăng nhập
   const {
     data: { user },
     error: uErr,
@@ -44,15 +44,19 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 3) Lấy profile_id của user cần reset
+  // 3) Đọc body
   let body: Body = {};
   try {
     body = await req.json();
   } catch {
-    body = {};
+    return NextResponse.json(
+      { error: "Body JSON không hợp lệ" },
+      { status: 400 }
+    );
   }
 
-  const targetId = (body.profile_id || "").toString();
+  const targetId = String(body.profile_id || "").trim();
+
   if (!targetId) {
     return NextResponse.json(
       { error: "profile_id là bắt buộc" },
@@ -60,7 +64,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 4) Kiểm tra user có tồn tại không (profiles)
+  // 4) Kiểm tra profile mục tiêu có tồn tại không
   const { data: targetProfile, error: tpErr } = await admin
     .from("profiles")
     .select("id,email")
@@ -70,6 +74,7 @@ export async function POST(req: NextRequest) {
   if (tpErr) {
     return NextResponse.json({ error: tpErr.message }, { status: 500 });
   }
+
   if (!targetProfile) {
     return NextResponse.json(
       { error: "Không tìm thấy user trong bảng profiles" },
@@ -77,25 +82,33 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 5) Đặt lại mật khẩu mặc định qua Supabase Admin API
-  const { error: upErr } = await admin.auth.admin.updateUserById(targetId, {
-    password: DEFAULT_PASSWORD,
-    email_confirm: true,
-  });
+  // 5) Reset password bằng Admin API
+  const { data, error: upErr } = await admin.auth.admin.updateUserById(
+    targetId,
+    {
+      password: DEFAULT_PASSWORD,
+    }
+  );
 
   if (upErr) {
+    console.error("RESET PASSWORD ERROR:", upErr);
+
     return NextResponse.json(
       {
         error: "Đặt lại mật khẩu mặc định thất bại",
         detail: upErr.message,
+        code: (upErr as any)?.code ?? null,
       },
       { status: 500 }
     );
   }
 
-  // tuỳ bạn: có thể không trả password về JSON, hoặc chỉ log trên UI admin
   return NextResponse.json({
     ok: true,
+    user: {
+      id: data.user?.id,
+      email: data.user?.email,
+    },
     new_password: DEFAULT_PASSWORD,
   });
 }
