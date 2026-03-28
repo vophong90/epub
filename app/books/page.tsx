@@ -13,6 +13,7 @@ type Book = {
 };
 
 type SortOrder = "newest" | "oldest";
+type AppRole = "admin" | "author" | "editor" | "viewer";
 
 const INPUT =
   "w-full border rounded-lg px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-200";
@@ -28,31 +29,54 @@ export default function BooksPage() {
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [accessChecked, setAccessChecked] = useState(false);
 
-  // filters
   const [searchTitle, setSearchTitle] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
 
-  // create book
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newUnitName, setNewUnitName] = useState("Khoa Y học cổ truyền");
   const [creating, setCreating] = useState(false);
 
-  // ===== LOAD BOOKS =====
   useEffect(() => {
     if (authLoading) return;
+
     if (!user) {
-      router.push("/login");
+      router.replace("/login");
       return;
     }
 
-    const load = async () => {
+    const checkAccessAndLoad = async () => {
       setLoading(true);
       setErrorMsg(null);
+
       try {
+        // Lấy role từ profiles
+        const { data: profile, error: profileErr } = await supabase
+          .from("profiles")
+          .select("system_role")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        if (profileErr) {
+          setErrorMsg(profileErr.message || "Không đọc được thông tin quyền");
+          setLoading(false);
+          return;
+        }
+
+        const role = profile?.system_role as AppRole | undefined;
+        const allowedRoles: AppRole[] = ["admin", "author", "editor"];
+
+        if (!role || !allowedRoles.includes(role)) {
+          router.replace("/"); // hoặc /viewer, /unauthorized
+          return;
+        }
+
+        setAccessChecked(true);
+
         const { data, error } = await supabase
           .from("books")
           .select("id,title,unit_name,created_at")
@@ -72,18 +96,15 @@ export default function BooksPage() {
       }
     };
 
-    load();
+    checkAccessAndLoad();
   }, [authLoading, user, router]);
 
-  // ===== FILTER + SORT =====
   const filteredBooks = useMemo(() => {
     let list = [...books];
 
     if (searchTitle.trim()) {
       const kw = searchTitle.trim().toLowerCase();
-      list = list.filter((b) =>
-        b.title.toLowerCase().includes(kw)
-      );
+      list = list.filter((b) => b.title.toLowerCase().includes(kw));
     }
 
     if (fromDate) {
@@ -111,7 +132,6 @@ export default function BooksPage() {
     return list;
   }, [books, searchTitle, fromDate, toDate, sortOrder]);
 
-  // ===== CREATE BOOK =====
   async function handleCreateBook() {
     if (!user) return;
     if (!newTitle.trim()) {
@@ -122,7 +142,6 @@ export default function BooksPage() {
     setCreating(true);
     setErrorMsg(null);
     try {
-      // 1) Tạo book
       const { data: bookRow, error: bErr } = await supabase
         .from("books")
         .insert({
@@ -134,13 +153,10 @@ export default function BooksPage() {
         .maybeSingle();
 
       if (bErr || !bookRow) {
-        setErrorMsg(
-          bErr?.message || "Không tạo được sách mới"
-        );
+        setErrorMsg(bErr?.message || "Không tạo được sách mới");
         return;
       }
 
-      // 2) Gán quyền editor cho chính user
       const { error: pErr } = await supabase
         .from("book_permissions")
         .insert({
@@ -150,26 +166,19 @@ export default function BooksPage() {
         });
 
       if (pErr) {
-        // không fail cứng; nhưng báo cho user biết
-        setErrorMsg(
-          `Đã tạo sách nhưng không gán được quyền editor: ${pErr.message}`
-        );
+        setErrorMsg(`Đã tạo sách nhưng không gán được quyền editor: ${pErr.message}`);
       } else {
         setErrorMsg(null);
       }
 
-      // 3) Cập nhật list
       setBooks((prev) => [bookRow as Book, ...prev]);
       setShowCreateForm(false);
       setNewTitle("");
       setNewUnitName("Khoa Y học cổ truyền");
 
-      // 4) Điều hướng trực tiếp vào trang chi tiết sách
       router.push(`/books/${bookRow.id}`);
     } catch (e: any) {
-      setErrorMsg(
-        e?.message || "Lỗi không xác định khi tạo sách mới"
-      );
+      setErrorMsg(e?.message || "Lỗi không xác định khi tạo sách mới");
     } finally {
       setCreating(false);
     }
@@ -182,7 +191,14 @@ export default function BooksPage() {
     setSortOrder("newest");
   }
 
-  // ===== RENDER =====
+  if (authLoading || loading || !accessChecked) {
+    return (
+      <main className="max-w-6xl mx-auto px-4 py-8">
+        <p className="text-sm text-gray-600">Đang kiểm tra quyền truy cập...</p>
+      </main>
+    );
+  }
+
   return (
     <main className="max-w-6xl mx-auto px-4 py-8 space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -204,7 +220,6 @@ export default function BooksPage() {
         </div>
       )}
 
-      {/* Khung tạo sách mới */}
       {showCreateForm && (
         <section className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 md:p-6 space-y-4">
           <h2 className="font-semibold text-lg">Tạo sách mới</h2>
@@ -245,24 +260,13 @@ export default function BooksPage() {
               Hủy
             </button>
           </div>
-          <p className="text-xs text-gray-500">
-            Khi tạo thành công, bạn sẽ được gán quyền{" "}
-            <strong>editor</strong> cho sách này thông qua bảng{" "}
-            <code className="font-mono text-[11px]">
-              book_permissions
-            </code>
-            .
-          </p>
         </section>
       )}
 
-      {/* Bộ lọc */}
       <section className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 md:p-6 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="space-y-1">
-            <label className="text-sm font-medium">
-              Tìm theo tên sách
-            </label>
+            <label className="text-sm font-medium">Tìm theo tên sách</label>
             <input
               className={INPUT}
               placeholder="Nhập tên sách..."
@@ -295,22 +299,14 @@ export default function BooksPage() {
             <span className="font-medium">Sắp xếp:</span>
             <button
               type="button"
-              className={`${BTN} text-xs ${
-                sortOrder === "newest"
-                  ? "border-blue-500 text-blue-600"
-                  : ""
-              }`}
+              className={`${BTN} text-xs ${sortOrder === "newest" ? "border-blue-500 text-blue-600" : ""}`}
               onClick={() => setSortOrder("newest")}
             >
               Mới → Cũ
             </button>
             <button
               type="button"
-              className={`${BTN} text-xs ${
-                sortOrder === "oldest"
-                  ? "border-blue-500 text-blue-600"
-                  : ""
-              }`}
+              className={`${BTN} text-xs ${sortOrder === "oldest" ? "border-blue-500 text-blue-600" : ""}`}
               onClick={() => setSortOrder("oldest")}
             >
               Cũ → Mới
@@ -318,31 +314,21 @@ export default function BooksPage() {
           </div>
 
           <div className="flex flex-wrap gap-2 ml-auto">
-            <button
-              type="button"
-              className={BTN}
-              onClick={handleResetFilters}
-            >
+            <button type="button" className={BTN} onClick={handleResetFilters}>
               Xóa lọc
             </button>
           </div>
         </div>
 
         <p className="text-xs text-gray-500">
-          Bộ lọc: đang hiển thị{" "}
-          <strong>{filteredBooks.length}</strong> /{" "}
+          Bộ lọc: đang hiển thị <strong>{filteredBooks.length}</strong> /{" "}
           <strong>{books.length}</strong> sách.
         </p>
       </section>
 
-      {/* Danh sách sách */}
       <section className="space-y-3">
-        {loading ? (
-          <p className="text-sm text-gray-600">Đang tải danh sách...</p>
-        ) : filteredBooks.length === 0 ? (
-          <p className="text-sm text-gray-600">
-            Không có sách nào phù hợp.
-          </p>
+        {filteredBooks.length === 0 ? (
+          <p className="text-sm text-gray-600">Không có sách nào phù hợp.</p>
         ) : (
           filteredBooks.map((b) => (
             <article
@@ -350,17 +336,12 @@ export default function BooksPage() {
               className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 md:p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
             >
               <div className="space-y-1">
-                <h3 className="font-semibold text-base md:text-lg">
-                  {b.title}
-                </h3>
+                <h3 className="font-semibold text-base md:text-lg">{b.title}</h3>
                 <p className="text-sm text-gray-600">
                   Đơn vị: {b.unit_name || "Khoa Y học cổ truyền"}
                 </p>
                 <p className="text-xs text-gray-500">
-                  Ngày tạo:{" "}
-                  {b.created_at
-                    ? new Date(b.created_at).toLocaleString()
-                    : "Không rõ"}
+                  Ngày tạo: {b.created_at ? new Date(b.created_at).toLocaleString() : "Không rõ"}
                 </p>
                 <p className="text-[11px] text-gray-400">
                   ID: <span className="font-mono">{b.id}</span>
