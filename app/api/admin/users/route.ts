@@ -109,7 +109,7 @@ export async function POST(req: NextRequest) {
     // 1) Tạo user trong auth.users
     const { data: created, error: cErr } = await admin.auth.admin.createUser({
       email,
-      email_confirm: false,
+      email_confirm: true,
       user_metadata: { full_name },
     });
 
