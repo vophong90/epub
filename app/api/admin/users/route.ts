@@ -1,4 +1,5 @@
 // app/api/admin/users/route.ts
+
 import { NextRequest, NextResponse } from "next/server";
 import { getRouteClient } from "@/lib/supabaseServer";
 import { getAdminClient } from "@/lib/supabase-admin";
@@ -6,29 +7,15 @@ import { getAdminClient } from "@/lib/supabase-admin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const PAGE_SIZE = 10;
-
 type CreateBody = {
   email?: string;
   full_name?: string;
   system_role?: string;
 };
 
-type BookRoleInput = {
-  book_id?: string;
-  role?: string | null;
-};
-
-type UpdateBody = {
-  id?: string;
-  email?: string;
-  full_name?: string;
-  system_role?: string;
-  book_roles?: BookRoleInput[];
-};
-
 async function ensureAdmin() {
   const supabase = getRouteClient();
+
   const {
     data: { user },
     error: uErr,
@@ -62,65 +49,47 @@ async function ensureAdmin() {
   }
 
   const admin = getAdminClient();
-  return { supabase, admin, user };
+  return { admin };
 }
 
-// GET /api/admin/users?page=&q=
-export async function GET(req: NextRequest) {
+// GET /api/admin/users
+export async function GET() {
   const check = await ensureAdmin();
   if ("errorRes" in check) return check.errorRes;
+
   const { admin } = check;
 
-  const url = new URL(req.url);
-  const pageParam = url.searchParams.get("page") || "1";
-  const q = (url.searchParams.get("q") || "").trim();
-
-  let page = parseInt(pageParam, 10);
-  if (!Number.isFinite(page) || page < 1) page = 1;
-
-  const from = (page - 1) * PAGE_SIZE;
-  const to = from + PAGE_SIZE - 1;
-
-  let query = admin
+  const { data, error } = await admin
     .from("profiles")
-    .select("id,email,name,system_role,created_at", {
-      count: "exact",
-    })
-    .order("created_at", { ascending: false })
-    .range(from, to);
-
-  if (q) {
-    query = query.or(`email.ilike.%${q}%,name.ilike.%${q}%`);
-  }
-
-  const { data, error, count } = await query;
+    .select("id,email,name,system_role,created_at")
+    .order("created_at", { ascending: false });
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({
-    users: data || [],
-    page,
-    pageSize: PAGE_SIZE,
-    total: count ?? 0,
-  });
+  return NextResponse.json({ ok: true, users: data });
 }
 
-// POST /api/admin/users  (tạo user)
+// POST /api/admin/users
 export async function POST(req: NextRequest) {
   const check = await ensureAdmin();
   if ("errorRes" in check) return check.errorRes;
+
   const { admin } = check;
 
   let body: CreateBody = {};
+
   try {
     body = await req.json();
   } catch {
-    body = {};
+    return NextResponse.json(
+      { error: "Body JSON không hợp lệ" },
+      { status: 400 }
+    );
   }
 
-  const email = (body.email || "").trim();
+  const email = (body.email || "").trim().toLowerCase();
   const full_name = (body.full_name || "").trim();
   const system_role = (body.system_role || "").trim();
 
@@ -136,165 +105,88 @@ export async function POST(req: NextRequest) {
       ? system_role
       : "viewer";
 
-  // 1) Tạo user trong auth
-  const { data: created, error: cErr } = await admin.auth.admin.createUser({
-    email,
-    email_confirm: false,
-    user_metadata: { full_name },
-  });
-
-  if (cErr || !created?.user) {
-    return NextResponse.json(
-      { error: cErr?.message || "Tạo user auth thất bại" },
-      { status: 500 }
-    );
-  }
-
-  const userId = created.user.id;
-
-  // 2) Tạo profile
-  const { data: profile, error: pErr } = await admin
-    .from("profiles")
-    .insert({
-      id: userId,
-      email,
-      name: full_name,
-      system_role: role,
-    })
-    .select("id,email,name,system_role,created_at")
-    .maybeSingle();
-
-  if (pErr) {
-    return NextResponse.json(
-      { error: "Tạo profile thất bại: " + pErr.message },
-      { status: 500 }
-    );
-  }
-
-  return NextResponse.json({ ok: true, user: profile });
-}
-
-// PATCH /api/admin/users  (update tên/email/role + quyền sách)
-export async function PATCH(req: NextRequest) {
-  const check = await ensureAdmin();
-  if ("errorRes" in check) return check.errorRes;
-  const { admin } = check;
-
-  let body: UpdateBody = {};
   try {
-    body = await req.json();
-  } catch {
-    body = {};
-  }
+    // 1) Tạo user trong auth.users
+    const { data: created, error: cErr } = await admin.auth.admin.createUser({
+      email,
+      email_confirm: false,
+      user_metadata: { full_name },
+    });
 
-  const id = (body.id || "").trim();
-  if (!id) {
-    return NextResponse.json({ error: "id là bắt buộc" }, { status: 400 });
-  }
-
-  const email = body.email?.trim();
-  const full_name = body.full_name?.trim();
-  const system_role = body.system_role?.trim();
-  const rawBookRoles = Array.isArray(body.book_roles) ? body.book_roles : [];
-
-  const hasAuthProfileChange = !!(email || full_name || system_role);
-  const hasBookRolesChange = rawBookRoles.length > 0;
-
-  if (!hasAuthProfileChange && !hasBookRolesChange) {
-    return NextResponse.json(
-      { error: "Không có gì để cập nhật" },
-      { status: 400 }
-    );
-  }
-
-  // 1) Cập nhật auth.users (email + full_name)
-  if (email || full_name) {
-    const updatePayload: any = {};
-    if (email) updatePayload.email = email;
-    if (full_name) updatePayload.user_metadata = { full_name };
-
-    const { error: aErr } = await admin.auth.admin.updateUserById(
-      id,
-      updatePayload
-    );
-    if (aErr) {
+    if (cErr || !created?.user) {
       return NextResponse.json(
-        { error: "update auth.users failed: " + aErr.message },
+        { error: cErr?.message || "Tạo auth user thất bại" },
         { status: 500 }
       );
     }
-  }
 
-  // 2) Cập nhật profiles (nếu có field hợp lệ)
-  let updatedProfile: any = null;
-  const upd: Record<string, unknown> = {};
-  if (email) upd.email = email;
-  if (full_name) upd.name = full_name;
-  if (system_role && ["admin", "editor", "viewer"].includes(system_role)) {
-    upd.system_role = system_role;
-  }
+    const userId = created.user.id;
 
-  if (Object.keys(upd).length > 0) {
-    const { data, error: pErr } = await admin
+    // 2) profiles đã được trigger tạo tự động
+    // chỉ update thông tin
+    const { data: profile, error: pErr } = await admin
       .from("profiles")
-      .update(upd)
-      .eq("id", id)
+      .update({
+        email,
+        name: full_name,
+        system_role: role,
+      })
+      .eq("id", userId)
       .select("id,email,name,system_role,created_at")
       .maybeSingle();
 
     if (pErr) {
       return NextResponse.json(
-        { error: "update profiles failed: " + pErr.message },
-        { status: 500 }
-      );
-    }
-    updatedProfile = data;
-  }
-
-  // 3) Cập nhật quyền sách (book_permissions)
-  if (hasBookRolesChange) {
-    // Xoá hết quyền cũ của user
-    const { error: delErr } = await admin
-      .from("book_permissions")
-      .delete()
-      .eq("user_id", id);
-
-    if (delErr) {
-      return NextResponse.json(
-        { error: "Không xoá được quyền sách cũ: " + delErr.message },
+        { error: "Cập nhật profile thất bại: " + pErr.message },
         { status: 500 }
       );
     }
 
-    // Lọc những dòng hợp lệ (có book_id + role hợp lệ)
-    const cleanedRoles = rawBookRoles
-      .filter((r) => r.book_id && r.role)
-      .filter((r) =>
-        ["viewer", "author", "editor"].includes((r.role || "") as string)
-      ) as { book_id: string; role: string }[];
+    return NextResponse.json({
+      ok: true,
+      user: profile,
+    });
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: e?.message || "Lỗi server không xác định" },
+      { status: 500 }
+    );
+  }
+}
 
-    if (cleanedRoles.length > 0) {
-      const insertPayload = cleanedRoles.map((r) => ({
-        user_id: id,
-        book_id: r.book_id,
-        role: r.role, // enum public.book_role: 'viewer' | 'author' | 'editor'
-      }));
+// PATCH /api/admin/users
+export async function PATCH(req: NextRequest) {
+  const check = await ensureAdmin();
+  if ("errorRes" in check) return check.errorRes;
 
-      const { error: insErr } = await admin
-        .from("book_permissions")
-        .insert(insertPayload);
+  const { admin } = check;
 
-      if (insErr) {
-        return NextResponse.json(
-          { error: "Không ghi được quyền sách mới: " + insErr.message },
-          { status: 500 }
-        );
-      }
-    }
+  const body = await req.json();
+
+  const id = body?.id;
+  const name = body?.name;
+  const role = body?.system_role;
+
+  if (!id) {
+    return NextResponse.json({ error: "Thiếu id user" }, { status: 400 });
   }
 
-  return NextResponse.json({
-    ok: true,
-    user: updatedProfile, // UI hiện tại không dùng, nhưng để sẵn
-  });
+  const updateData: any = {};
+
+  if (name) updateData.name = name;
+  if (role && ["admin", "editor", "viewer"].includes(role))
+    updateData.system_role = role;
+
+  const { data, error } = await admin
+    .from("profiles")
+    .update(updateData)
+    .eq("id", id)
+    .select("id,email,name,system_role,created_at")
+    .maybeSingle();
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true, user: data });
 }
